@@ -20,7 +20,7 @@ Ensures container based EA4 packages have podman available as well as any common
 echo "Nothing to build"
 
 %install
-%{__mkdir_p} %{buildroot}/usr/local/cpanel/scripts
+mkdir -p %{buildroot}/usr/local/cpanel/scripts
 install %{SOURCE0} %{buildroot}/usr/local/cpanel/scripts/ea-podman
 
 %clean
