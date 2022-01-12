@@ -17,7 +17,7 @@ my $bad  = "❌";
 
 run(@ARGV) unless caller;
 
-# can do more functinality and verbosity levels as needed
+# can do more functionality and verbosity levels as needed
 sub run {
     assert_has_user_namespaces(1);
 
