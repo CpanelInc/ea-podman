@@ -1,0 +1,79 @@
+#!/usr/local/cpanel/3rdparty/bin/perl
+# cpanel - ea-podman                               Copyright 2022 cPanel, L.L.C.
+#                                                           All rights Reserved.
+# copyright@cpanel.net                                         http://cpanel.net
+# This code is subject to the cPanel license. Unauthorized copying is prohibited
+
+use strict;
+use warnings;
+
+package scripts::ea_podman;
+
+use Cpanel::Config::Users ();
+use Path::Tiny 'path';
+
+my $good = "✅";
+my $bad  = "❌";
+
+run(@ARGV) unless caller;
+
+# can do more functinality and verbosity levels as needed
+sub run {
+    assert_has_user_namespaces(1);
+
+    my $subuid_lu = get_subuids();
+    my $subgid_lu = get_subgids();
+
+    for my $user ( Cpanel::Config::Users::getcpusers() ) {
+        print( exists $subuid_lu->{$user} ? "$good “$user” has subuids ($subuid_lu->{$user})\n" : "$bad “$user” does not have subuids\n" );
+        print( exists $subgid_lu->{$user} ? "$good “$user” has subgids ($subgid_lu->{$user})\n" : "$bad “$user” does not have subgids\n" );
+    }
+}
+
+#################
+#### utilities ##
+#################
+
+sub assert_has_user_namespaces {
+    my ($verbose) = @_;
+
+    chomp( my $max_uns = `sysctl --values user.max_user_namespaces 2>/dev/null` );
+
+    if ( !$max_uns ) {
+        die <<"END_NO_UNS";
+$bad User Namespaces not available (`sysctl --values user.max_user_namespaces`):
+    • Container based packages will not work until they are.
+    • To learn more read `man user_namespaces`
+END_NO_UNS
+    }
+
+    print "$good user.max_user_namespaces = '$max_uns'\n" if $verbose;
+
+    return $max_uns;
+}
+
+sub get_subuids {
+    return _parse_subid_file("/etc/subuid");
+}
+
+sub get_subgids {
+    return _parse_subid_file("/etc/subgid");
+}
+
+###############
+#### helpers ##
+###############
+
+sub _parse_subid_file {
+    my ($file) = @_;
+
+    my $hr = {};
+
+    for my $line ( path($file)->lines( { chomp => 1 } ) ) {
+        my ( $user, $ranges ) = split( ":", $line, 2 );
+        warn "“$user” is in “$file” more than once!\n" if exists $hr->{$user};
+        $hr->{$user} = $ranges;
+    }
+
+    return $hr;
+}
