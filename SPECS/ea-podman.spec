@@ -10,6 +10,7 @@ URL:            http://www.cpanel.net
 Vendor:         cPanel, Inc.
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-buildroot
 Requires:       podman-docker
+AutoReqProv:    no
 
 Source0:        ea-podman
 
