@@ -38,7 +38,7 @@ user_container_init() {
    ERROR=0
    case $cmd in
         start)
-            if [ is_container_name_running $name ]; then
+            if [ $(is_container_name_running $name) ]; then
                 echo -e "\e[00;33m$label container is already running (name : $name)\e[00m"
                 ERROR=1
             else
@@ -46,7 +46,7 @@ user_container_init() {
             fi
             ;;
         stop)
-            if [ ! is_container_name_running $name ]; then
+            if [ ! $(is_container_name_running $name) ]; then
                 echo -e "\e[00;31m$label container is already shutdown\e[00m"
                 ERROR=1
             else
@@ -54,14 +54,14 @@ user_container_init() {
             fi
             ;;
         restart|force-reload|reload)
-            if [ is_container_name_running $name ]; then
+            if [ $(is_container_name_running $name) ]; then
                 stop_user_container $name
             fi
 
             start_user_container $name "$@"
             ;;
         status|fullstatus)
-            if [ ! is_container_name_running $name ]; then
+            if [ ! $(is_container_name_running $name) ]; then
                 echo -e "\e[00;31m$label is currently not running.\e[00m"
                 ERROR=3
             else
