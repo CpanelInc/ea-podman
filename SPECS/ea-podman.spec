@@ -13,6 +13,7 @@ Requires:       podman-docker >= 3
 AutoReqProv:    no
 
 Source0:        ea-podman
+Source1:        ea-podman.sh
 
 %description
 Ensures container based EA4 packages have podman available as well as any common helpers.
@@ -24,11 +25,15 @@ echo "Nothing to build"
 mkdir -p %{buildroot}/usr/local/cpanel/scripts
 install %{SOURCE0} %{buildroot}/usr/local/cpanel/scripts/ea-podman
 
+mkdir -p %{buildroot}/opt/cpanel/ea-podman
+install %{SOURCE1} %{buildroot}/opt/cpanel/ea-podman/ea-podman.sh
+
 %clean
 rm -rf %{buildroot}
 
 %files
 %attr(0755,root,root) /usr/local/cpanel/scripts/ea-podman
+%attr(0755,root,root) /opt/cpanel/ea-podman/ea-podman.sh
 
 %changelog
 * Wed Jan 19 2022 Dan Muey <dan@cpanel.net> - 1.0-2
