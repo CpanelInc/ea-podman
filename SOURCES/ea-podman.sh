@@ -23,7 +23,7 @@ start_user_container() {
 }
 
 # . /etc/opt/ea-podman/ea-podman.sh
-# user_container_init start ea-my-container-with-services-pkg "My Service 1.2" -p hport:cport image
+# user_container_init $1 ea-my-container-with-services-pkg "My Service 1.2" -p hport:cport image
 #
 # Note: right before the image argument you can add additional run args like -v -e additional -p etc (-d --rm=true an --name are already being done for you)
 
