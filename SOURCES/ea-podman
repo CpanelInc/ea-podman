@@ -34,6 +34,48 @@ sub run {
 #### utilities ##
 #################
 
+sub ensure_user {
+    my ($user) = @_;
+
+    my $subuid = get_subuids();
+    my $subgid = get_subgids();
+
+    return if exists $subuid->{$user} && exists $subgid->{$user};
+
+    # via the mechanics this means the uids/gids start at 190000
+    my $getuid_max = 190000 - 500;
+    my $getgid_max = 190000 - 500;
+
+    foreach my $u ( keys %{$subuid} ) {
+        my ( $uid, $range ) = split( /:/, $subuid->{$u} );
+        $getuid_max = $uid if ( $uid > $getuid_max );
+    }
+
+    foreach my $u ( keys %{$subgid} ) {
+        my ( $uid, $range ) = split( /:/, $subgid->{$u} );
+        $getgid_max = $uid if ( $uid > $getgid_max );
+    }
+
+    $getuid_max += 500;
+    $getgid_max += 500;
+
+    if ( !exists $subuid->{$user} ) {
+        if ( open my $fh, ">>", '/etc/subuid' ) {
+            print $fh "$user:$getuid_max:499\n";
+            close $fh;
+        }
+    }
+
+    if ( !exists $subgid->{$user} ) {
+        if ( open my $fh, ">>", '/etc/subgid' ) {
+            print $fh "$user:$getgid_max:499\n";
+            close $fh;
+        }
+    }
+
+    return;
+}
+
 sub assert_has_user_namespaces {
     my ($verbose) = @_;
 
