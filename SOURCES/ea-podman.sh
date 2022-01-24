@@ -14,19 +14,18 @@ get_user_container_name() {
 
 stop_user_container() {
     # TODO: barf if $1 is not set
-    # TODO/YAGNI?: Add --ignore (always or when $2 is true?)
-    podman stop $1
+    podman stop --ignore $1
 }
 
 start_user_container() {
     # TODO: barf if $# is < 4: name -p N:N [optional -p -v -e etc] container
-    podman run -d --rm=true --name "$@"
+    podman run -d --replace=true --rm=true --name "$@"
 }
 
 # . /etc/opt/ea-podman/ea-podman.sh
 # user_container_init $1 ea-my-container-with-services-pkg "My Service 1.2" -p hport:cport image
 #
-# Note: right before the image argument you can add additional run args like -v -e additional -p etc (-d --rm=true an --name are already being done for you)
+# Note: right before the image argument you can add additional run args like -v -e additional -p etc (-d, --replace=true, --rm=true, and --name are already being done for you)
 
 user_container_init() {
    # TODO: barf if bad args
