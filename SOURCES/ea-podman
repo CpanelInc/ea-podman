@@ -34,6 +34,16 @@ sub run {
 #### utilities ##
 #################
 
+sub is_container_running {
+    my ($container_name) = @_;
+
+    $container_name = quotemeta($container_name);
+    my $cmd = qq{podman ps --no-trunc --format "{{.Names}}" | grep --quiet ^$container_name\$};
+
+    system($cmd);
+    return $? == 0 ? 1 : 0;
+}
+
 sub ensure_user {
     my ($user) = @_;
 
