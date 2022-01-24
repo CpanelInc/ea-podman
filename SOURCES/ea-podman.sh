@@ -14,6 +14,7 @@ get_user_container_name() {
 
 stop_user_container() {
     # TODO: barf if $1 is not set
+    # TODO/YAGNI?: Add --ignore (always or when $2 is true?)
     podman stop $1
 }
 
