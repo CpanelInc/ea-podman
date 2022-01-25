@@ -1,3 +1,7 @@
+##################################
+#### misc podman util fucntions ##
+##################################
+
 is_container_name_running() {
     podman ps --no-trunc --format "{{.Names}}" | grep --quiet ^$1$
 }
@@ -7,72 +11,135 @@ is_container_id_running() {
     podman ps --no-trunc --format "{{.ID}}" | grep --quiet ^$1
 }
 
-get_user_container_name() {
-   # TODO: barf if $1 or $HOME are not set
-   echo "$1$HOME" | sed 's|/|_|g'
+##################################################
+#### helpers not intended to be run by the user ##
+##################################################
+
+_set_su_login() {
+   # TODO: barf is !$USER
+   loginctl enable-linger $USER
+   export XDG_RUNTIME_DIR=/run/user/$(id -u)
 }
 
-stop_user_container() {
+_remove_user_container() {
+    # TODO: barf if $1 is not set
+    podman rm --ignore $1
+}
+
+_stop_user_container() {
     # TODO: barf if $1 is not set
     podman stop --ignore $1
 }
 
-start_user_container() {
+_start_user_container() {
     # TODO: barf if $# is < 4: name -p N:N [optional -p -v -e etc] container
+    _set_su_login
+
     podman run -d --replace=true --rm=true --name "$@"
 }
 
-# . /etc/opt/ea-podman/ea-podman.sh
-# user_container_init $1 ea-my-container-with-services-pkg "My Service 1.2" -p hport:cport image
-#
-# Note: right before the image argument you can add additional run args like -v -e additional -p etc (-d, --replace=true, --rm=true, and --name are already being done for you)
+_get_container_service_name() {
+   # TODO: barf if !$1
+   echo "container-${1}.service"
+}
 
-user_container_init() {
-   # TODO: barf if bad args
-   cmd=$1
-   pkg=$2
-   label=$3
-   name=$(get_user_container_name $pkg)
-   shift 3
+_get_next_available_container_name() {
+    # TODO: barf if !$1
 
-   ERROR=0
-   case $cmd in
-        start)
-            if [ $(is_container_name_running $name) ]; then
-                echo -e "\e[00;33m$label container is already running (name : $name)\e[00m"
-                ERROR=1
-            else
-                start_user_container $name "$@"
-            fi
-            ;;
-        stop)
-            if [ ! $(is_container_name_running $name) ]; then
-                echo -e "\e[00;31m$label container is already shutdown\e[00m"
-                ERROR=1
-            else
-                stop_user_container $name
-            fi
-            ;;
-        restart|force-reload|reload)
-            if [ $(is_container_name_running $name) ]; then
-                stop_user_container $name
-            fi
+    local suffix="01";
+    # TODO: find next available suffix from 01-99
 
-            start_user_container $name "$@"
-            ;;
-        status|fullstatus)
-            if [ ! $(is_container_name_running $name) ]; then
-                echo -e "\e[00;31m$label is currently not running.\e[00m"
-                ERROR=3
-            else
-                echo -e "\e[00;32m$label is running!\e[00m"
-                ERROR=0
-            fi
-            ;;
-        *)
-            echo $"Usage: $0 {start|stop|restart|status|fullstatus}"
-            ERROR=2
-    esac
+    echo $1.$suffix
+}
 
-    exit $ERROR
+_get_pkg_from_container_name() {
+   # TODO: barf if !$1
+
+   # TODO: return if $1 !~ m/^ea-/
+
+   echo $1 | sed 's/\.[0-9][0-9]$//g'
+}
+
+_generate_container_service() {
+    # TODO: barf if !$1
+    _set_su_login
+
+    mkdir -p ~/.config/systemd/user
+
+    local service_name=$(get_container_service_name $1)
+    podman generate systemd --restart-policy on-failure -n $1 > ~/.config/systemd/user/$service_name
+    systemctl --user enable $service_name
+}
+
+_ensure_latest_container() {
+    # TODO: barf if !$1
+    _set_su_login
+
+    uninstall_container $1
+
+    local pkg=$(_get_pkg_from_container_name $1);
+# TODO: sort me out/DESIGN DOC
+#    Do needful setup if $pkg && -d /opt/cpanel/$pkg
+#    _start_user_container "$@"
+#    e.g. podman run -d --hostname rabbitmq-cptest1 --name rabbitmq-cptest1 -p 15672:15672 -p 5672:5672 -e RABBITMQ_DEFAULT_USER=cptest1 -e RABBITMQ_DEFAULT_PASSWORD=cpanel1 docker.io/library/rabbitmq:3-management
+
+    _generate_container_service $1
+}
+
+######################
+#### service helper ##
+######################
+
+# may need to move to cpanel- NS at some point (same w/ ea-podman pkg)
+ea-container() {
+    # TODO: barf if !$1 or !$2
+    _set_su_login
+
+    local service_name=$(get_container_service_name $2)
+    systemctl --user $1 $service_name
+}
+
+###########################
+#### main container CRUD ##
+###########################
+
+install_container() {
+    # TODO: barf if !$1
+    _set_su_login
+    local name=$(_get_next_available_container_name $1)
+    _ensure_latest_container $name
+}
+
+list_container_names() {
+   _set_su_login
+   podman ps --no-trunc --format "{{.Names}}"
+}
+
+container_name_detais() {
+    # TODO: barf if !$1
+    _set_su_login
+
+   # TODO: dump JSON info about container $1
+}
+
+upgrade_container() {
+    # TODO: barf if !$1
+    _set_su_login
+
+    _ensure_latest_container $1
+}
+
+uninstall_container() {
+    # TODO: barf if !$1
+    _set_su_login
+
+    _stop_user_container $1
+
+    local service_name=$(get_container_service_name $2)
+    systemctl --user disable $service_name
+    rm -f ~/.config/systemd/user/$service_name
+    systemctl --user daemon-reload
+    systemctl --user reset-failed
+
+    _remove_user_container $1
 }
