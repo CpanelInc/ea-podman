@@ -1,1 +1,1 @@
-../../ea_podman-subids.pm
+../../subids.pm
