@@ -24,10 +24,49 @@ use ea_podman::subids;
 
 use Cpanel::Config::Users ();
 
+use Term::ReadLine   ();
+use App::CmdDispatch ();
+
 run(@ARGV) unless caller;
 
-# can do more functionality and verbosity levels as needed
 sub run {
+    my @args = @_;
+    local $Term::ReadLine::termcap_nowarn = 1;
+    return App::CmdDispatch->new( get_dispatch_args() )->run(@args);
+}
+
+sub get_dispatch_args {
+    my $hint_blurb = "This tool supports the following commands (i.e. $0 {command} …):";
+    my %opts       = (
+        'default_commands' => 'shell help',
+        'help:pre_hint'    => $hint_blurb,
+        'help:pre_help'    => "Various EA4 user-container based service/app/etc management\n\n$hint_blurb",
+    );
+
+    my %cmds = (
+        check => {
+            clue     => "check",
+            abstract => "Check and report on sub id config",
+            help     => "Checks that use name spaces are enabled or not and if so what sub uids and sub gids are allocated",
+            code     => \&check,
+        },
+
+        #        install => {},
+        #        upgrade => {},
+        #        uninstall => {},
+        #        list => {},
+    );
+
+    return ( \%cmds, \%opts );
+}
+
+####################
+#### sub commands ##
+####################
+#
+sub check {
+    my ($app) = @_;
+
     ea_podman::subids::assert_has_user_namespaces(1);
 
     my $subuid_lu = ea_podman::subids::get_subuids();
