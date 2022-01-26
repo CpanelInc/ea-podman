@@ -61,12 +61,8 @@ sub stop_user_container {
 sub start_user_container {
     my ( $container_name, @start_args ) = @_;
     validate_user_container_name($container_name);
+    validate_start_args( \@start_args );
 
-    #  We do not want --rm=true --replace=true:
-    #     1. these are intended to be long running not one offs
-    #     2. systemd management handles them quite nicely
-
-    # TODO: barf if hardcoded run flags are in @start_args
     return podman( run => "-d", "--hostname" => $container_name, "--name" => $container_name, @start_args );
 }
 
@@ -137,16 +133,21 @@ sub generate_container_service {
 sub ensure_latest_container {
     my ( $container_name, @start_args ) = @_;
     validate_user_container_name($container_name);
-
-    uninstall_container($container_name);
-
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
-        if ( -d "/opt/cpanel/$pkg" ) {
+        my $pkg_dir = "/opt/cpanel/$pkg";
 
-            # TODO:  do needful based on /opt/cpanel/$pkg
+        if ( -d $pkg_dir ) {
+            die "Start args not allowed for container based packages\n" if @start_args;
+
+            # do needful based on /opt/cpanel/$pkg
+            # TODO: @start_args - -p ports if @ports
+            # TODO: @start_args - ea-podman.json `startup` if its there (-v is relative to $container_dir)
+            # TODO: system("$dir/ea-podman-local-dir-setup", $container_dir, @ports) if -x "$dir/ea-podman-local-dir-setup";
         }
     }
+    validate_start_args( \@start_args );
 
+    uninstall_container($container_name);
     start_user_container( $container_name, @start_args );
     generate_container_service($container_name);
 }
@@ -161,6 +162,17 @@ sub validate_user_container_name {
     my ($container_name) = @_;
 
     # TODO: implement me
+}
+
+sub validate_start_args {
+    my ($start_args) = @_;
+
+    #  We do not want --rm=true, --rmi, --replace=true:
+    #     1. these are intended to be long running not one offs
+    #     2. systemd management handles them quite nicely
+
+    # TODO: barf if hardcoded run flags are in @start_args
+    # `-p`, `--publish`, `-d`, `--detach`, `-h`, `--hostname`, `--name`, `--rm`, `--rmi`, `--replace`
 }
 
 ###########################
