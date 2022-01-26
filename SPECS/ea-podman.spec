@@ -18,6 +18,8 @@ AutoReqProv:    no
 
 Source0:        ea-podman
 Source1:        ea-podman.sh
+Source2:        ea_podman-subids.pm
+Source3:        ea_podman-util.pm
 
 %description
 Ensures container based EA4 packages have podman available as well as any common helpers.
@@ -27,16 +29,24 @@ echo "Nothing to build"
 
 %install
 mkdir -p %{buildroot}/usr/local/cpanel/scripts
-install %{SOURCE0} %{buildroot}/usr/local/cpanel/scripts/ea-podman
-
+ln -s /opt/cpanel/ea-podman/bin/ea-podman %{buildroot}/usr/local/cpanel/scripts/ea-podman
 mkdir -p %{buildroot}/opt/cpanel/ea-podman
 install %{SOURCE1} %{buildroot}/opt/cpanel/ea-podman/ea-podman.sh
+
+mkdir -p %{buildroot}/opt/cpanel/ea-podman/bin
+install %{SOURCE0} %{buildroot}/opt/cpanel/ea-podman/bin/ea-podman
+
+mkdir -p %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman
+install %{SOURCE2} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/subids.pm
+install %{SOURCE3} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/util.pm
 
 %clean
 rm -rf %{buildroot}
 
 %files
-%attr(0755,root,root) /usr/local/cpanel/scripts/ea-podman
+/opt/cpanel/ea-podman/
+/usr/local/cpanel/scripts/ea-podman
+%attr(0744,root,root) /opt/cpanel/ea-podman/bin/ea-podman
 %attr(0755,root,root) /opt/cpanel/ea-podman/ea-podman.sh
 
 %changelog

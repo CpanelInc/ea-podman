@@ -9,123 +9,34 @@ use warnings;
 
 package scripts::ea_podman;
 
-use Cpanel::Config::Users ();
-use Path::Tiny 'path';
+use FindBin;
 
-my $good = "✅";
-my $bad  = "❌";
+BEGIN {
+    use FindBin;
+    if ( -l $0 ) {    # i.e. /usr/local/cpanel/scripts/ea-podman ➜ /opt/cpanel/ea-podman/bin/ea-podman
+        $0 = readlink($0);
+        FindBin->again;
+    }
+}
+use lib "$FindBin::Bin/lib", "$FindBin::Bin/../lib/";
+use ea_podman::util;
+use ea_podman::subids;
+
+use Cpanel::Config::Users ();
 
 run(@ARGV) unless caller;
 
 # can do more functionality and verbosity levels as needed
 sub run {
-    assert_has_user_namespaces(1);
+    ea_podman::subids::assert_has_user_namespaces(1);
 
-    my $subuid_lu = get_subuids();
-    my $subgid_lu = get_subgids();
+    my $subuid_lu = ea_podman::subids::get_subuids();
+    my $subgid_lu = ea_podman::subids::get_subgids();
 
     for my $user ( Cpanel::Config::Users::getcpusers() ) {
-        print( exists $subuid_lu->{$user} ? "$good “$user” has subuids ($subuid_lu->{$user})\n" : "$bad “$user” does not have subuids\n" );
-        print( exists $subgid_lu->{$user} ? "$good “$user” has subgids ($subgid_lu->{$user})\n" : "$bad “$user” does not have subgids\n" );
+        print( exists $subuid_lu->{$user} ? "$ea_podman::subids::good “$user” has subuids ($subuid_lu->{$user})\n" : "$ea_podman::subids::bad “$user” does not have subuids\n" );
+        print( exists $subgid_lu->{$user} ? "$ea_podman::subids::good “$user” has subgids ($subgid_lu->{$user})\n" : "$ea_podman::subids::bad “$user” does not have subgids\n" );
     }
 }
 
-#################
-#### utilities ##
-#################
-
-sub is_container_running {
-    my ($container_name) = @_;
-
-    $container_name = quotemeta($container_name);
-    my $cmd = qq{podman ps --no-trunc --format "{{.Names}}" | grep --quiet ^$container_name\$};
-
-    system($cmd);
-    return $? == 0 ? 1 : 0;
-}
-
-sub ensure_user {
-    my ($user) = @_;
-
-    my $subuid = get_subuids();
-    my $subgid = get_subgids();
-
-    return if exists $subuid->{$user} && exists $subgid->{$user};
-
-    # via the mechanics this means the uids/gids start at 190000
-    my $getuid_max = 190000 - 500;
-    my $getgid_max = 190000 - 500;
-
-    foreach my $u ( keys %{$subuid} ) {
-        my ( $uid, $range ) = split( /:/, $subuid->{$u} );
-        $getuid_max = $uid if ( $uid > $getuid_max );
-    }
-
-    foreach my $u ( keys %{$subgid} ) {
-        my ( $uid, $range ) = split( /:/, $subgid->{$u} );
-        $getgid_max = $uid if ( $uid > $getgid_max );
-    }
-
-    $getuid_max += 500;
-    $getgid_max += 500;
-
-    if ( !exists $subuid->{$user} ) {
-        if ( open my $fh, ">>", '/etc/subuid' ) {
-            print $fh "$user:$getuid_max:499\n";
-            close $fh;
-        }
-    }
-
-    if ( !exists $subgid->{$user} ) {
-        if ( open my $fh, ">>", '/etc/subgid' ) {
-            print $fh "$user:$getgid_max:499\n";
-            close $fh;
-        }
-    }
-
-    return;
-}
-
-sub assert_has_user_namespaces {
-    my ($verbose) = @_;
-
-    chomp( my $max_uns = `sysctl --values user.max_user_namespaces 2>/dev/null` );
-
-    if ( !$max_uns ) {
-        die <<"END_NO_UNS";
-$bad User Namespaces not available (`sysctl --values user.max_user_namespaces`):
-    • Container based packages will not work until they are.
-    • To learn more read `man user_namespaces`
-END_NO_UNS
-    }
-
-    print "$good user.max_user_namespaces = '$max_uns'\n" if $verbose;
-
-    return $max_uns;
-}
-
-sub get_subuids {
-    return _parse_subid_file("/etc/subuid");
-}
-
-sub get_subgids {
-    return _parse_subid_file("/etc/subgid");
-}
-
-###############
-#### helpers ##
-###############
-
-sub _parse_subid_file {
-    my ($file) = @_;
-
-    my $hr = {};
-
-    for my $line ( path($file)->lines( { chomp => 1 } ) ) {
-        my ( $user, $ranges ) = split( ":", $line, 2 );
-        warn "“$user” is in “$file” more than once!\n" if exists $hr->{$user};
-        $hr->{$user} = $ranges;
-    }
-
-    return $hr;
-}
+1;
