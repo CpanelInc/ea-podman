@@ -17,8 +17,8 @@ Requires: ea-podman-repo
 AutoReqProv:    no
 
 Source0:        ea-podman
-Source1:        ea_podman-subids.pm
-Source2:        ea_podman-util.pm
+Source1:        subids.pm
+Source2:        util.pm
 
 %description
 Ensures container based EA4 packages have podman available as well as any common helpers.
