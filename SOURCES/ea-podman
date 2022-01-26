@@ -41,6 +41,8 @@ sub get_dispatch_args {
         'default_commands' => 'shell help',
         'help:pre_hint'    => $hint_blurb,
         'help:pre_help'    => "Various EA4 user-container based service/app/etc management\n\n$hint_blurb",
+
+        # alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop" },
     );
 
     my %cmds = (
@@ -55,6 +57,10 @@ sub get_dispatch_args {
         #        upgrade => {},
         #        uninstall => {},
         #        list => {},
+        #        start => {},
+        #        stop => {},
+        #        restart => {},
+        #        status => {},
     );
 
     return ( \%cmds, \%opts );
