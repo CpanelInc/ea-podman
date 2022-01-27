@@ -15,7 +15,9 @@ our $good = "✅";
 our $bad  = "❌";
 
 sub ensure_user {
-    my ($user) = @_;
+    my ( $user, $num_uids ) = @_;
+
+    $num_uids = 65537 if !$num_uids;
 
     my $subuid = get_subuids();
     my $subgid = get_subgids();
@@ -23,32 +25,35 @@ sub ensure_user {
     return if exists $subuid->{$user} && exists $subgid->{$user};
 
     # via the mechanics this means the uids/gids start at 190000
-    my $getuid_max = 190000 - 500;
-    my $getgid_max = 190000 - 500;
+    my $getuid_max = 190000 - $num_uids;
+    my $getgid_max = 190000 - $num_uids;
 
     foreach my $u ( keys %{$subuid} ) {
         my ( $uid, $range ) = split( /:/, $subuid->{$u} );
+        $uid += $range;
         $getuid_max = $uid if ( $uid > $getuid_max );
     }
 
     foreach my $u ( keys %{$subgid} ) {
         my ( $uid, $range ) = split( /:/, $subgid->{$u} );
+        $uid += $range;
         $getgid_max = $uid if ( $uid > $getgid_max );
     }
 
-    $getuid_max += 500;
-    $getgid_max += 500;
+    $getuid_max++;
+    $getgid_max++;
 
+    my $num_uids_minus_one = $num_uids - 1;
     if ( !exists $subuid->{$user} ) {
         if ( open my $fh, ">>", '/etc/subuid' ) {
-            print $fh "$user:$getuid_max:499\n";
+            print $fh "$user:$getuid_max:$num_uids_minus_one\n";
             close $fh;
         }
     }
 
     if ( !exists $subgid->{$user} ) {
         if ( open my $fh, ">>", '/etc/subgid' ) {
-            print $fh "$user:$getgid_max:499\n";
+            print $fh "$user:$getgid_max:$num_uids_minus_one\n";
             close $fh;
         }
     }
