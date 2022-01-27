@@ -38,7 +38,7 @@ The package should supply only what it needs for the tooling to be able to do wh
 
 ### Must be able to operate on arbitrary images.
 
-This will allow for an almost limitless amout of services, apps, etc without any maintenance on our part.
+This will allow for an almost limitless amount of services (micro and macro), apps, etc without any maintenance on our part.
 
 ## Maintainability
 
