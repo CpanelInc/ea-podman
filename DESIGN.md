@@ -51,6 +51,10 @@ Estimate:
 
 ## Decisions
 
+### Networking
+
+TBD via ZC-9688
+
 ### root/user executing
 
 Typically will be run by users but if root wants to do containers they can use the tool also.
