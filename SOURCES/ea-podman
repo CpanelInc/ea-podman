@@ -45,6 +45,11 @@ sub get_dispatch_args {
         alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop" },
     );
 
+    if ( $> == 0 ) {
+        $opts{"help:post_help"} = "To manage containers for a user use `su - USER -c '$0 …'` or similar.";
+        $opts{"help:post_hint"} = $opts{"help:post_help"};
+    }
+
     my %cmds = (
         check => {
             clue     => "check",
@@ -154,10 +159,22 @@ sub check {
     my $subuid_lu = ea_podman::subids::get_subuids();
     my $subgid_lu = ea_podman::subids::get_subgids();
 
-    for my $user ( Cpanel::Config::Users::getcpusers() ) {
-        print( exists $subuid_lu->{$user} ? "$ea_podman::subids::good “$user” has subuids ($subuid_lu->{$user})\n" : "$ea_podman::subids::bad “$user” does not have subuids\n" );
-        print( exists $subgid_lu->{$user} ? "$ea_podman::subids::good “$user” has subgids ($subgid_lu->{$user})\n" : "$ea_podman::subids::bad “$user” does not have subgids\n" );
+    if ( $> == 0 ) {
+        for my $user ( Cpanel::Config::Users::getcpusers() ) {
+            _check_output_user( $user, $subuid_lu, $subgid_lu );
+        }
     }
+    else {
+        my $user = scalar getpwuid($>);
+        _check_output_user( $user, $subuid_lu, $subgid_lu );
+    }
+}
+
+sub _check_output_user {
+    my ( $user, $subuid_lu, $subgid_lu ) = @_;
+
+    print( exists $subuid_lu->{$user} ? "$ea_podman::subids::good “$user” has subuids ($subuid_lu->{$user})\n" : "$ea_podman::subids::bad “$user” does not have subuids\n" );
+    print( exists $subgid_lu->{$user} ? "$ea_podman::subids::good “$user” has subgids ($subgid_lu->{$user})\n" : "$ea_podman::subids::bad “$user” does not have subgids\n" );
 }
 
 1;

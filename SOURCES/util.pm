@@ -9,7 +9,9 @@ use warnings;
 
 package ea_podman::util;
 
-sub ensure_su_login {
+sub ensure_su_login {    # needed when $user is from root `su - $user` and not SSH
+    return if $> == 0;
+
     if ( !$ENV{XDG_RUNTIME_DIR} ) {
         my $user = scalar getpwuid($>);
         system("loginctl enable-linger $user");

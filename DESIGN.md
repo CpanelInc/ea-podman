@@ -51,6 +51,11 @@ Estimate:
 
 ## Decisions
 
+### root/user executing
+
+Typically will be run by users but if root wants to do containers they can use the tool also.
+
+If they want to manage containers for users they can use `su` (hint/help output should indicate that).
 
 ### Images we use in EA4 container based packages
 
