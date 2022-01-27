@@ -77,7 +77,7 @@ sub get_containers {
 
     for my $line (`podman ps --no-trunc --format "{{.Names}} {{.Image}}"`) {
         my ( $name, $image ) = split( " ", $line, 2 );
-        $containers{$name} = $image;
+        $containers{$name} = { image => $image };    # TODO: incorporate ports if any
     }
 
     return \%containers;

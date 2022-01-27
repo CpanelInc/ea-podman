@@ -23,6 +23,7 @@ use ea_podman::util;
 use ea_podman::subids;
 
 use Cpanel::Config::Users ();
+use Cpanel::JSON          ();
 
 use Term::ReadLine   ();
 use App::CmdDispatch ();
@@ -38,11 +39,10 @@ sub run {
 sub get_dispatch_args {
     my $hint_blurb = "This tool supports the following commands (i.e. $0 {command} …):";
     my %opts       = (
-        'default_commands' => 'shell help',
+        'default_commands' => 'help',                                                                                                                                  # shell is probably not useful here and otentially confusing
         'help:pre_hint'    => $hint_blurb,
         'help:pre_help'    => "Various EA4 user-container based service/app/etc management\n\n$hint_blurb",
-
-        # alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop" },
+        alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop" },
     );
 
     my %cmds = (
@@ -56,11 +56,65 @@ sub get_dispatch_args {
         #        install => {},
         #        upgrade => {},
         #        uninstall => {},
-        #        list => {},
-        #        start => {},
-        #        stop => {},
-        #        restart => {},
-        #        status => {},
+        list => {
+            clue     => "list",
+            abstract => "Show container information",
+            help     => "Dumps the information in human readable JSON",
+            code     => sub {
+                my ($app) = @_;
+                print Cpanel::JSON::pretty_canonical_dump( ea_podman::util::get_containers() );
+            },
+        },
+        start => {
+            clue     => "start <CONTAINER_NAME>",
+            abstract => "Start a container",
+            help     => "Start the container named CONTAINER_NAME",
+            code     => sub {
+                my ( $app, $container_name ) = @_;
+                sysctl( start => $container_name );
+            }
+        },
+        stop => {
+            clue     => "stop <CONTAINER_NAME>",
+            abstract => "Stop a container",
+            help     => "Stop the container named CONTAINER_NAME",
+            code     => sub {
+                my ( $app, $container_name ) = @_;
+                sysctl( stop => $container_name );
+            }
+        },
+        restart => {
+            clue     => "restart <CONTAINER_NAME>",
+            abstract => "Restart a container",
+            help     => "Restart the container named CONTAINER_NAME",
+            code     => sub {
+                my ( $app, $container_name ) = @_;
+                sysctl( start => $container_name );
+            }
+        },
+        status => {
+            clue     => "status <CONTAINER_NAME>",
+            abstract => "Get status of a container",
+            help     => "Get status of the container named CONTAINER_NAME",
+            code     => sub {
+                my ( $app, $container_name ) = @_;
+                sysctl( status => $container_name );
+            }
+        },
+        bash => {
+            clue     => "bash <CONTAINER_NAME> [CMD]",
+            abstract => "get into a shell/run commands inside the container",
+            help     => "If the container has bash: get a shell inside the container or run the (optional) CMD",
+            code     => sub {
+                my ( $app, $container_name, $cmd ) = @_;
+                if ($cmd) {
+                    ea_podman::util::podman( exec => "-it", $container_name, "/bin/bash", "-c" => $cmd );
+                }
+                else {
+                    ea_podman::util::podman( exec => "-it", $container_name, "/bin/bash" );
+                }
+            },
+        },
     );
 
     return ( \%cmds, \%opts );
