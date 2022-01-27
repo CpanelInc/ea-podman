@@ -39,10 +39,10 @@ sub run {
 sub get_dispatch_args {
     my $hint_blurb = "This tool supports the following commands (i.e. $0 {command} …):";
     my %opts       = (
-        'default_commands' => 'help',                                                                                                                                  # shell is probably not useful here and otentially confusing
+        'default_commands' => 'help',                                                                                                                                                                   # shell is probably not useful here and potentially confusing
         'help:pre_hint'    => $hint_blurb,
         'help:pre_help'    => "Various EA4 user-container based service/app/etc management\n\n$hint_blurb",
-        alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop" },
+        alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop", sid => "subids", si => "subids" },
     );
 
     if ( $> == 0 ) {
@@ -51,11 +51,11 @@ sub get_dispatch_args {
     }
 
     my %cmds = (
-        check => {
-            clue     => "check",
+        subids => {
+            clue     => "subids",
             abstract => "Check and report on sub id config",
             help     => "Checks that use name spaces are enabled or not and if so what sub uids and sub gids are allocated",
-            code     => \&check,
+            code     => \&subids,
         },
 
         install => {
@@ -151,7 +151,7 @@ sub get_dispatch_args {
 #### sub commands ##
 ####################
 
-sub check {
+sub subids {
     my ($app) = @_;
 
     ea_podman::subids::assert_has_user_namespaces(1);
