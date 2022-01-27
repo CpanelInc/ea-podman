@@ -67,8 +67,15 @@ sub get_dispatch_args {
                 ea_podman::util::install_container( $name, @start_args );
             },
         },
-
-        #        upgrade => {},
+        upgrade => {
+            clue     => "upgrade <CONTAINER_NAME> … TODO …",
+            abstract => "Upgrade a container",
+            help     => "Upgrade the container named CONTAINER_NAME",
+            code     => sub {
+                my ( $app, $container_name, $verify ) = @_;
+                print "TODO: implement after some of the library TODOs are done\n";
+            },
+        },
         uninstall => {
             clue     => "uninstall <CONTAINER_NAME>",
             abstract => "Uninstall a container",
