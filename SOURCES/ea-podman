@@ -53,7 +53,16 @@ sub get_dispatch_args {
             code     => \&check,
         },
 
-        #        install => {},
+        install => {
+            clue     => "install <PKG|NON-PKG-NAME [`run` flags] <IMAGE>",
+            abstract => "Install a container",
+            help     => "… TODO …",
+            code     => sub {
+                my ( $app, $name, @start_args ) = @_;
+                ea_podman::util::install_container( $name, @start_args );
+            },
+        },
+
         #        upgrade => {},
         uninstall => {
             clue     => "uninstall <CONTAINER_NAME>",
@@ -136,7 +145,7 @@ sub get_dispatch_args {
 ####################
 #### sub commands ##
 ####################
-#
+
 sub check {
     my ($app) = @_;
 

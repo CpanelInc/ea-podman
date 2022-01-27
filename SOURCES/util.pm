@@ -180,11 +180,11 @@ sub validate_start_args {
 ###########################
 
 sub install_container {
-    my ($name) = @_;
-    ensure_latest_container( get_next_available_container_name($name) );
+    my ( $name, @start_args ) = @_;
+    ensure_latest_container( get_next_available_container_name($name), @start_args );
 }
 
-sub upgrade_container {
+sub upgrade_container {    # TODO: ¿start_args?
     my ($container_name) = @_;
     validate_user_container_name($container_name);
 
