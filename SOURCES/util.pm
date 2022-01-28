@@ -9,6 +9,12 @@ use warnings;
 
 package ea_podman::util;
 
+use Cpanel::JSON     ();
+use File::Path::Tiny ();
+
+my $container_name_suffix_regexp      = qr/\.[^.]+\.[0-9][0-9]$/;
+my $container_name_sans_suffix_regexp = qr/^[a-z][a-z-]+[a-z]/;
+
 sub ensure_su_login {    # needed when $user is from root `su - $user` and not SSH
     return if $> == 0;
 
@@ -34,6 +40,7 @@ sub is_user_container_name_running {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
     ensure_su_login();
+
     $container_name = quotemeta($container_name);
     `podman ps --no-trunc --format "{{.Names}}" | grep --quiet ^$container_name\$`;
     return $? == 0 ? 1 : 0;
@@ -43,6 +50,7 @@ sub is_user_container_name_running {
 sub is_user_container_id_running {
     my ($container_id) = @_;    # short and long .ID (since the regex is not anchored at the end)
     ensure_su_login();
+
     $container_id = quotemeta($container_id);
     `podman ps --no-trunc --format "{{.ID}}" | grep --quiet ^$container_id`;
     return $? == 0 ? 1 : 0;
@@ -85,7 +93,7 @@ sub get_containers {
     return \%containers;
 }
 
-sub get_next_available_container_name {    # TODO: make less racey
+sub get_next_available_container_name {    # ¿TODO/YAGNI?: make less racey
     my ($name) = @_;                       # ea-pkg or arbitrary-name
     $name .= "." . scalar getpwuid($>) . ".%02d";
 
@@ -110,7 +118,7 @@ sub get_pkg_from_container_name {
     validate_user_container_name($container_name);
     return if $container_name !~ m/^ea-/;
 
-    $container_name =~ s/\.[^.]+\.[0-9][0-9]$//g;
+    $container_name =~ s/$container_name_suffix_regexp//g;
     return $container_name;
 }
 
@@ -118,8 +126,8 @@ sub generate_container_service {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
 
-    # TODO: not shell out
-    system("mkdir -p ~/.config/systemd/user");
+    my $homedir = ( getpwuid($>) )[7];
+    File::Path::Tiny::mk("$homedir/.config/systemd/user");
     my $service_name = get_container_service_name($container_name);
 
     my $container_name_qx = quotemeta($container_name);
@@ -135,35 +143,78 @@ sub generate_container_service {
 sub ensure_latest_container {
     my ( $container_name, @start_args ) = @_;
     validate_user_container_name($container_name);
+
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
         my $pkg_dir = "/opt/cpanel/$pkg";
 
-        if ( -d $pkg_dir ) {
+        if ( -f "$pkg_dir/ea-podman.json" ) {
             die "Start args not allowed for container based packages\n" if @start_args;
 
             # do needful based on /opt/cpanel/$pkg
-            # TODO: @start_args - -p ports if @ports (TODO ZC-9691: if ports > 0 call admin bin to grab the ports needed)
-            # TODO: @start_args - ea-podman.json `startup` if its there (-v is relative to $container_dir)
-            # TODO: system("$dir/ea-podman-local-dir-setup", $container_dir, @ports) if -x "$dir/ea-podman-local-dir-setup";
+            my $pkg_conf = Cpanel::JSON::LoadFile("$pkg_dir/ea-podman.json");
+            my @ports    = _get_new_ports( $container_name => $pkg_conf->{required_ports} );
+            push @start_args, map { ( "-p", "$_:$_" ) } @ports;
+
+            my $homedir       = ( getpwuid($>) )[7];
+            my $container_dir = "$homedir/$container_name";
+            for my $flag ( keys %{ $pkg_conf->{startup} } ) {
+                if ( $flag eq "-v" ) {
+                    push @start_args, map { $flag => "$container_dir/$_" } @{ $pkg_conf->{startup}{$flag} };
+                }
+                else {
+                    my @values = @{ $pkg_conf->{startup}{$flag} };
+                    if ( !@values ) {
+                        push @start_args, $flag;
+                    }
+                    else {
+                        push @start_args, map { $flag => $_ } @values;
+                    }
+                }
+            }
+            push @start_args, $pkg_conf->{image};
+
+            validate_start_args( \@start_args );
+
+            system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports ) if -x "$pkg_dir/ea-podman-local-dir-setup";
         }
     }
-    validate_start_args( \@start_args );
+    else {
+        validate_start_args( \@start_args );
+    }
 
     uninstall_container($container_name);
     start_user_container( $container_name, @start_args );
     generate_container_service($container_name);
 }
 
+sub _get_new_ports {
+    my ( $container_name, $count ) = @_;
+    return if !defined $count || $count < 1;
+
+    my @new_ports;
+    if ( $> == 0 ) {
+        @new_ports = grep { chomp; m/^[0-9]+$/ ? ($_) : () } `/scripts/cpuser_port_authority give root $count --service=$container_name 2>/dev/null`;
+    }
+    else {
+        my $user = scalar getpwuid($>);
+
+        #  TODO ZC-9691: call admin bin to grab the $count ports needed for $user’s $container_name
+    }
+
+    return @new_ports;
+
+}
+
 sub rename_containers {
     my ( $olduser, $newuser ) = @_;
 
-    # TODO: implement me
+    # TODO ZC-9694: implement me
 }
 
 sub validate_user_container_name {
     my ($container_name) = @_;
-
-    # TODO: implement me
+    die "Invalid container name\n" if $container_name !~ m/$container_name_sans_suffix_regexp$container_name_suffix_regexp/;
+    return 1;
 }
 
 sub validate_start_args {
@@ -173,7 +224,7 @@ sub validate_start_args {
     #     1. these are intended to be long running not one offs
     #     2. systemd management handles them quite nicely
 
-    # TODO: barf if hardcoded run flags are in @start_args
+    # TODO ZC-9696: barf if hardcoded run flags are in @start_args
     # `-p`, `--publish`, `-d`, `--detach`, `-h`, `--hostname`, `--name`, `--rm`, `--rmi`, `--replace`
 }
 
@@ -186,7 +237,7 @@ sub install_container {
     ensure_latest_container( get_next_available_container_name($name), @start_args );
 }
 
-sub upgrade_container {    # TODO: ¿start_args?
+sub upgrade_container {    # TODO ZC-9693: ¿start_args?
     my ($container_name) = @_;
     validate_user_container_name($container_name);
 
@@ -202,7 +253,8 @@ sub uninstall_container {
     my $service_name = get_container_service_name($container_name);
     sysctl( disable => $service_name );
 
-    # TODO: no ~ rm -f ~/.config/systemd/user/$service_name
+    my $homedir = ( getpwuid($>) )[7];
+    unlink "$homedir/.config/systemd/user/$service_name";
 
     sysctl("daemon-reload");
     sysctl("reset-failed");
