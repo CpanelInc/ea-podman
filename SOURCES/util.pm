@@ -79,7 +79,7 @@ sub get_containers {
 
     for my $line (`podman ps --no-trunc --format "{{.Names}} {{.Image}}"`) {
         my ( $name, $image ) = split( " ", $line, 2 );
-        $containers{$name} = { image => $image };    # TODO: incorporate ports if any
+        $containers{$name} = { image => $image };    # TODO ZC-9691: incorporate ports for $image if any
     }
 
     return \%containers;
@@ -142,7 +142,7 @@ sub ensure_latest_container {
             die "Start args not allowed for container based packages\n" if @start_args;
 
             # do needful based on /opt/cpanel/$pkg
-            # TODO: @start_args - -p ports if @ports
+            # TODO: @start_args - -p ports if @ports (TODO ZC-9691: if ports > 0 call admin bin to grab the ports needed)
             # TODO: @start_args - ea-podman.json `startup` if its there (-v is relative to $container_dir)
             # TODO: system("$dir/ea-podman-local-dir-setup", $container_dir, @ports) if -x "$dir/ea-podman-local-dir-setup";
         }
