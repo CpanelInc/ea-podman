@@ -19,8 +19,20 @@ BEGIN {
     }
 }
 use lib "$FindBin::Bin/lib", "$FindBin::Bin/../lib/";
-use ea_podman::util;
-use ea_podman::subids;
+
+# structured for testing
+eval { require ea_podman::util };
+if ($@) {                                                  # … if its not installed do the devbox version
+    use FindBin ();
+    require "$FindBin::Bin/../SOURCES/util.pm";
+}
+
+# structured for testing
+eval { require ea_podman::subids };
+if ($@) {                                                  # … if its not installed do the devbox version
+    use FindBin ();
+    require "$FindBin::Bin/../SOURCES/subids.pm";
+}
 
 use Cpanel::Config::Users ();
 use Cpanel::JSON          ();

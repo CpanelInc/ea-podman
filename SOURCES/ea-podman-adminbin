@@ -1,0 +1,135 @@
+#!/usr/local/cpanel/3rdparty/bin/perl
+
+# cpanel - bin/admin/Cpanel/ea_podman                Copyright 2022 cPanel L.L.C.
+#                                                           All rights reserved.
+# copyright@cpanel.net                                         http://cpanel.net
+# This code is subject to the cPanel license. Unauthorized copying is prohibited
+
+package bin::admin::Cpanel::ea_podman;
+
+use strict;
+
+use base qw( Cpanel::AdminBin::Script::Call );
+
+use lib '/var/cpanel/perl5/lib';
+use Cpanel::Debug     ();
+use Cpanel            ();
+use Cpanel::Exception ();
+
+use Capture::Tiny 'capture_merged';
+
+eval { require '/usr/local/cpanel/scripts/ea-podman' };    # Prefer the package’s script …
+if ($@) {                                                  # … if its not installed do the devbox version
+    use FindBin ();
+    require "$FindBin::Bin/../SOURCES/ea-podman";
+    require "$FindBin::Bin/../SOURCES/subids.pm";
+    require "$FindBin::Bin/../SOURCES/util.pm";
+}
+
+__PACKAGE__->run( 'alarm' => 120 ) unless caller;
+
+sub _actions {
+    return qw(LIST GIVE ENSURE_USER);
+}
+
+sub LIST {
+    my ($self) = @_;
+    my $cpuser = $self->_debug_and_user(0);
+
+    return capture_merged { system( '/scripts/cpuser_port_authority', 'list', $cpuser ); };
+}
+
+sub GIVE {
+    my ( $self, $num_ports, $container_name ) = @_;
+    my $cpuser = $self->_debug_and_user(0);
+
+    # Not sure how to handle locale maketext from a package
+    _die_with_message("Must provide a number of ports")    if !defined $num_ports;
+    _die_with_message("Cannot create more than 100 ports") if $num_ports > 100;
+    _die_with_message("Must provide a container name")     if !$container_name;
+
+    return capture_merged { system( '/scripts/cpuser_port_authority', 'give', $cpuser, $num_ports, $container_name ); };
+}
+
+sub ENSURE_USER {
+    my ($self) = @_;
+    my $cpuser = $self->_debug_and_user(1);
+
+    local $@;
+    eval {
+        ea_podman::subids::ensure_user($cpuser);
+    };
+
+    return 1;
+}
+
+###############
+#### helpers ##
+###############
+
+sub _debug_and_user {
+    my ($self) = @_;
+
+    my @caller = caller(1);
+    my $method = $caller[3];
+    $method =~ s/^.*::([^:]+)$/$1/;
+
+    if ($Cpanel::Debug::level) {
+        Cpanel::Debug::log_info("$method() called");
+    }
+
+    my $cpuser = $self->get_caller_username();
+
+    return $cpuser;
+}
+
+sub _die_with_message {
+    my ($msg) = @_;
+
+    die Cpanel::Exception::create( 'AdminError', [ message => $msg ] );
+}
+
+1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+ea_podman
+
+=head1 SYNOPSIS
+
+my $ea_podman = bin::admin::Cpanel::ea_podman->new ();
+
+@actions = $ea_podman->_actions ();
+
+$ea_podman->LIST ();
+
+=head1 DESCRIPTION
+
+This runs ea-podman functions that need to be run as an admin.
+
+ea_podman is deployed by the RPM to /usr/local/cpanel/bin/admin/Cpanel.
+
+=head1 SUBROUTINES
+
+=head2 _actions
+
+Lists the actions allowed by this admin bin script.
+
+=head2 LIST
+
+This function determines lists all ports already assigned to this user.
+
+=head2 GIVE
+
+This function assigns a num of ports to the user under the name container_name.
+
+=head2 ENSURE_USER
+
+This function updates podman's subuids and subgids to add this user.
+
+=cut
+

@@ -20,6 +20,9 @@ Source0:        ea-podman
 Source1:        subids.pm
 Source2:        util.pm
 
+Source24:       ea-podman-adminbin
+Source25:       ea-podman-adminbin.conf
+
 %description
 Ensures container based EA4 packages have podman available as well as any common helpers.
 
@@ -36,6 +39,12 @@ install %{SOURCE0} %{buildroot}/opt/cpanel/ea-podman/bin/ea-podman
 mkdir -p %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman
 install %{SOURCE1} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/subids.pm
 install %{SOURCE2} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/util.pm
+
+cp -f %{SOURCE24} .
+cp -f %{SOURCE25} .
+
+%{__install} -p %{SOURCE24} %$RPM_BUILD_ROOT/usr/local/cpanel/bin/admin/Cpanel/ea-podman
+%{__install} -p %{SOURCE25} $RPM_BUILD_ROOT/usr/local/cpanel/bin/admin/Cpanel/ea-podman.conf
 
 %clean
 rm -rf %{buildroot}
