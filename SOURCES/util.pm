@@ -9,9 +9,9 @@ use warnings;
 
 package ea_podman::util;
 
-use Cpanel::JSON     ();
+use Cpanel::JSON           ();
 use Cpanel::AdminBin::Call ();
-use File::Path::Tiny ();
+use File::Path::Tiny       ();
 
 my $container_name_suffix_regexp      = qr/\.[^.]+\.[0-9][0-9]$/;
 my $container_name_sans_suffix_regexp = qr/^[a-z][a-z0-9-]+[a-z0-9]/;
@@ -100,6 +100,8 @@ sub get_containers {
 
 sub get_next_available_container_name {    # ¿TODO/YAGNI?: make less racey
     my ($name) = @_;                       # ea-pkg or arbitrary-name
+    die "Invalid name\n" if !length($name) || $name !~ m/$container_name_sans_suffix_regexp$/;
+
     $name .= "." . scalar getpwuid($>) . ".%02d";
 
     my $max          = 99;
@@ -206,7 +208,7 @@ sub _get_new_ports {
     else {
         my $get_ports_response = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'GIVE', $count, $container_name );
 
-        @new_ports = grep { m/^[0-9]+$/ ? ($_) : () } split (/\n/, $get_ports_response);
+        @new_ports = grep { m/^[0-9]+$/ ? ($_) : () } split( /\n/, $get_ports_response );
     }
 
     return @new_ports;
@@ -225,12 +227,55 @@ sub validate_user_container_name {
     return 1;
 }
 
+# 1 ➜ handled by ea-podman
+# 2 ➜ these are intended to be long running not one offs
+#     systemd management handles them quite nicely
+# 3 ➜ these are intended to be long running not one offs
+#     `ea-podman bash bash <CONTAINER_NAME> [CMD]` can be used to get a shell on a running container
+my %invalid_start_args = (
+    "-p"            => 1,
+    "--publish"     => 1,
+    "-d"            => 1,
+    "--detach"      => 1,
+    "-h"            => 1,
+    "--hostname"    => 1,
+    "--name"        => 1,
+    "--rm"          => 2,
+    "--rmi"         => 2,
+    "--replace"     => 2,
+    "-i"            => 3,
+    "--interactive" => 3,
+    "-t"            => 3,
+    "--tty"         => 3,
+);
+
 sub validate_start_args {
     my ($start_args) = @_;
-
     die "No start args given\n"                             if !@{$start_args};
     die "Last start arg does not look like an image name\n" if $start_args->[-1] !~ $image_name_regexp;
 
+    my @invalid;
+    for my $flag ( @{$start_args} ) {
+        next if substr( $flag, 0, 1 ) ne "-";
+
+        my ( $opt, $val ) = split( "=", $flag, 2 );
+        if ( substr( $opt, 0, 2 ) ne "--" ) {
+            if ( length($opt) == 2 ) {
+                push @invalid, $opt if exists $invalid_start_args{$opt};
+            }
+            else {
+                for my $chr ( split( "", $opt ) ) {
+                    next if $chr eq "-";
+                    push @invalid, "-$chr" if exists $invalid_start_args{"-$chr"};
+                }
+            }
+        }
+        else {
+            push @invalid, $opt if exists $invalid_start_args{$opt};
+        }
+    }
+
+    die "Start args can not include the following: " . join( ",", @invalid ) . "\n" if @invalid;
     return 1;
 }
 
@@ -244,7 +289,7 @@ sub install_container {
     # The very first command has to be ensure_user which establishes this user
     # in the /etc/subuid and /etc/subgid files, critical to podman
 
-    Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER');
+    Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );
 
     ensure_latest_container( get_next_available_container_name($name), @start_args );
 }
@@ -259,9 +304,9 @@ sub upgrade_container {    # TODO ZC-9693: ¿start_args?
 sub remove_container_dir {
     my ($container_name) = @_;
 
-    my $homedir = ( getpwuid($>) )[7];
+    my $homedir       = ( getpwuid($>) )[7];
     my $container_dir = "$homedir/$container_name";
-    system ('rm', '-rf', $container_dir);
+    system( 'rm', '-rf', $container_dir );
 
     return;
 }

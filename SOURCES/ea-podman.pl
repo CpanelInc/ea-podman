@@ -22,20 +22,18 @@ BEGIN {
     # Script,   in /usr/local/cpanel/scripts/ea-podman
     # AdminBin, in /usr/cpanel/local/bin/admin/Cpanel
 
-    if (-e '/opt/cpanel/ea-podman/lib') # it has been installed on the machine
-    {   
+    if ( -e '/opt/cpanel/ea-podman/lib' )    # it has been installed on the machine
+    {
         use lib '/opt/cpanel/ea-podman/lib';
         require '/opt/cpanel/ea-podman/lib/ea_podman/util.pm';
         require '/opt/cpanel/ea-podman/lib/ea_podman/subids.pm';
     }
-    else
-    { # this is for testing
-        if (-d 'SOURCES') {
+    else {                                   # this is for testing
+        if ( -d 'SOURCES' ) {
             require 'SOURCES/util.pm';
             require 'SOURCES/subids.pm';
         }
-        else
-        {
+        else {
             require '/root/git/ea-podman/SOURCES/util.pm';
             require '/root/git/ea-podman/SOURCES/subids.pm';
         }
@@ -129,9 +127,6 @@ sub get_dispatch_args {
                 ea_podman::util::validate_user_container_name($container_name);
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
 
-                delete $ENV{XDG_RUNTIME_DIR};
-                ea_podman::util::ensure_su_login ();
-
                 ea_podman::util::sysctl( start => $service_name );
             }
         },
@@ -143,9 +138,6 @@ sub get_dispatch_args {
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
-
-                delete $ENV{XDG_RUNTIME_DIR};
-                ea_podman::util::ensure_su_login ();
 
                 ea_podman::util::sysctl( stop => $service_name );
             }
@@ -159,9 +151,6 @@ sub get_dispatch_args {
                 ea_podman::util::validate_user_container_name($container_name);
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
 
-                delete $ENV{XDG_RUNTIME_DIR};
-                ea_podman::util::ensure_su_login ();
-
                 ea_podman::util::sysctl( restart => $service_name );
             }
         },
@@ -173,9 +162,6 @@ sub get_dispatch_args {
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
-
-                delete $ENV{XDG_RUNTIME_DIR};
-                ea_podman::util::ensure_su_login ();
 
                 ea_podman::util::sysctl( status => $service_name );
             }
