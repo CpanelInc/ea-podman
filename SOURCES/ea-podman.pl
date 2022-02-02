@@ -74,9 +74,9 @@ sub get_dispatch_args {
         },
 
         install => {
-            clue     => "install <PKG|NON-PKG-NAME [--cpuser-port=<CONTAINER PORT|0> [--cpuser-port=<ANOTHER CONTAINER PORT|0> …]] [`run` flags] <IMAGE>",
+            clue     => "install <PKG>|<NON-PKG-NAME> [--cpuser-port=<CONTAINER PORT|0> [--cpuser-port=<ANOTHER CONTAINER PORT|0> …]] [`run` flags] <IMAGE>",
             abstract => "Install a container",
-            help     => "… TODO ZC-9695 …",
+            help     => "Has two modes:\n\t<PKG> - An EA4 container based package.\n\t\tNeeds no other arguments or setup as that is all provided by the package\n\t<NON-PKG-NAME> - manage an arbitrary image as if it where an EA4 container based package.\n\t\tSee https://github.com/CpanelInc/ea-podman/blob/master/README.md for details",
             code     => sub {
                 my ( $app, $name, @start_args ) = @_;
                 ea_podman::util::install_container( $name, @start_args );
