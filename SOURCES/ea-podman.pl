@@ -12,26 +12,34 @@ package scripts::ea_podman;
 use FindBin;
 
 BEGIN {
-    use FindBin;
-    if ( -l $0 ) {    # i.e. /usr/local/cpanel/scripts/ea-podman ➜ /opt/cpanel/ea-podman/bin/ea-podman
-        $0 = readlink($0);
-        FindBin->again;
+    # I cannot get this to work using FindBin in 4 different environments, this works in all
+    # 4 enviroments.
+    #
+    # The environments:
+    #
+    # Testing,  in the ea-podman repo dir
+    # Script,   in /opt/cpanel/ea-podman/bin/ea-podman
+    # Script,   in /usr/local/cpanel/scripts/ea-podman
+    # AdminBin, in /usr/cpanel/local/bin/admin/Cpanel
+
+    if (-e '/opt/cpanel/ea-podman/lib') # it has been installed on the machine
+    {   
+        use lib '/opt/cpanel/ea-podman/lib';
+        require '/opt/cpanel/ea-podman/lib/ea_podman/util.pm';
+        require '/opt/cpanel/ea-podman/lib/ea_podman/subids.pm';
     }
-}
-use lib "$FindBin::Bin/lib", "$FindBin::Bin/../lib/";
-
-# structured for testing
-eval { require ea_podman::util };
-if ($@) {                                                  # … if its not installed do the devbox version
-    use FindBin ();
-    require "$FindBin::Bin/../SOURCES/util.pm";
-}
-
-# structured for testing
-eval { require ea_podman::subids };
-if ($@) {                                                  # … if its not installed do the devbox version
-    use FindBin ();
-    require "$FindBin::Bin/../SOURCES/subids.pm";
+    else
+    { # this is for testing
+        if (-d 'SOURCES') {
+            require 'SOURCES/util.pm';
+            require 'SOURCES/subids.pm';
+        }
+        else
+        {
+            require '/root/git/ea-podman/SOURCES/util.pm';
+            require '/root/git/ea-podman/SOURCES/subids.pm';
+        }
+    }
 }
 
 use Cpanel::Config::Users ();
@@ -100,6 +108,7 @@ sub get_dispatch_args {
                 }
 
                 ea_podman::util::uninstall_container($container_name);
+                ea_podman::util::remove_container_dir($container_name);
             },
         },
         list => {
@@ -117,7 +126,13 @@ sub get_dispatch_args {
             help     => "Start the container named CONTAINER_NAME",
             code     => sub {
                 my ( $app, $container_name ) = @_;
-                sysctl( start => $container_name );
+                ea_podman::util::validate_user_container_name($container_name);
+                my $service_name = ea_podman::util::get_container_service_name($container_name);
+
+                delete $ENV{XDG_RUNTIME_DIR};
+                ea_podman::util::ensure_su_login ();
+
+                ea_podman::util::sysctl( start => $service_name );
             }
         },
         stop => {
@@ -126,7 +141,13 @@ sub get_dispatch_args {
             help     => "Stop the container named CONTAINER_NAME",
             code     => sub {
                 my ( $app, $container_name ) = @_;
-                sysctl( stop => $container_name );
+                ea_podman::util::validate_user_container_name($container_name);
+                my $service_name = ea_podman::util::get_container_service_name($container_name);
+
+                delete $ENV{XDG_RUNTIME_DIR};
+                ea_podman::util::ensure_su_login ();
+
+                ea_podman::util::sysctl( stop => $service_name );
             }
         },
         restart => {
@@ -135,7 +156,13 @@ sub get_dispatch_args {
             help     => "Restart the container named CONTAINER_NAME",
             code     => sub {
                 my ( $app, $container_name ) = @_;
-                sysctl( start => $container_name );
+                ea_podman::util::validate_user_container_name($container_name);
+                my $service_name = ea_podman::util::get_container_service_name($container_name);
+
+                delete $ENV{XDG_RUNTIME_DIR};
+                ea_podman::util::ensure_su_login ();
+
+                ea_podman::util::sysctl( restart => $service_name );
             }
         },
         status => {
@@ -144,7 +171,13 @@ sub get_dispatch_args {
             help     => "Get status of the container named CONTAINER_NAME",
             code     => sub {
                 my ( $app, $container_name ) = @_;
-                sysctl( status => $container_name );
+                ea_podman::util::validate_user_container_name($container_name);
+                my $service_name = ea_podman::util::get_container_service_name($container_name);
+
+                delete $ENV{XDG_RUNTIME_DIR};
+                ea_podman::util::ensure_su_login ();
+
+                ea_podman::util::sysctl( status => $service_name );
             }
         },
         bash => {
@@ -153,6 +186,7 @@ sub get_dispatch_args {
             help     => "If the container has bash: get a shell inside the container or run the (optional) CMD",
             code     => sub {
                 my ( $app, $container_name, $cmd ) = @_;
+                ea_podman::util::validate_user_container_name($container_name);
                 if ($cmd) {
                     ea_podman::util::podman( exec => "-it", $container_name, "/bin/bash", "-c" => $cmd );
                 }
