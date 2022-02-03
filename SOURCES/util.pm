@@ -163,6 +163,7 @@ sub ensure_latest_container {
 
             # do needful based on /opt/cpanel/$pkg
             my $pkg_conf      = Cpanel::JSON::LoadFile("$pkg_dir/ea-podman.json");
+            my $homedir       = ( getpwuid($>) )[7];
             my $container_dir = "$homedir/$container_name";
             for my $flag ( keys %{ $pkg_conf->{startup} } ) {
                 if ( $flag eq "-v" ) {

@@ -9,8 +9,6 @@ use warnings;
 
 package scripts::ea_podman;
 
-use FindBin;
-
 BEGIN {
     # I cannot get this to work using FindBin in 4 different environments, this works in all
     # 4 enviroments.
@@ -22,13 +20,11 @@ BEGIN {
     # Script,   in /usr/local/cpanel/scripts/ea-podman
     # AdminBin, in /usr/cpanel/local/bin/admin/Cpanel
 
-    if ( -e '/opt/cpanel/ea-podman/lib' )    # it has been installed on the machine
-    {
-        use lib '/opt/cpanel/ea-podman/lib';
+    if ( -e '/opt/cpanel/ea-podman/lib' ) {    # it has been installed on the machine
         require '/opt/cpanel/ea-podman/lib/ea_podman/util.pm';
         require '/opt/cpanel/ea-podman/lib/ea_podman/subids.pm';
     }
-    else {                                   # this is for testing
+    else {                                     # this is for testing
         if ( -d 'SOURCES' ) {
             require 'SOURCES/util.pm';
             require 'SOURCES/subids.pm';
