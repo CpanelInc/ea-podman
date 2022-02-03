@@ -213,7 +213,7 @@ sub ensure_latest_container {
         validate_start_args( \@real_start_args );
 
         # then add the ports if any
-        my @ports = _get_new_ports( $container_name => $flags{cpuser_ports} );
+        my @ports = _get_new_ports( $container_name => $cpuser_ports );
         push @start_args, map { ( "-p", "$_:$_" ) } @ports;
     }
 
@@ -314,8 +314,15 @@ sub install_container {
 
     # The very first command has to be ensure_user which establishes this user
     # in the /etc/subuid and /etc/subgid files, critical to podman
+    if ( $> == 0 ) {
+        local $@;
+        eval { ea_podman::subids::ensure_user("root"); };
 
-    Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );
+        die "Unable to ensure the root has subuids and subgids\n" if $@;
+    }
+    else {
+        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );
+    }
 
     ensure_latest_container( get_next_available_container_name($name), @start_args );
 }

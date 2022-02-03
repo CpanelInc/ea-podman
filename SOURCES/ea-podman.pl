@@ -26,8 +26,8 @@ BEGIN {
     }
     else {                                     # this is for testing
         if ( -d 'SOURCES' ) {
-            require 'SOURCES/util.pm';
-            require 'SOURCES/subids.pm';
+            require './SOURCES/util.pm';
+            require './SOURCES/subids.pm';
         }
         else {
             require '/root/git/ea-podman/SOURCES/util.pm';
