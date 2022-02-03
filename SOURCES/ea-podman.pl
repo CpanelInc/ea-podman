@@ -9,8 +9,6 @@ use warnings;
 
 package scripts::ea_podman;
 
-use FindBin;
-
 BEGIN {
     # I cannot get this to work using FindBin in 4 different environments, this works in all
     # 4 enviroments.
@@ -22,20 +20,16 @@ BEGIN {
     # Script,   in /usr/local/cpanel/scripts/ea-podman
     # AdminBin, in /usr/cpanel/local/bin/admin/Cpanel
 
-    if (-e '/opt/cpanel/ea-podman/lib') # it has been installed on the machine
-    {   
-        use lib '/opt/cpanel/ea-podman/lib';
+    if ( -e '/opt/cpanel/ea-podman/lib' ) {    # it has been installed on the machine
         require '/opt/cpanel/ea-podman/lib/ea_podman/util.pm';
         require '/opt/cpanel/ea-podman/lib/ea_podman/subids.pm';
     }
-    else
-    { # this is for testing
-        if (-d 'SOURCES') {
-            require 'SOURCES/util.pm';
-            require 'SOURCES/subids.pm';
+    else {                                     # this is for testing
+        if ( -d 'SOURCES' ) {
+            require './SOURCES/util.pm';
+            require './SOURCES/subids.pm';
         }
-        else
-        {
+        else {
             require '/root/git/ea-podman/SOURCES/util.pm';
             require '/root/git/ea-podman/SOURCES/subids.pm';
         }
@@ -79,7 +73,7 @@ sub get_dispatch_args {
         },
 
         install => {
-            clue     => "install <PKG|NON-PKG-NAME [`run` flags] <IMAGE>",
+            clue     => "install <PKG|NON-PKG-NAME [--cpuser-ports=N] [`run` flags] <IMAGE>",
             abstract => "Install a container",
             help     => "… TODO ZC-9695 …",
             code     => sub {
@@ -129,9 +123,6 @@ sub get_dispatch_args {
                 ea_podman::util::validate_user_container_name($container_name);
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
 
-                delete $ENV{XDG_RUNTIME_DIR};
-                ea_podman::util::ensure_su_login ();
-
                 ea_podman::util::sysctl( start => $service_name );
             }
         },
@@ -143,9 +134,6 @@ sub get_dispatch_args {
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
-
-                delete $ENV{XDG_RUNTIME_DIR};
-                ea_podman::util::ensure_su_login ();
 
                 ea_podman::util::sysctl( stop => $service_name );
             }
@@ -159,9 +147,6 @@ sub get_dispatch_args {
                 ea_podman::util::validate_user_container_name($container_name);
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
 
-                delete $ENV{XDG_RUNTIME_DIR};
-                ea_podman::util::ensure_su_login ();
-
                 ea_podman::util::sysctl( restart => $service_name );
             }
         },
@@ -173,9 +158,6 @@ sub get_dispatch_args {
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
-
-                delete $ENV{XDG_RUNTIME_DIR};
-                ea_podman::util::ensure_su_login ();
 
                 ea_podman::util::sysctl( status => $service_name );
             }
