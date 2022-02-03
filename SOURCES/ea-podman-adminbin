@@ -19,8 +19,8 @@ use Cpanel::Exception ();
 use Capture::Tiny 'capture_merged';
 
 eval { require '/opt/cpanel/ea-podman/bin/ea-podman.pl' };    # Prefer the package’s script …
-if ($@) {                                                  # … if its not installed do the devbox version
-    die "You must run tests from /root/git/ea-podman" if (!-e '/root/git/ea-podman/SOURCES');
+if ($@) {                                                     # … if its not installed do the devbox version
+    die "You must run tests from /root/git/ea-podman" if ( !-e '/root/git/ea-podman/SOURCES' );
 
     require '/root/git/ea-podman/SOURCES/util.pm';
     require '/root/git/ea-podman/SOURCES/subids.pm';
@@ -48,7 +48,7 @@ sub GIVE {
     _die_with_message("Cannot create more than 100 ports") if $num_ports > 100;
     _die_with_message("Must provide a container name")     if !$container_name;
 
-    return capture_merged { system( '/scripts/cpuser_port_authority', 'give', $cpuser, $num_ports, $container_name ); };
+    return capture_merged { system( '/scripts/cpuser_port_authority', 'give', $cpuser, $num_ports, "--service=$container_name" ); };
 }
 
 sub ENSURE_USER {
@@ -56,9 +56,7 @@ sub ENSURE_USER {
     my $cpuser = $self->_debug_and_user(1);
 
     local $@;
-    eval {
-        ea_podman::subids::ensure_user($cpuser);
-    };
+    eval { ea_podman::subids::ensure_user($cpuser); };
 
     if ($@) {
         _die_with_message("Unable to ensure the user has subuids and subgids");
