@@ -24,6 +24,8 @@ my $image_name_regexp = qr'^(?:(?=[^:\/]{4,253})(?!-)[a-zA-Z0-9-]{1,63}(?<!-)(?:
 sub ensure_su_login {    # needed when $user is from root `su - $user` and not SSH
     return if $> == 0;
 
+    delete $ENV{XDG_RUNTIME_DIR} if $ENV{XDG_RUNTIME_DIR} && $ENV{XDG_RUNTIME_DIR} ne "/run/user/$>";
+
     if ( !$ENV{XDG_RUNTIME_DIR} ) {
         my $user = scalar getpwuid($>);
         system("loginctl enable-linger $user");
@@ -38,7 +40,8 @@ sub podman {
 }
 
 sub sysctl {
-    system( systemctl => "--user", @_ );
+    ensure_su_login();
+    system( systemctl => "--user", @_ );    # ¿ if $> == 0 do --root => "~/.config/systemd/user" instead of `--user` ?
     return $? == 0 ? 1 : 0;
 }
 
@@ -159,12 +162,7 @@ sub ensure_latest_container {
             die "Start args not allowed for container based packages\n" if @start_args;
 
             # do needful based on /opt/cpanel/$pkg
-            my $pkg_conf = Cpanel::JSON::LoadFile("$pkg_dir/ea-podman.json");
-            my @ports    = _get_new_ports( $container_name => $pkg_conf->{required_ports} );
-
-            push @start_args, map { ( "-p", "$_:$_" ) } @ports;
-
-            my $homedir       = ( getpwuid($>) )[7];
+            my $pkg_conf      = Cpanel::JSON::LoadFile("$pkg_dir/ea-podman.json");
             my $container_dir = "$homedir/$container_name";
             for my $flag ( keys %{ $pkg_conf->{startup} } ) {
                 if ( $flag eq "-v" ) {
@@ -182,13 +180,40 @@ sub ensure_latest_container {
             }
             push @start_args, $pkg_conf->{image};
 
+            # ensure ea-podman.json isn’t specifying something it shouldn’t
             validate_start_args( \@start_args );
+
+            # then add the ports if any
+            my @ports = _get_new_ports( $container_name => $pkg_conf->{required_ports} );
+            push @start_args, map { ( "-p", "$_:$_" ) } @ports;
 
             system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports ) if -x "$pkg_dir/ea-podman-local-dir-setup";
         }
     }
     else {
-        validate_start_args( \@start_args );
+        my @real_start_args;
+        my $cpuser_ports = 0;
+        for my $item (@start_args) {
+            if ( $item =~ m/^--cpuser-ports(?:=(.+))?/ ) {
+                my $val = $1;
+                die "--cpuser-ports given more than once\n" if $cpuser_ports;
+
+                if ( !length($val) || $1 !~ m/^[1-9][0-9]?$/ ) {
+                    die "--cpuser-ports requires the number of ports the container needs (e.g. --cpuser-ports=2)\n";
+                }
+                $cpuser_ports = $val;
+            }
+            else {
+                push @real_start_args, $item;
+            }
+        }
+
+        # ensure the user isn’t specifying something they shouldn’t
+        validate_start_args( \@real_start_args );
+
+        # then add the ports if any
+        my @ports = _get_new_ports( $container_name => $flags{cpuser_ports} );
+        push @start_args, map { ( "-p", "$_:$_" ) } @ports;
     }
 
     uninstall_container($container_name);

@@ -77,7 +77,7 @@ sub get_dispatch_args {
         },
 
         install => {
-            clue     => "install <PKG|NON-PKG-NAME [`run` flags] <IMAGE>",
+            clue     => "install <PKG|NON-PKG-NAME [--cpuser-ports=N] [`run` flags] <IMAGE>",
             abstract => "Install a container",
             help     => "… TODO ZC-9695 …",
             code     => sub {
