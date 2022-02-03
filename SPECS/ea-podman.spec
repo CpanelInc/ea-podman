@@ -62,16 +62,14 @@ PERLCC_DORMANT_OPTS="${PERLCC_OPTS} -UB -Uwarnings"
 $CPANEL_PERLCC $CC_OPTIMIZATIONS $PERLCC_DORMANT_OPTS ea-podman.pl -o ea-podman
 cd -
 
-#chmod a+x /opt/cpanel/ea-podman/bin/ea-podman
-
 %clean
 rm -rf %{buildroot}
 
 %files
 /opt/cpanel/ea-podman/
 /usr/local/cpanel/scripts/ea-podman
-/usr/local/cpanel/bin/admin/Cpanel/ea_podman
-/usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
+%attr(0755,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman
+%attr(0744,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
 
 %changelog
 * Wed Jan 19 2022 Dan Muey <dan@cpanel.net> - 1.0-2

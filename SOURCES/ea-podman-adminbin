@@ -60,6 +60,10 @@ sub ENSURE_USER {
         ea_podman::subids::ensure_user($cpuser);
     };
 
+    if ($@) {
+        _die_with_message("Unable to ensure the user has subuids and subgids");
+    }
+
     return 1;
 }
 
