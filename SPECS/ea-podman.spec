@@ -16,12 +16,16 @@ Requires: ea-podman-repo
 
 AutoReqProv:    no
 
-Source0:        ea-podman
+Source0:        ea-podman.pl
 Source1:        subids.pm
 Source2:        util.pm
 
 Source24:       ea-podman-adminbin
 Source25:       ea-podman-adminbin.conf
+
+Requires:       gcc-toolset-11
+Requires:       libnsl2
+Requires:       libnsl2-devel
 
 %description
 Ensures container based EA4 packages have podman available as well as any common helpers.
@@ -34,7 +38,7 @@ mkdir -p %{buildroot}/usr/local/cpanel/scripts
 ln -s /opt/cpanel/ea-podman/bin/ea-podman %{buildroot}/usr/local/cpanel/scripts/ea-podman
 
 mkdir -p %{buildroot}/opt/cpanel/ea-podman/bin
-install %{SOURCE0} %{buildroot}/opt/cpanel/ea-podman/bin/ea-podman
+install %{SOURCE0} %{buildroot}/opt/cpanel/ea-podman/bin/ea-podman.pl
 
 mkdir -p %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman
 install %{SOURCE1} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/subids.pm
@@ -43,8 +47,20 @@ install %{SOURCE2} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/util.pm
 cp -f %{SOURCE24} .
 cp -f %{SOURCE25} .
 
-%{__install} -p %{SOURCE24} %$RPM_BUILD_ROOT/usr/local/cpanel/bin/admin/Cpanel/ea-podman
-%{__install} -p %{SOURCE25} $RPM_BUILD_ROOT/usr/local/cpanel/bin/admin/Cpanel/ea-podman.conf
+mkdir -p %{buildroot}/usr/local/cpanel/bin/admin/Cpanel
+install -p %{SOURCE24} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman
+install -p %{SOURCE25} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
+
+%post
+
+cd /opt/cpanel/ea-podman/bin
+# Prep for calling perlcc
+CPANEL_PERLCC=/usr/local/cpanel/3rdparty/perl/532/bin/perlcc
+CC_OPTIMIZATIONS=--Wc='-Os -s'
+PERLCC_OPTS="-v4 -UO -UB::Stash -UTie::Hash::NamedCapture -L /usr/lib64"
+PERLCC_DORMANT_OPTS="${PERLCC_OPTS} -UB -Uwarnings"
+$CPANEL_PERLCC $CC_OPTIMIZATIONS $PERLCC_DORMANT_OPTS ea-podman.pl -o ea-podman
+cd -
 
 %clean
 rm -rf %{buildroot}
@@ -52,7 +68,8 @@ rm -rf %{buildroot}
 %files
 /opt/cpanel/ea-podman/
 /usr/local/cpanel/scripts/ea-podman
-%attr(0744,root,root) /opt/cpanel/ea-podman/bin/ea-podman
+%attr(0755,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman
+%attr(0744,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
 
 %changelog
 * Wed Jan 19 2022 Dan Muey <dan@cpanel.net> - 1.0-2

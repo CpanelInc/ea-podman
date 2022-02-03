@@ -10,10 +10,16 @@ use warnings;
 package ea_podman::util;
 
 use Cpanel::JSON     ();
+use Cpanel::AdminBin::Call ();
 use File::Path::Tiny ();
 
 my $container_name_suffix_regexp      = qr/\.[^.]+\.[0-9][0-9]$/;
-my $container_name_sans_suffix_regexp = qr/^[a-z][a-z-]+[a-z]/;
+my $container_name_sans_suffix_regexp = qr/^[a-z][a-z0-9-]+[a-z0-9]/;
+
+# See
+#     1. https://docs.docker.com/engine/reference/commandline/tag/#extended-description
+#     2. https://regex101.com/r/hP8bK1/1
+my $image_name_regexp = qr'^(?:(?=[^:\/]{4,253})(?!-)[a-zA-Z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-zA-Z0-9-]{1,63}(?<!-))*(?::[0-9]{1,5})?/)?((?![._-])(?:[a-z0-9._-]*)(?<![._-])(?:/(?![._-])[a-z0-9._-]*(?<![._-]))*)(?::(?![.-])[a-zA-Z0-9_.-]{1,128})?$';
 
 sub ensure_su_login {    # needed when $user is from root `su - $user` and not SSH
     return if $> == 0;
@@ -44,7 +50,6 @@ sub is_user_container_name_running {
     $container_name = quotemeta($container_name);
     `podman ps --no-trunc --format "{{.Names}}" | grep --quiet ^$container_name\$`;
     return $? == 0 ? 1 : 0;
-
 }
 
 sub is_user_container_id_running {
@@ -109,7 +114,7 @@ sub get_next_available_container_name {    # ¿TODO/YAGNI?: make less racey
         }
     }
 
-    die "Could not find an available name for “$name” () tried $max times\n";
+    die "Could not find an available name for “$name” () tried $max times\n" if !$container_name;
     return $container_name;
 }
 
@@ -142,6 +147,7 @@ sub generate_container_service {
 
 sub ensure_latest_container {
     my ( $container_name, @start_args ) = @_;
+
     validate_user_container_name($container_name);
 
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
@@ -153,6 +159,7 @@ sub ensure_latest_container {
             # do needful based on /opt/cpanel/$pkg
             my $pkg_conf = Cpanel::JSON::LoadFile("$pkg_dir/ea-podman.json");
             my @ports    = _get_new_ports( $container_name => $pkg_conf->{required_ports} );
+
             push @start_args, map { ( "-p", "$_:$_" ) } @ports;
 
             my $homedir       = ( getpwuid($>) )[7];
@@ -189,6 +196,7 @@ sub ensure_latest_container {
 
 sub _get_new_ports {
     my ( $container_name, $count ) = @_;
+
     return if !defined $count || $count < 1;
 
     my @new_ports;
@@ -196,9 +204,9 @@ sub _get_new_ports {
         @new_ports = grep { chomp; m/^[0-9]+$/ ? ($_) : () } `/scripts/cpuser_port_authority give root $count --service=$container_name 2>/dev/null`;
     }
     else {
-        my $user = scalar getpwuid($>);
+        my $get_ports_response = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'GIVE', $count, $container_name );
 
-        #  TODO ZC-9691: call admin bin to grab the $count ports needed for $user’s $container_name
+        @new_ports = grep { m/^[0-9]+$/ ? ($_) : () } split (/\n/, $get_ports_response);
     }
 
     return @new_ports;
@@ -220,12 +228,10 @@ sub validate_user_container_name {
 sub validate_start_args {
     my ($start_args) = @_;
 
-    #  We do not want --rm=true, --rmi, --replace=true:
-    #     1. these are intended to be long running not one offs
-    #     2. systemd management handles them quite nicely
+    die "No start args given\n"                             if !@{$start_args};
+    die "Last start arg does not look like an image name\n" if $start_args->[-1] !~ $image_name_regexp;
 
-    # TODO ZC-9696: barf if hardcoded run flags are in @start_args
-    # `-p`, `--publish`, `-d`, `--detach`, `-h`, `--hostname`, `--name`, `--rm`, `--rmi`, `--replace`
+    return 1;
 }
 
 ###########################
@@ -234,6 +240,12 @@ sub validate_start_args {
 
 sub install_container {
     my ( $name, @start_args ) = @_;
+
+    # The very first command has to be ensure_user which establishes this user
+    # in the /etc/subuid and /etc/subgid files, critical to podman
+
+    Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER');
+
     ensure_latest_container( get_next_available_container_name($name), @start_args );
 }
 
@@ -242,6 +254,16 @@ sub upgrade_container {    # TODO ZC-9693: ¿start_args?
     validate_user_container_name($container_name);
 
     ensure_latest_container($container_name);
+}
+
+sub remove_container_dir {
+    my ($container_name) = @_;
+
+    my $homedir = ( getpwuid($>) )[7];
+    my $container_dir = "$homedir/$container_name";
+    system ('rm', '-rf', $container_dir);
+
+    return;
 }
 
 sub uninstall_container {
@@ -260,6 +282,8 @@ sub uninstall_container {
     sysctl("reset-failed");
 
     remove_user_container($container_name);
+
+    return;
 }
 
 1;
