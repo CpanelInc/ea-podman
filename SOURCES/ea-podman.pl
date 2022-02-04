@@ -82,12 +82,12 @@ sub get_dispatch_args {
             },
         },
         upgrade => {
-            clue     => "upgrade <CONTAINER_NAME> … TODO ZC-9693 …",
+            clue     => "upgrade <CONTAINER_NAME>",
             abstract => "Upgrade a container",
             help     => "Upgrade the container named CONTAINER_NAME",
             code     => sub {
-                my ( $app, $container_name, $verify ) = @_;
-                print "TODO ZC-9693: implement in ZC-9693 after some of the library TODOs are done\n";
+                my ( $app, $container_name ) = @_;
+                ea_podman::util::upgrade_container($container_name);
             },
         },
         uninstall => {

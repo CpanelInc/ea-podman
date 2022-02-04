@@ -150,10 +150,34 @@ sub generate_container_service {
     return 1;
 }
 
-sub ensure_latest_container {
+sub _ensure_latest_container {
     my ( $container_name, @start_args ) = @_;
 
     validate_user_container_name($container_name);
+
+    my $caller_func = ( caller(1) )[3];
+    my $isupgrade   = 0;
+    my $portsfunc;
+    if ( $caller_func eq "ea_podman::util::install_container" ) {
+        $portsfunc = "_get_new_ports";
+    }
+    elsif ( $caller_func eq "ea_podman::util::upgrade_container" ) {
+        $portsfunc = "_get_current_ports";
+        $isupgrade = 1;
+    }
+    else {
+        die "_ensure_latest_container() should only be called by install_container() or upgrade_container() (i.e. not $caller_func())\n";
+    }
+
+    my $homedir       = ( getpwuid($>) )[7];
+    my $container_dir = "$homedir/$container_name";
+
+    if ($isupgrade) {
+        die "“$container_dir” does not exist\n" if -d $container_dir;
+    }
+    else {
+        mkdir $container_dir || die "Could not create “$container_dir”: $!n";
+    }
 
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
         my $pkg_dir = "/opt/cpanel/$pkg";
@@ -162,9 +186,7 @@ sub ensure_latest_container {
             die "Start args not allowed for container based packages\n" if @start_args;
 
             # do needful based on /opt/cpanel/$pkg
-            my $pkg_conf      = Cpanel::JSON::LoadFile("$pkg_dir/ea-podman.json");
-            my $homedir       = ( getpwuid($>) )[7];
-            my $container_dir = "$homedir/$container_name";
+            my $pkg_conf = Cpanel::JSON::LoadFile("$pkg_dir/ea-podman.json");
             for my $flag ( keys %{ $pkg_conf->{startup} } ) {
                 if ( $flag eq "-v" ) {
                     push @start_args, map { $flag => "$container_dir/$_" } @{ $pkg_conf->{startup}{$flag} };
@@ -185,7 +207,7 @@ sub ensure_latest_container {
             validate_start_args( \@start_args );
 
             # then add the ports if any
-            my @ports = _get_new_ports( $container_name => $pkg_conf->{required_ports} );
+            my @ports = $portsfunc->( $container_name => $pkg_conf->{required_ports} );
             push @start_args, map { ( "-p", "$_:$_" ) } @ports;
 
             system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports ) if -x "$pkg_dir/ea-podman-local-dir-setup";
@@ -209,17 +231,60 @@ sub ensure_latest_container {
             }
         }
 
+        if ($isupgrade) {
+            die "Upgrade takes no start args\n"                             if @real_start_args;
+            die "Missing non-EA4-container $container_dir/ea-podman.json\n" if !-e "$container_dir/ea-podman.json";
+            my $container_conf = Cpanel::JSON::LoadFile("$container_dir/ea-podman.json");
+            die "`start_args` is missing from $container_dir/ea-podman.json\n" if !exists $container_conf->{start_arg};
+            die "`start_args` is not a list\n"                                 if ref( $container_conf->{start_arg} ) ne "ARRAY";
+
+            $cpuser_ports    = $container_conf->{cpuser_ports};
+            @real_start_args = @{ $container_conf->{start_arg} };
+        }
+
         # ensure the user isn’t specifying something they shouldn’t
         validate_start_args( \@real_start_args );
 
+        if ( !$isupgrade ) {
+            my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, cpuser_ports => $cpuser_ports } );
+            path("$container_dir/ea-podman.json")->spew($json);
+        }
+
         # then add the ports if any
-        my @ports = _get_new_ports( $container_name => $cpuser_ports );
-        push @start_args, map { ( "-p", "$_:$_" ) } @ports;
+        my @ports = $portsfunc->( $container_name => $cpuser_ports );
+        push @real_start_args, map { ( "-p", "$_:$_" ) } @ports;
     }
 
     uninstall_container($container_name);
     start_user_container( $container_name, @start_args );
     generate_container_service($container_name);
+}
+
+sub _get_current_ports {
+    my ( $container_name, $count ) = @_;
+
+    my @curr_ports;
+    my $portassignments_json;
+    if ( $> == 0 ) {
+        $portassignments_json = scripts::cpuser_port_authority::list("root");
+    }
+    else {
+        $portassignments_json = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'LIST' );
+    }
+
+    my $portassignments_hr = Cpanel::JSON::Load($portassignments_json);
+    for my $port ( sort keys %{$portassignments_hr} ) {
+        if ( $portassignments_hr->{$port}{service} eq $container_name ) {
+            push @curr_ports, $port;
+        }
+    }
+
+    if ( length($count) ) {
+        my $how_many = @curr_ports;
+        warn "“$container_name” needs $count port(s) but only has $how_many assigned\n" if $count != $how_many;
+    }
+
+    return @curr_ports;
 }
 
 sub _get_new_ports {
@@ -324,14 +389,14 @@ sub install_container {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );
     }
 
-    ensure_latest_container( get_next_available_container_name($name), @start_args );
+    _ensure_latest_container( get_next_available_container_name($name), @start_args );
 }
 
-sub upgrade_container {    # TODO ZC-9693: ¿start_args?
+sub upgrade_container {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
 
-    ensure_latest_container($container_name);
+    _ensure_latest_container($container_name);
 }
 
 sub remove_container_dir {
