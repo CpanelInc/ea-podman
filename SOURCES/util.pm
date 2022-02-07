@@ -81,7 +81,12 @@ sub start_user_container {
     validate_user_container_name($container_name);
     validate_start_args( \@start_args );
 
-    return podman( run => "-d", "--hostname" => $container_name, "--name" => $container_name, @start_args );
+use Data::Dumper;
+my $ar = [ run => "-d", "--hostname" => $container_name, "--name" => $container_name, @start_args ];
+
+    my $output = podman( run => "-d", "--hostname" => $container_name, "--name" => $container_name, @start_args );
+
+    return $output;
 }
 
 sub get_container_service_name {
@@ -159,10 +164,10 @@ sub _ensure_latest_container {
     my $isupgrade   = 0;
     my $portsfunc;
     if ( $caller_func eq "ea_podman::util::install_container" ) {
-        $portsfunc = "_get_new_ports";
+        $portsfunc = \&_get_new_ports
     }
     elsif ( $caller_func eq "ea_podman::util::upgrade_container" ) {
-        $portsfunc = "_get_current_ports";
+        $portsfunc = \&_get_current_ports;
         $isupgrade = 1;
     }
     else {
@@ -208,7 +213,10 @@ sub _ensure_latest_container {
 
             # then add the ports if any
             my @ports = $portsfunc->( $container_name => $pkg_conf->{required_ports} );
+            # note the docker container name HAS to be the last argument
+            my $docker_name = pop @start_args;
             push @start_args, map { ( "-p", "$_:$_" ) } @ports;
+            push @start_args, $docker_name;
 
             system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports ) if -x "$pkg_dir/ea-podman-local-dir-setup";
         }
@@ -324,7 +332,6 @@ sub validate_user_container_name {
 # 3 ➜ these are intended to be long running not one offs
 #     `ea-podman bash bash <CONTAINER_NAME> [CMD]` can be used to get a shell on a running container
 my %invalid_start_args = (
-    "-p"            => 1,
     "--publish"     => 1,
     "-d"            => 1,
     "--detach"      => 1,
@@ -405,6 +412,14 @@ sub remove_container_dir {
     my $homedir       = ( getpwuid($>) )[7];
     my $container_dir = "$homedir/$container_name";
     system( 'rm', '-rf', $container_dir );
+
+    return;
+}
+
+sub remove_port_authority_ports {
+    my ($container_name) = @_;
+
+    Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'TAKE', $container_name );
 
     return;
 }
