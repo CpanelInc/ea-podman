@@ -84,7 +84,7 @@ sub start_user_container {
     # start args should already have been validated and ports added
     # So we do not want this here: validate_start_args( \@start_args );
 
-    my $output = podman( run => "-d", "--hostname" => $container_name, "--name" => $container_name, @start_args );
+    my $output = podman( 'create', "--hostname" => $container_name, "--name" => $container_name, @start_args );
 
     return $output;
 }
@@ -267,6 +267,10 @@ sub _ensure_latest_container {
     uninstall_container($container_name);
     start_user_container( $container_name, @start_args );
     generate_container_service($container_name);
+
+    my $service_name = get_container_service_name($container_name);
+    sysctl( start => $service_name );
+
 }
 
 sub _get_current_ports {
