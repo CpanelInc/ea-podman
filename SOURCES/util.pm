@@ -412,12 +412,14 @@ sub upgrade_container {
     _ensure_latest_container($container_name);
 }
 
-sub remove_container_dir {
+sub move_container_dir {
     my ($container_name) = @_;
 
     my $homedir       = ( getpwuid($>) )[7];
     my $container_dir = "$homedir/$container_name";
-    system( 'rm', '-rf', $container_dir );
+
+    print "Moving “~/$container_name” to “~/$container_name.bak”\n";
+    path($container_dir)->move("$container_dir.bak");
 
     return;
 }

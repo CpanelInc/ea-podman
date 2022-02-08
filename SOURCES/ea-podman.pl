@@ -102,7 +102,7 @@ sub get_dispatch_args {
                 }
 
                 ea_podman::util::uninstall_container($container_name);
-                ea_podman::util::remove_container_dir($container_name);
+                ea_podman::util::move_container_dir($container_name);
                 ea_podman::util::remove_port_authority_ports($container_name);
             },
         },

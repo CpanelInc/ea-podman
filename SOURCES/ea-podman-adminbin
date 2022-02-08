@@ -44,10 +44,15 @@ sub GIVE {
     my ( $self, $num_ports, $container_name ) = @_;
     my $cpuser = $self->_debug_and_user(0);
 
+    my $portassignments_json    = $self->LIST();
+    my $portassignments_hr      = Cpanel::JSON::Load($portassignments_json);
+    my $num_ports_already_owned = scalar( keys $portassignments_hr );
+    my $total_ports             = $num_ports + $num_ports_already_owned;
+
     # Not sure how to handle locale maketext from a package
-    _die_with_message("Must provide a number of ports")    if !defined $num_ports;
-    _die_with_message("Cannot create more than 100 ports") if $num_ports > 100;
-    _die_with_message("Must provide a container name")     if !$container_name;
+    _die_with_message("Must provide a number of ports")         if !defined $num_ports;
+    _die_with_message("Cannot be assigned more than 100 ports") if $total_ports > 100;
+    _die_with_message("Must provide a container name")          if !$container_name;
 
     return capture_merged { system( '/scripts/cpuser_port_authority', 'give', $cpuser, $num_ports, "--service=$container_name" ); };
 }
@@ -58,11 +63,11 @@ sub TAKE {
 
     my $raw_json = capture_merged { system( '/scripts/cpuser_port_authority', 'list', $cpuser ); };
 
-    my $hr = Cpanel::JSON::Load ($raw_json);
+    my $hr = Cpanel::JSON::Load($raw_json);
 
     my @ports;
-    for my $port (keys %{ $hr }) {
-        push (@ports, $port) if ($hr->{$port}->{service} eq $container_name)
+    for my $port ( keys %{$hr} ) {
+        push( @ports, $port ) if ( $hr->{$port}->{service} eq $container_name );
     }
 
     return capture_merged { system( '/scripts/cpuser_port_authority', 'take', $cpuser, @ports ); };
