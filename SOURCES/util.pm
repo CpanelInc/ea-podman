@@ -12,6 +12,7 @@ package ea_podman::util;
 use Cpanel::JSON           ();
 use Cpanel::AdminBin::Call ();
 use File::Path::Tiny       ();
+use Path::Tiny 'path';
 
 my $container_name_suffix_regexp      = qr/\.[^.]+\.[0-9][0-9]$/;
 my $container_name_sans_suffix_regexp = qr/^[a-z][a-z0-9-]+[a-z0-9]/;
@@ -79,10 +80,9 @@ sub stop_user_container {
 sub start_user_container {
     my ( $container_name, @start_args ) = @_;
     validate_user_container_name($container_name);
-    validate_start_args( \@start_args );
 
-use Data::Dumper;
-my $ar = [ run => "-d", "--hostname" => $container_name, "--name" => $container_name, @start_args ];
+    # start args should already have been validated and ports added
+    # So we do not want this here: validate_start_args( \@start_args );
 
     my $output = podman( run => "-d", "--hostname" => $container_name, "--name" => $container_name, @start_args );
 
@@ -164,7 +164,7 @@ sub _ensure_latest_container {
     my $isupgrade   = 0;
     my $portsfunc;
     if ( $caller_func eq "ea_podman::util::install_container" ) {
-        $portsfunc = \&_get_new_ports
+        $portsfunc = \&_get_new_ports;
     }
     elsif ( $caller_func eq "ea_podman::util::upgrade_container" ) {
         $portsfunc = \&_get_current_ports;
@@ -213,6 +213,7 @@ sub _ensure_latest_container {
 
             # then add the ports if any
             my @ports = $portsfunc->( $container_name => $pkg_conf->{required_ports} );
+
             # note the docker container name HAS to be the last argument
             my $docker_name = pop @start_args;
             push @start_args, map { ( "-p", "$_:$_" ) } @ports;
@@ -332,6 +333,7 @@ sub validate_user_container_name {
 # 3 ➜ these are intended to be long running not one offs
 #     `ea-podman bash bash <CONTAINER_NAME> [CMD]` can be used to get a shell on a running container
 my %invalid_start_args = (
+    "-p"            => 1,
     "--publish"     => 1,
     "-d"            => 1,
     "--detach"      => 1,
