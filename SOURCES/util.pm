@@ -353,7 +353,7 @@ sub validate_user_container_name {
 # 2 ➜ these are intended to be long running not one offs
 #     systemd management handles them quite nicely
 # 3 ➜ these are intended to be long running not one offs
-#     `ea-podman bash bash <CONTAINER_NAME> [CMD]` can be used to get a shell on a running container
+#     `ea-podman bash <CONTAINER_NAME> [CMD]` can be used to get a shell on a running container
 my %invalid_start_args = (
     "-p"            => 1,
     "--publish"     => 1,
