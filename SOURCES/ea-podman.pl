@@ -187,7 +187,7 @@ sub get_dispatch_args {
 #### sub commands ##
 ####################
 
-sub subids {    # TODO ZC-9692: support something like --ensure/--fix/--setup/--assign to do ensure_user()
+sub subids {
     my ($app) = @_;
 
     ea_podman::subids::assert_has_user_namespaces(1);
