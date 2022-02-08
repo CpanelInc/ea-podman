@@ -12,6 +12,7 @@ package ea_podman::util;
 use Cpanel::JSON           ();
 use Cpanel::AdminBin::Call ();
 use File::Path::Tiny       ();
+use Path::Tiny 'path';
 
 my $container_name_suffix_regexp      = qr/\.[^.]+\.[0-9][0-9]$/;
 my $container_name_sans_suffix_regexp = qr/^[a-z][a-z0-9-]+[a-z0-9]/;
