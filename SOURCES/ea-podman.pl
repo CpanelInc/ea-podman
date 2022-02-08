@@ -196,7 +196,7 @@ sub subids {    # TODO ZC-9692: support something like --ensure/--fix/--setup/--
     my $subgid_lu = ea_podman::subids::get_subgids();
 
     if ( $> == 0 ) {
-        for my $user ( Cpanel::Config::Users::getcpusers() ) {
+        for my $user ( "root", Cpanel::Config::Users::getcpusers() ) {
             _check_output_user( $user, $subuid_lu, $subgid_lu );
         }
     }
