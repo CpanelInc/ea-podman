@@ -46,7 +46,7 @@ sub GIVE {
 
     my $portassignments_json    = $self->LIST();
     my $portassignments_hr      = Cpanel::JSON::Load($portassignments_json);
-    my $num_ports_already_owned = scalar( keys $portassignments_hr );
+    my $num_ports_already_owned = scalar( keys %{ $portassignments_hr } );
     my $total_ports             = $num_ports + $num_ports_already_owned;
 
     # Not sure how to handle locale maketext from a package
