@@ -116,7 +116,7 @@ If given more startup args on the CLI it should error out.
 ```
    * `-v` the local path is relative to `<CONTAINERS-HOST-PATH>`
       * e.g. `logs:/usr/local/tomcat/logs` will end up being `-v <CONTAINERS-HOST-PATH>/logs:/usr/local/tomcat/logs`
-   * Note: ports and other typical start up flags are done for the user. Flags that should be set here (in long or short form):
+   * Note: ports and other typical start up flags are done for the user. Flags that should not be set here (in long or short form):
       1. `-p`, `--publish`
       2. `-d`, `--detach`
       3. `-h`, `--hostname`
