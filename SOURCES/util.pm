@@ -270,7 +270,6 @@ sub _ensure_latest_container {
 
     my $service_name = get_container_service_name($container_name);
     sysctl( start => $service_name );
-
 }
 
 sub _get_current_ports {
