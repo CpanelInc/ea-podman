@@ -178,7 +178,7 @@ sub _ensure_latest_container {
     my $container_dir = "$homedir/$container_name";
 
     if ($isupgrade) {
-        die "“$container_dir” does not exist\n" if -d $container_dir;
+        die "“$container_dir” does not exist\n" if !-d $container_dir;
     }
     else {
         mkdir $container_dir || die "Could not create “$container_dir”: $!n";
