@@ -139,7 +139,7 @@ ZC-9686: Perhaps the tooling could contain boiler plate scripts that packages ca
 
 ### Arbitrary Images
 
-Should have start up options specified in the CLI. Except the ones ea-podman manges.
+Should have start up options specified in the CLI. Except the ones ea-podman manages.
 
 `--cpuser-ports=N` can be used to specify the number of ports it needs.
 
