@@ -181,7 +181,7 @@ sub _ensure_latest_container {
         die "“$container_dir” does not exist\n" if !-d $container_dir;
     }
     else {
-        mkdir $container_dir || die "Could not create “$container_dir”: $!n";
+        mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
     }
 
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
