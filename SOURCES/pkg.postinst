@@ -1,0 +1,23 @@
+#!/bin/bash
+
+set -x
+
+cd /opt/cpanel/ea-podman/bin
+# Prep for calling perlcc
+CPANEL_PERLCC=/usr/local/cpanel/3rdparty/perl/532/bin/perlcc
+CC_OPTIMIZATIONS=--Wc='-Os -s'
+PERLCC_OPTS="-v4 -UO -UB::Stash -UTie::Hash::NamedCapture -L /usr/lib64"
+PERLCC_DORMANT_OPTS="${PERLCC_OPTS} -UB -Uwarnings"
+$CPANEL_PERLCC $CC_OPTIMIZATIONS $PERLCC_DORMANT_OPTS ea-podman.pl -o ea-podman
+cd -
+
+if [ -f "/usr/local/cpanel/scripts/ea-podman" ]; then
+    echo ""
+else
+    ln -s /opt/cpanel/ea-podman/bin/ea-podman /usr/local/cpanel/scripts/ea-podman
+fi
+
+if [ -f "/usr/bin/apt" ]; then
+    chmod 0700 /usr/local/cpanel/bin/admin/Cpanel/ea_podman
+fi
+

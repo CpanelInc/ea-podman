@@ -23,9 +23,13 @@ Source2:        util.pm
 Source24:       ea-podman-adminbin
 Source25:       ea-podman-adminbin.conf
 
+Source50:       pkg.postinst
+
+%if 0%{?rhel} >= 8
 Requires:       gcc-toolset-11
 Requires:       libnsl2
 Requires:       libnsl2-devel
+%endif
 
 %description
 Ensures container based EA4 packages have podman available as well as any common helpers.
@@ -53,14 +57,7 @@ install -p %{SOURCE25} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman.
 
 %post
 
-cd /opt/cpanel/ea-podman/bin
-# Prep for calling perlcc
-CPANEL_PERLCC=/usr/local/cpanel/3rdparty/perl/532/bin/perlcc
-CC_OPTIMIZATIONS=--Wc='-Os -s'
-PERLCC_OPTS="-v4 -UO -UB::Stash -UTie::Hash::NamedCapture -L /usr/lib64"
-PERLCC_DORMANT_OPTS="${PERLCC_OPTS} -UB -Uwarnings"
-$CPANEL_PERLCC $CC_OPTIMIZATIONS $PERLCC_DORMANT_OPTS ea-podman.pl -o ea-podman
-cd -
+source %{SOURCE50}
 
 %clean
 rm -rf %{buildroot}

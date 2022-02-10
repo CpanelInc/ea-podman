@@ -186,10 +186,8 @@ sub _ensure_latest_container {
 
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
         my $pkg_dir = "/opt/cpanel/$pkg";
-
         if ( -f "$pkg_dir/ea-podman.json" ) {
             die "Start args not allowed for container based packages\n" if @start_args;
-
             # do needful based on /opt/cpanel/$pkg
             my $pkg_conf = Cpanel::JSON::LoadFile("$pkg_dir/ea-podman.json");
             for my $flag ( keys %{ $pkg_conf->{startup} } ) {
