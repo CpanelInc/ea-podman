@@ -211,11 +211,16 @@ sub _ensure_latest_container {
             validate_start_args( \@start_args );
 
             # then add the ports if any
-            my @ports = $portsfunc->( $container_name => $pkg_conf->{required_ports} );
+            my @container_ports = $pkg_conf->{ports} && ref $pkg_conf->{ports} eq "ARRAY" ? @{ $pkg_conf->{ports} } : ();
+            my @ports           = $portsfunc->( $container_name => scalar(@container_ports) );
 
             # note the docker container name HAS to be the last argument
             my $docker_name = pop @start_args;
-            push @start_args, map { ( "-p", "$_:$_" ) } @ports;
+
+            for my $idx ( 0 .. $#ports ) {
+                my $container_port = $container_ports[$idx] || $ports[$idx];
+                push @start_args, map { ( "-p", "$ports[$idx]:$container_port" ) } @ports;
+            }
             push @start_args, $docker_name;
 
             system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports ) if -x "$pkg_dir/ea-podman-local-dir-setup";
