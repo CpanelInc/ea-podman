@@ -228,16 +228,16 @@ sub _ensure_latest_container {
     }
     else {
         my @real_start_args;
-        my $cpuser_ports = 0;
+        my @cpuser_ports;
         for my $item (@start_args) {
-            if ( $item =~ m/^--cpuser-ports(?:=(.+))?/ ) {
+            if ( $item =~ m/^--cpuser-port(?:=(.+))?/ ) {
                 my $val = $1;
-                die "--cpuser-ports given more than once\n" if $cpuser_ports;
+                die "--cpuser-port is not valid for upgrade\n" if $isupgrade;
 
-                if ( !length($val) || $1 !~ m/^[1-9][0-9]?$/ ) {
-                    die "--cpuser-ports requires the number of ports the container needs (e.g. --cpuser-ports=2)\n";
+                if ( !length($val) || $val !~ m/^(?:0|[1-9][0-9]+?)$/ ) {
+                    die "--cpuser-port requires a port the container uses (or 0 to be the same as the corresponding host port). e.g. --cpuser-port=8080\n";
                 }
-                $cpuser_ports = $val;
+                push @cpuser_ports, $val;
             }
             else {
                 push @real_start_args, $item;
@@ -251,21 +251,24 @@ sub _ensure_latest_container {
             die "`start_args` is missing from $container_dir/ea-podman.json\n" if !exists $container_conf->{start_args};
             die "`start_args` is not a list\n"                                 if ref( $container_conf->{start_args} ) ne "ARRAY";
 
-            $cpuser_ports    = $container_conf->{cpuser_ports};
-            @real_start_args = @{ $container_conf->{start_args} };
+            @cpuser_ports    = @{ $container_conf->{ports} || [] };
+            @real_start_args = @{ $container_conf->{start_arg} };
         }
 
         # ensure the user isn’t specifying something they shouldn’t
         validate_start_args( \@real_start_args );
 
         if ( !$isupgrade ) {
-            my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, cpuser_ports => $cpuser_ports } );
+            my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
             path("$container_dir/ea-podman.json")->spew($json);
         }
 
         # then add the ports if any
         my @ports = $portsfunc->( $container_name => $cpuser_ports );
-        push @real_start_args, map { ( "-p", "$_:$_" ) } @ports;
+        for my $idx ( 0 .. $#ports ) {
+            my $container_port = $container_ports[$idx] || $ports[$idx];
+            push @real_start_args, map { ( "-p", "$ports[$idx]:$container_port" ) } @ports;
+        }
     }
 
     uninstall_container($container_name);
