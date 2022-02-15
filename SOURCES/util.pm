@@ -231,7 +231,7 @@ sub _ensure_latest_container {
         for my $item (@start_args) {
             if ( $item =~ m/^--cpuser-port(?:=(.+))?/ ) {
                 my $val = $1;
-                die "--cpuser-port is not valid for upgrade\n" if $isupgrade;
+                die "--cpuser-port is not valid for upgrade\n" if $isupgrade; # should never get here but juuuust in case
 
                 if ( !length($val) || $val !~ m/^(?:0|[1-9][0-9]+?)$/ ) {
                     die "--cpuser-port requires a port the container uses (or 0 to be the same as the corresponding host port). e.g. --cpuser-port=8080\n";
@@ -251,7 +251,7 @@ sub _ensure_latest_container {
             die "`start_args` is not a list\n"                                 if ref( $container_conf->{start_args} ) ne "ARRAY";
 
             @cpuser_ports    = @{ $container_conf->{ports} || [] };
-            @real_start_args = @{ $container_conf->{start_arg} };
+            @real_start_args = @{ $container_conf->{start_args} };
         }
 
         # ensure the user isn’t specifying something they shouldn’t
@@ -286,7 +286,7 @@ sub _get_current_ports {
     my @curr_ports;
     my $portassignments_json;
     if ( $> == 0 ) {
-        $portassignments_json = scripts::cpuser_port_authority::list("root");
+        $portassignments_json = `/scripts/cpuser_port_authority list root`;
     }
     else {
         $portassignments_json = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'LIST' );
