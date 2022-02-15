@@ -188,6 +188,7 @@ sub _ensure_latest_container {
         my $pkg_dir = "/opt/cpanel/$pkg";
         if ( -f "$pkg_dir/ea-podman.json" ) {
             die "Start args not allowed for container based packages\n" if @start_args;
+
             # do needful based on /opt/cpanel/$pkg
             my $pkg_conf = Cpanel::JSON::LoadFile("$pkg_dir/ea-podman.json");
             for my $flag ( keys %{ $pkg_conf->{startup} } ) {
@@ -242,11 +243,11 @@ sub _ensure_latest_container {
             die "Upgrade takes no start args\n"                             if @real_start_args;
             die "Missing non-EA4-container $container_dir/ea-podman.json\n" if !-e "$container_dir/ea-podman.json";
             my $container_conf = Cpanel::JSON::LoadFile("$container_dir/ea-podman.json");
-            die "`start_args` is missing from $container_dir/ea-podman.json\n" if !exists $container_conf->{start_arg};
-            die "`start_args` is not a list\n"                                 if ref( $container_conf->{start_arg} ) ne "ARRAY";
+            die "`start_args` is missing from $container_dir/ea-podman.json\n" if !exists $container_conf->{start_args};
+            die "`start_args` is not a list\n"                                 if ref( $container_conf->{start_args} ) ne "ARRAY";
 
             $cpuser_ports    = $container_conf->{cpuser_ports};
-            @real_start_args = @{ $container_conf->{start_arg} };
+            @real_start_args = @{ $container_conf->{start_args} };
         }
 
         # ensure the user isn’t specifying something they shouldn’t
