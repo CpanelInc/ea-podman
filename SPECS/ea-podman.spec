@@ -57,7 +57,7 @@ install -p %{SOURCE25} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman.
 
 %post
 
-source %{SOURCE50}
+%include %{SOURCE50}
 
 %clean
 rm -rf %{buildroot}
