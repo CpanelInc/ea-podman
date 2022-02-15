@@ -219,10 +219,9 @@ sub _ensure_latest_container {
 
             for my $idx ( 0 .. $#ports ) {
                 my $container_port = $container_ports[$idx] || $ports[$idx];
-                push @start_args, map { ( "-p", "$ports[$idx]:$container_port" ) } @ports;
+                push @start_args, "-p", "$ports[$idx]:$container_port";
             }
             push @start_args, $docker_name;
-
             system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports ) if -x "$pkg_dir/ea-podman-local-dir-setup";
         }
     }
@@ -264,11 +263,13 @@ sub _ensure_latest_container {
         }
 
         # then add the ports if any
-        my @ports = $portsfunc->( $container_name => $cpuser_ports );
+        my @ports = $portsfunc->( $container_name => scalar(@cpuser_ports) );
         for my $idx ( 0 .. $#ports ) {
-            my $container_port = $container_ports[$idx] || $ports[$idx];
-            push @real_start_args, map { ( "-p", "$ports[$idx]:$container_port" ) } @ports;
+            my $container_port = $cpuser_ports[$idx] || $ports[$idx];
+            push @real_start_args, "-p", "$ports[$idx]:$container_port";
         }
+
+        @start_args = @real_start_args;
     }
 
     uninstall_container($container_name);
