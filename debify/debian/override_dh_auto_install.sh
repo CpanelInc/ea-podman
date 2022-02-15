@@ -27,6 +27,10 @@ cp $SOURCE2  .
 cp $SOURCE24 ./ea_podman
 cp $SOURCE25 ./ea_podman.conf
 
+cat <<EOF > ./registered-containers.json
+{}
+EOF
+
 echo "HERE"
 ls -ld ./*
 cat -n debian/ea-podman.install

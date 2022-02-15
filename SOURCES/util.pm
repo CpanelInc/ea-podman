@@ -11,15 +11,13 @@ package ea_podman::util;
 
 use Cpanel::JSON           ();
 use Cpanel::AdminBin::Call ();
-use Cpanel::AccessIds      ();
 use File::Path::Tiny       ();
-use Cpanel::Debug          ();
 
 use Path::Tiny 'path';
 
 my $container_name_suffix_regexp      = qr/\.[^.]+\.[0-9][0-9]$/;
 my $container_name_sans_suffix_regexp = qr/^[a-z][a-z0-9-]+[a-z0-9]/;
-my $known_containers_file             = '/opt/cpanel/ea-podman/known_containers.json';
+my $known_containers_file             = '/opt/cpanel/ea-podman/registered-containers.json';
 
 # See
 #     1. https://docs.docker.com/engine/reference/commandline/tag/#extended-description
@@ -280,7 +278,7 @@ sub _ensure_latest_container {
     uninstall_container($container_name) if $isupgrade;    # avoid spurious warnings on install
     start_user_container( $container_name, @start_args );
     generate_container_service($container_name);
-    elevate_if_needed_known_containers_add($container_name);
+    elevate_if_needed_register_container($container_name);
 
     my $service_name = get_container_service_name($container_name);
     sysctl( start => $service_name );
@@ -472,17 +470,22 @@ sub uninstall_container {
 
 sub load_known_containers {
     my $containers_hr = {};
-    $containers_hr = Cpanel::JSON::LoadFile($known_containers_file) if (-e $known_containers_file);
+    $containers_hr = Cpanel::JSON::LoadFile($known_containers_file) if ( -e $known_containers_file );
 
     return $containers_hr;
 }
 
-sub known_containers_add {
-    my ($container_name, $user) = @_;
+sub register_container {
+    my ( $container_name, $user ) = @_;
 
-    my $containers_hr = load_known_containers ();
+    my $containers_hr = load_known_containers();
 
-    my $pkg = get_pkg_from_container_name ($container_name);
+    my $pkg = get_pkg_from_container_name($container_name);
+
+    if ( exists $containers_hr->{$container_name} ) {
+        warn "$container_name is already registered";
+        return;
+    }
 
     $containers_hr->{$container_name} = {
         container_name => $container_name,
@@ -490,19 +493,24 @@ sub known_containers_add {
         pkg            => $pkg,
     };
 
-    Cpanel::JSON::DumpFile ($known_containers_file, $containers_hr) or die "Cannot open known containers file";
+    Cpanel::JSON::DumpFile( $known_containers_file, $containers_hr ) or die "Cannot open known containers file";
 
     return;
 }
 
-sub known_containers_remove {
+sub deregister_container {
     my ($container_name) = @_;
 
-    my $containers_hr = load_known_containers ();
+    my $containers_hr = load_known_containers();
 
-    delete $containers_hr->{$container_name} if (exists $containers_hr->{$container_name});
+    if ( !exists $containers_hr->{$container_name} ) {
+        warn "$container_name is not registered";
+        return;
+    }
 
-    Cpanel::JSON::DumpFile ($known_containers_file, $containers_hr) or die "Cannot open known containers file";
+    delete $containers_hr->{$container_name} if ( exists $containers_hr->{$container_name} );
+
+    Cpanel::JSON::DumpFile( $known_containers_file, $containers_hr ) or die "Cannot open known containers file";
 
     return;
 }
@@ -512,10 +520,10 @@ sub remove_container_by_name {
 
     print "Removing $container_name\n";
 
-    ea_podman::util::uninstall_container($container_name);
-    ea_podman::util::elevate_if_needed_known_containers_remove($container_name);
-    ea_podman::util::move_container_dir($container_name);
     ea_podman::util::remove_port_authority_ports($container_name);
+    ea_podman::util::uninstall_container($container_name);
+    ea_podman::util::elevate_if_needed_deregister_container($container_name);
+    ea_podman::util::move_container_dir($container_name);
 
     return;
 }
@@ -527,46 +535,46 @@ sub remove_containers_for_a_user {
     my $user;
     foreach my $container (@containers) {
         my $c_user = $container->{user};
-        if (!$user) {
+        if ( !$user ) {
             $user = $c_user;
             next;
         }
 
-        die "remove_users_containers: Containers listed must be for all the same user" if ($c_user ne $user);
+        die "remove_users_containers: Containers listed must be for all the same user" if ( $c_user ne $user );
     }
 
     foreach my $container (@containers) {
-        remove_container_by_name ($container->{container_name});
+        remove_container_by_name( $container->{container_name} );
     }
 
     return;
 }
 
-sub elevate_if_needed_known_containers_add {
+sub elevate_if_needed_register_container {
     my ($container_name) = @_;
 
     if ( $> == 0 ) {
         local $@;
-        eval { known_containers_add ($container_name, "root"); };
+        eval { register_container( $container_name, "root" ); };
 
         die "Unable to add to known containers\n" if $@;
     }
     else {
-        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ADD_TO_KNOWN', $container_name );
+        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REGISTER', $container_name );
     }
 }
 
-sub elevate_if_needed_known_containers_remove {
+sub elevate_if_needed_deregister_container {
     my ($container_name) = @_;
 
     if ( $> == 0 ) {
         local $@;
-        eval { known_containers_remove ($container_name); };
+        eval { deregister_container($container_name); };
 
         die "Unable to remove from known containers\n" if $@;
     }
     else {
-        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REMOVE_FROM_KNOWN', $container_name );
+        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'DEREGISTER', $container_name );
     }
 }
 

@@ -38,6 +38,7 @@ BEGIN {
 
 use Cpanel::Config::Users ();
 use Cpanel::JSON          ();
+use Cpanel::AccessIds     ();
 
 use Term::ReadLine   ();
 use App::CmdDispatch ();
@@ -53,10 +54,10 @@ sub run {
 sub get_dispatch_args {
     my $hint_blurb = "This tool supports the following commands (i.e. $0 {command} …):";
     my %opts       = (
-        'default_commands' => 'help',                                                                                                                                                                   # shell is probably not useful here and potentially confusing
+        'default_commands' => 'help',                                                                                                                                                                                               # shell is probably not useful here and potentially confusing
         'help:pre_hint'    => $hint_blurb,
         'help:pre_help'    => "Various EA4 user-container based service/app/etc management\n\n$hint_blurb",
-        alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop", sid => "subids", si => "subids" },
+        alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop", sid => "subids", si => "subids", registered => "containers" },
     );
 
     if ( $> == 0 ) {
@@ -107,7 +108,7 @@ sub get_dispatch_args {
         list => {
             clue     => "list",
             abstract => "Show container information",
-            help     => "Dumps the information in human readable JSON",
+            help     => "Dumps the information about user's running containers in human readable JSON",
             code     => sub {
                 my ($app) = @_;
                 print Cpanel::JSON::pretty_canonical_dump( ea_podman::util::get_containers() );
@@ -177,77 +178,79 @@ sub get_dispatch_args {
             },
         },
         containers => {
-            clue     => "containers",
-            abstract => "List all or a users ea-podman registered containers",
+            clue     => "containers [--all]",
+            alias    => "registered",
+            abstract => "List containers",
             help     => "List all or a users ea-podman registered containers",
             code     => sub {
-                my $containers_hr = ea_podman::util::load_known_containers ();
+                my ( $app, $all ) = @_;
+
+                $all = "" if !$all;
+
+                my $containers_hr = ea_podman::util::load_known_containers();
                 my @output;
 
                 my $user = scalar getpwuid($>);
-                
-                foreach my $container (values %{ $containers_hr }) {
-                    next if ($user ne "root" && $container->{user} ne $user);
 
-                    my $str = sprintf ("%-20.20s %-20.20s %s",
+                foreach my $container ( values %{$containers_hr} ) {
+                    next if ( ( $container->{user} ne $user ) && ( $all ne "--all" ) );
+
+                    my $str = sprintf(
+                        "%-20.20s %-20.20s %s",
                         $container->{user},
                         $container->{pkg},
-                        $container->{container_name});
+                        $container->{container_name}
+                    );
 
-                    push (@output, $str);
+                    push( @output, $str );
                 }
 
-                if (@output == 0) {
+                if ( @output == 0 ) {
                     print "There are no containers\n";
                     exit 0;
                 }
 
                 printf "%-20.20s %-20.20s %s\n",
-                    'User',
-                    'Package',
-                    'Container Name';
-            
-                foreach my $str (sort @output) {
+                  'User',
+                  'Package',
+                  'Container Name';
+
+                foreach my $str ( sort @output ) {
                     print $str . "\n";
                 }
             },
         },
         remove_containers => {
-            clue     => "remove_containers [ea-tomcat100 | all]",
-            abstract => "Remove containers for a user (if you are not root) or for all users if you are root, for a package or all",
+            clue     => "remove_containers [<PKG|NON-PKG-NAME> --all]",
+            abstract => "Remove containers",
             help     => "Remove containers for a user (if you are not root) or for all users if you are root, for a package or all",
             code     => sub {
-                my ($app, $pkg) = @_;
+                my ( $app, $pkg ) = @_;
 
-                print "Please provide a package name or the word all\n" if (!$pkg);
+                print "Please provide a package name or the word all\n" if ( !$pkg );
 
-                my $user = scalar getpwuid($>);
-                my $containers_hr = ea_podman::util::load_known_containers ();
+                my $user          = scalar getpwuid($>);
+                my $containers_hr = ea_podman::util::load_known_containers();
 
-                my @containers = values %{ $containers_hr };
-                @containers = grep { $_->{user} eq $user } @containers if ($user ne "root");
-                @containers = grep { $_->{pkg} eq $pkg } @containers if ($pkg ne "all");
+                my @containers = values %{$containers_hr};
+                @containers = grep { $_->{user} eq $user } @containers if ( $user ne "root" );
+                @containers = grep { $_->{pkg} eq $pkg } @containers   if ( $pkg ne "--all" );
                 @containers = sort { $a->{user} cmp $b->{user} } @containers;
 
-                if (@containers == 0) {
+                if ( @containers == 0 ) {
                     print "There are no containers\n";
                     exit 0;
                 }
 
-                if ($user eq "root") {
+                if ( $user eq "root" ) {
                     my %user_breakdown;
 
                     foreach my $container (@containers) {
                         my $c_user = $container->{user};
-                        if (!exists $user_breakdown{$c_user}) {
-                            $user_breakdown{$c_user} = [ $container ];
-                        }
-                        else {
-                            push (@{ $user_breakdown{$c_user} }, $container);
-                        }
+                        push( @{ $user_breakdown{$c_user} }, $container );
                     }
 
-                    foreach my $c_user (keys %user_breakdown) {
+                    foreach my $c_user ( keys %user_breakdown ) {
                         Cpanel::AccessIds::do_as_user_with_exception(
                             $c_user,
                             sub {
@@ -255,15 +258,15 @@ sub get_dispatch_args {
                                 local $ENV{HOME} = $homedir;
                                 local $ENV{USER} = $c_user;
 
-                                chdir ($homedir);
+                                chdir($homedir);
 
-                                ea_podman::util::remove_containers_for_a_user (@{ $user_breakdown{$c_user} });
+                                ea_podman::util::remove_containers_for_a_user( @{ $user_breakdown{$c_user} } );
                             }
                         );
                     }
                 }
                 else {
-                    ea_podman::util::remove_containers_for_a_user (@containers);
+                    ea_podman::util::remove_containers_for_a_user(@containers);
                 }
             },
         },
