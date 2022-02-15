@@ -433,8 +433,13 @@ sub move_container_dir {
 
 sub remove_port_authority_ports {
     my ($container_name) = @_;
-
-    Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'TAKE', $container_name );
+    if ( $> == 0 ) {
+        my @container_ports = _get_current_ports($container_name);
+        system( "/scripts/cpuser_port_authority", take => root => @container_ports );
+    }
+    else {
+        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'TAKE', $container_name );
+    }
 
     return;
 }
