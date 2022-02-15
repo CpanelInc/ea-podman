@@ -24,6 +24,7 @@ Source24:       ea-podman-adminbin
 Source25:       ea-podman-adminbin.conf
 
 Source50:       pkg.postinst
+Source51:       pkg.prerm
 
 %if 0%{?rhel} >= 8
 Requires:       gcc-toolset-11
@@ -58,6 +59,10 @@ install -p %{SOURCE25} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman.
 %post
 
 %include %{SOURCE50}
+
+%preun
+
+%include %{SOURCE51}
 
 %clean
 rm -rf %{buildroot}

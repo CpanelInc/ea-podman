@@ -30,7 +30,7 @@ if ($@) {                                                     # … if its not 
 __PACKAGE__->run( 'alarm' => 120 ) unless caller;
 
 sub _actions {
-    return qw(LIST GIVE TAKE ENSURE_USER);
+    return qw(LIST GIVE TAKE ENSURE_USER ADD_TO_KNOWN REMOVE_FROM_KNOWN);
 }
 
 sub LIST {
@@ -83,6 +83,38 @@ sub ENSURE_USER {
     if ($@) {
         _die_with_message("Unable to ensure the user has subuids and subgids");
     }
+
+    return 1;
+}
+
+sub ADD_TO_KNOWN {
+    my ( $self, $container_name ) = @_;
+    my $cpuser = $self->_debug_and_user(0);
+
+    # Not sure how to handle locale maketext from a package
+    _die_with_message("Must provide a container name")   if !defined $container_name;
+
+    eval {
+        ea_podman::util::known_containers_add ($container_name, $cpuser);
+    };
+
+    _die_with_message ("Unable to add to known_containers: $@") if ($@);
+
+    return 1;
+}
+
+sub REMOVE_FROM_KNOWN {
+    my ( $self, $container_name ) = @_;
+    my $cpuser = $self->_debug_and_user(0);
+
+    # Not sure how to handle locale maketext from a package
+    _die_with_message("Must provide a container name")   if !defined $container_name;
+
+    eval {
+        ea_podman::util::known_containers_remove ($container_name);
+    };
+
+    _die_with_message ("Unable to remove from known_containers: $@") if ($@);
 
     return 1;
 }
@@ -159,6 +191,14 @@ This function removes all ports assigned to this user and container_name.
 =head2 ENSURE_USER
 
 This function updates podman's subuids and subgids to add this user.
+
+=head2 ADD_TO_KNOWN
+
+This function adds to podman's known containers list.
+
+=head2 REMOVE_FROM_KNOWN
+
+This function removes from podman's known containers list.
 
 =cut
 

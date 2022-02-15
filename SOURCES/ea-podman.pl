@@ -101,9 +101,7 @@ sub get_dispatch_args {
                     return;
                 }
 
-                ea_podman::util::uninstall_container($container_name);
-                ea_podman::util::move_container_dir($container_name);
-                ea_podman::util::remove_port_authority_ports($container_name);
+                ea_podman::util::remove_container_by_name($container_name);
             },
         },
         list => {
@@ -175,6 +173,97 @@ sub get_dispatch_args {
                 }
                 else {
                     ea_podman::util::podman( exec => "-it", $container_name, "/bin/bash" );
+                }
+            },
+        },
+        containers => {
+            clue     => "containers",
+            abstract => "List all or a users ea-podman registered containers",
+            help     => "List all or a users ea-podman registered containers",
+            code     => sub {
+                my $containers_hr = ea_podman::util::load_known_containers ();
+                my @output;
+
+                my $user = scalar getpwuid($>);
+                
+                foreach my $container (values %{ $containers_hr }) {
+                    next if ($user ne "root" && $container->{user} ne $user);
+
+                    my $str = sprintf ("%-20.20s %-20.20s %s",
+                        $container->{user},
+                        $container->{pkg},
+                        $container->{container_name});
+
+                    push (@output, $str);
+                }
+
+                if (@output == 0) {
+                    print "There are no containers\n";
+                    exit 0;
+                }
+
+                printf "%-20.20s %-20.20s %s\n",
+                    'User',
+                    'Package',
+                    'Container Name';
+            
+                foreach my $str (sort @output) {
+                    print $str . "\n";
+                }
+            },
+        },
+        remove_containers => {
+            clue     => "remove_containers [ea-tomcat100 | all]",
+            abstract => "Remove containers for a user (if you are not root) or for all users if you are root, for a package or all",
+            help     => "Remove containers for a user (if you are not root) or for all users if you are root, for a package or all",
+            code     => sub {
+                my ($app, $pkg) = @_;
+
+                print "Please provide a package name or the word all\n" if (!$pkg);
+
+                my $user = scalar getpwuid($>);
+                my $containers_hr = ea_podman::util::load_known_containers ();
+
+                my @containers = values %{ $containers_hr };
+                @containers = grep { $_->{user} eq $user } @containers if ($user ne "root");
+                @containers = grep { $_->{pkg} eq $pkg } @containers if ($pkg ne "all");
+                @containers = sort { $a->{user} cmp $b->{user} } @containers;
+
+                if (@containers == 0) {
+                    print "There are no containers\n";
+                    exit 0;
+                }
+
+                if ($user eq "root") {
+                    my %user_breakdown;
+
+                    foreach my $container (@containers) {
+                        my $c_user = $container->{user};
+                        if (!exists $user_breakdown{$c_user}) {
+                            $user_breakdown{$c_user} = [ $container ];
+                        }
+                        else {
+                            push (@{ $user_breakdown{$c_user} }, $container);
+                        }
+                    }
+
+                    foreach my $c_user (keys %user_breakdown) {
+                        Cpanel::AccessIds::do_as_user_with_exception(
+                            $c_user,
+                            sub {
+                                my $homedir = ( getpwuid($>) )[7];
+                                local $ENV{HOME} = $homedir;
+                                local $ENV{USER} = $c_user;
+
+                                chdir ($homedir);
+
+                                ea_podman::util::remove_containers_for_a_user (@{ $user_breakdown{$c_user} });
+                            }
+                        );
+                    }
+                }
+                else {
+                    ea_podman::util::remove_containers_for_a_user (@containers);
                 }
             },
         },
