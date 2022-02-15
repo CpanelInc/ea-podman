@@ -231,7 +231,7 @@ sub _ensure_latest_container {
         for my $item (@start_args) {
             if ( $item =~ m/^--cpuser-port(?:=(.+))?/ ) {
                 my $val = $1;
-                die "--cpuser-port is not valid for upgrade\n" if $isupgrade; # should never get here but juuuust in case
+                die "--cpuser-port is not valid for upgrade\n" if $isupgrade;    # should never get here but juuuust in case
 
                 if ( !length($val) || $val !~ m/^(?:0|[1-9][0-9]+?)$/ ) {
                     die "--cpuser-port requires a port the container uses (or 0 to be the same as the corresponding host port). e.g. --cpuser-port=8080\n";
@@ -272,7 +272,7 @@ sub _ensure_latest_container {
         @start_args = @real_start_args;
     }
 
-    uninstall_container($container_name);
+    uninstall_container($container_name) if $isupgrade;    # avoid spurious warnings on install
     start_user_container( $container_name, @start_args );
     generate_container_service($container_name);
 
