@@ -102,7 +102,7 @@ If given on the CLI it should error out.
 1. ea-podman.json
 ```
 {
-    "required_ports" : 2,
+    "ports" : [8080, 0, 4200],
     "image" : "docker.io/library/tomcat:10.0.14",
     "startup" : {
         "-e" : ["CATALINA_OPTS=-Xmx100m", "CATALINA_BASE=/usr/local/tomcat"],
@@ -124,6 +124,8 @@ If given on the CLI it should error out.
       5. `--rm` and `--rmi` — not used because these are intended to be long lived container and systemd handles this nicely
       6. `--replace` — not used for the same reason as `--rm`
 2. `ea-podman-local-dir-setup <CONTAINERS-HOST-PATH> [PORT [,PORT, PORT, …]]` — a script that will setup any files the container needs as well as configuring the ports (if needed) in the application itself
+   * in the `ports` example above this would be something like 10001, 10002, 10003
+   * the end result would be -p `10001:8080 -p 10002:10002 10003:4200` (the `0` means use the hosts port for th econtainer too)
 3. If `ea-podman-local-dir-setup` needs files it is suggested to keep them in `ea-podman-local-dir-setup.skel` and have your script operate on those.
 
 #### Updating

@@ -211,28 +211,32 @@ sub _ensure_latest_container {
             validate_start_args( \@start_args );
 
             # then add the ports if any
-            my @ports = $portsfunc->( $container_name => $pkg_conf->{required_ports} );
+            my @container_ports = $pkg_conf->{ports} && ref $pkg_conf->{ports} eq "ARRAY" ? @{ $pkg_conf->{ports} } : ();
+            my @ports           = $portsfunc->( $container_name => scalar(@container_ports) );
 
             # note the docker container name HAS to be the last argument
             my $docker_name = pop @start_args;
-            push @start_args, map { ( "-p", "$_:$_" ) } @ports;
-            push @start_args, $docker_name;
 
+            for my $idx ( 0 .. $#ports ) {
+                my $container_port = $container_ports[$idx] || $ports[$idx];
+                push @start_args, "-p", "$ports[$idx]:$container_port";
+            }
+            push @start_args, $docker_name;
             system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports ) if -x "$pkg_dir/ea-podman-local-dir-setup";
         }
     }
     else {
         my @real_start_args;
-        my $cpuser_ports = 0;
+        my @cpuser_ports;
         for my $item (@start_args) {
-            if ( $item =~ m/^--cpuser-ports(?:=(.+))?/ ) {
+            if ( $item =~ m/^--cpuser-port(?:=(.+))?/ ) {
                 my $val = $1;
-                die "--cpuser-ports given more than once\n" if $cpuser_ports;
+                die "--cpuser-port is not valid for upgrade\n" if $isupgrade; # should never get here but juuuust in case
 
-                if ( !length($val) || $1 !~ m/^[1-9][0-9]?$/ ) {
-                    die "--cpuser-ports requires the number of ports the container needs (e.g. --cpuser-ports=2)\n";
+                if ( !length($val) || $val !~ m/^(?:0|[1-9][0-9]+?)$/ ) {
+                    die "--cpuser-port requires a port the container uses (or 0 to be the same as the corresponding host port). e.g. --cpuser-port=8080\n";
                 }
-                $cpuser_ports = $val;
+                push @cpuser_ports, $val;
             }
             else {
                 push @real_start_args, $item;
@@ -246,7 +250,7 @@ sub _ensure_latest_container {
             die "`start_args` is missing from $container_dir/ea-podman.json\n" if !exists $container_conf->{start_args};
             die "`start_args` is not a list\n"                                 if ref( $container_conf->{start_args} ) ne "ARRAY";
 
-            $cpuser_ports    = $container_conf->{cpuser_ports};
+            @cpuser_ports    = @{ $container_conf->{ports} || [] };
             @real_start_args = @{ $container_conf->{start_args} };
         }
 
@@ -254,13 +258,18 @@ sub _ensure_latest_container {
         validate_start_args( \@real_start_args );
 
         if ( !$isupgrade ) {
-            my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, cpuser_ports => $cpuser_ports } );
+            my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
             path("$container_dir/ea-podman.json")->spew($json);
         }
 
         # then add the ports if any
-        my @ports = $portsfunc->( $container_name => $cpuser_ports );
-        push @real_start_args, map { ( "-p", "$_:$_" ) } @ports;
+        my @ports = $portsfunc->( $container_name => scalar(@cpuser_ports) );
+        for my $idx ( 0 .. $#ports ) {
+            my $container_port = $cpuser_ports[$idx] || $ports[$idx];
+            push @real_start_args, "-p", "$ports[$idx]:$container_port";
+        }
+
+        @start_args = @real_start_args;
     }
 
     uninstall_container($container_name);
@@ -277,7 +286,7 @@ sub _get_current_ports {
     my @curr_ports;
     my $portassignments_json;
     if ( $> == 0 ) {
-        $portassignments_json = scripts::cpuser_port_authority::list("root");
+        $portassignments_json = `/scripts/cpuser_port_authority list root`;
     }
     else {
         $portassignments_json = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'LIST' );
