@@ -203,7 +203,7 @@ This function ensures that the user has subuids and subgids for podman functiona
 
 =head2 REGISTER
 
-This function adds the given contaainer to ea-podman’s known containers list.
+This function adds the given container to ea-podman’s known containers list.
 
 =head2 DEREGISTER
 
