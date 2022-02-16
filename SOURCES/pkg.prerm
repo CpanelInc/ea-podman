@@ -1,0 +1,12 @@
+#!/bin/bash
+
+set -x
+
+if [ -x "/opt/cpanel/ea-podman/bin/ea-podman" ]; then
+    /opt/cpanel/ea-podman/bin/ea-podman remove_containers --all
+
+    if [ -x "/usr/bin/apt" ]; then
+        rm -f /opt/cpanel/ea-podman/bin/ea-podman
+    fi
+fi
+

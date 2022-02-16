@@ -38,6 +38,7 @@ BEGIN {
 
 use Cpanel::Config::Users ();
 use Cpanel::JSON          ();
+use Cpanel::AccessIds     ();
 
 use Term::ReadLine   ();
 use App::CmdDispatch ();
@@ -53,10 +54,10 @@ sub run {
 sub get_dispatch_args {
     my $hint_blurb = "This tool supports the following commands (i.e. $0 {command} …):";
     my %opts       = (
-        'default_commands' => 'help',                                                                                                                                                                   # shell is probably not useful here and potentially confusing
+        'default_commands' => 'help',                                                                                                                                                                                               # shell is probably not useful here and potentially confusing
         'help:pre_hint'    => $hint_blurb,
         'help:pre_help'    => "Various EA4 user-container based service/app/etc management\n\n$hint_blurb",
-        alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop", sid => "subids", si => "subids" },
+        alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop", sid => "subids", si => "subids", registered => "containers" },
     );
 
     if ( $> == 0 ) {
@@ -101,15 +102,13 @@ sub get_dispatch_args {
                     return;
                 }
 
-                ea_podman::util::uninstall_container($container_name);
-                ea_podman::util::move_container_dir($container_name);
-                ea_podman::util::remove_port_authority_ports($container_name);
+                ea_podman::util::remove_container_by_name($container_name);
             },
         },
         list => {
             clue     => "list",
             abstract => "Show container information",
-            help     => "Dumps the information in human readable JSON",
+            help     => "Dumps the information about user's running containers in human readable JSON",
             code     => sub {
                 my ($app) = @_;
                 print Cpanel::JSON::pretty_canonical_dump( ea_podman::util::get_containers() );
@@ -178,6 +177,102 @@ sub get_dispatch_args {
                 }
             },
         },
+        containers => {
+            clue     => "containers [--all]",
+            abstract => "List containers",
+            help     => "List your ea-podman registered containers. root can additionally pass --all to list everyone’s ea-podman registered containers.",
+            code     => sub {
+                my ( $app, $all ) = @_;
+
+                die "Unknown argument “$all”\n" if defined $all && $all ne '--all';
+
+                my $user = getpwuid($>);
+
+                my $containers_hr = ea_podman::util::load_known_containers();
+
+                my %user_containers;
+                foreach my $container ( grep { $_->{user} eq $user } values %{$containers_hr} ) {
+                    $user_containers{ $container->{container_name} } = $container;
+                }
+
+                if ( $> == 0 ) {
+                    if ($all) {
+                        print Cpanel::JSON::pretty_canonical_dump($containers_hr);
+                    }
+                    else {
+                        print Cpanel::JSON::pretty_canonical_dump( \%user_containers );
+                    }
+                }
+                else {
+                    if ($all) {
+                        die "Only root can specifically --all\n";
+                    }
+                    else {
+                        print Cpanel::JSON::pretty_canonical_dump( \%user_containers );
+                    }
+                }
+            },
+        },
+        remove_containers => {
+            clue     => "remove_containers [<PKG|NON-PKG-NAME>|--all]",
+            abstract => "Remove containers",
+            help     => qq{Remove ea-podman registered containers by EA4 package, an arbitrary non-package name, or all via `--all`.
+    - as non-root will only affect only the user
+    - as root this will effect all users
+
+This is intended to make it easier for a user to purge their ea-podman based containers and to facilitate cleanup when uninstalling packages that the containers need to run.
+            },
+            code => sub {
+                my ( $app, $pkg ) = @_;
+
+                print "Please provide a package name or the word --all\n" if ( !$pkg );
+
+                my $user          = getpwuid($>);
+                my $containers_hr = ea_podman::util::load_known_containers();
+
+                my @containers = values %{$containers_hr};
+                @containers = grep { $_->{user} eq $user } @containers if ( $user ne "root" );
+                @containers = grep { $_->{pkg} eq $pkg } @containers   if ( $pkg ne "--all" );
+                @containers = sort { $a->{user} cmp $b->{user} } @containers;
+
+                if ( @containers == 0 ) {
+                    print "There are no containers\n";
+                    exit 0;
+                }
+
+                if ( $user eq "root" ) {
+                    my %user_breakdown;
+
+                    foreach my $container (@containers) {
+                        my $c_user = $container->{user};
+                        push( @{ $user_breakdown{$c_user} }, $container );
+                    }
+
+                    foreach my $c_user ( keys %user_breakdown ) {
+                        if ( $c_user eq "root" ) {
+                            ea_podman::util::remove_containers_for_a_user( @{ $user_breakdown{$c_user} } );
+                        }
+                        else {
+                            Cpanel::AccessIds::do_as_user_with_exception(
+                                $c_user,
+                                sub {
+                                    my $homedir = ( getpwuid($>) )[7];
+                                    local $ENV{HOME} = $homedir;
+                                    local $ENV{USER} = $c_user;
+
+                                    chdir($homedir);
+
+                                    ea_podman::util::remove_containers_for_a_user( @{ $user_breakdown{$c_user} } );
+                                }
+                            );
+                        }
+                    }
+                }
+                else {
+                    ea_podman::util::remove_containers_for_a_user(@containers);
+                }
+            },
+        },
     );
 
     return ( \%cmds, \%opts );
@@ -201,7 +296,7 @@ sub subids {
         }
     }
     else {
-        my $user = scalar getpwuid($>);
+        my $user = getpwuid($>);
         _check_output_user( $user, $subuid_lu, $subgid_lu );
     }
 }

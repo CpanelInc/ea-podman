@@ -24,6 +24,7 @@ Source24:       ea-podman-adminbin
 Source25:       ea-podman-adminbin.conf
 
 Source50:       pkg.postinst
+Source51:       pkg.prerm
 
 %if 0%{?rhel} >= 8
 Requires:       gcc-toolset-11
@@ -55,9 +56,15 @@ mkdir -p %{buildroot}/usr/local/cpanel/bin/admin/Cpanel
 install -p %{SOURCE24} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman
 install -p %{SOURCE25} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
 
+echo "{}" > %{buildroot}/opt/cpanel/ea-podman/registered-containers.json
+
 %post
 
 %include %{SOURCE50}
+
+%preun
+
+%include %{SOURCE51}
 
 %clean
 rm -rf %{buildroot}
@@ -67,6 +74,7 @@ rm -rf %{buildroot}
 /usr/local/cpanel/scripts/ea-podman
 %attr(0755,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman
 %attr(0744,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
+%attr(0644,root,root) /opt/cpanel/ea-podman/registered-containers.json
 
 %changelog
 * Wed Jan 19 2022 Dan Muey <dan@cpanel.net> - 1.0-2
