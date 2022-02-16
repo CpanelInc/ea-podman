@@ -93,7 +93,7 @@ sub REGISTER {
 
     _die_with_message("Must provide a container name") if !defined $container_name;
 
-    eval { ea_podman::util::register_container( $container_name, $cpuser ); };
+    eval { ea_podman::util::register_container_as_root( $container_name, $cpuser ); };
 
     _die_with_message("Unable to add to known_containers: $@") if ($@);
 
@@ -106,7 +106,7 @@ sub DEREGISTER {
 
     _die_with_message("Must provide a container name") if !defined $container_name;
 
-    eval { ea_podman::util::deregister_container($container_name); };
+    eval { ea_podman::util::deregister_container_as_root($container_name); };
 
     _die_with_message("Unable to remove from known_containers: $@") if ($@);
 

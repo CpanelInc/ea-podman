@@ -276,9 +276,9 @@ sub _ensure_latest_container {
     }
 
     uninstall_container($container_name) if $isupgrade;    # avoid spurious warnings on install
+    register_container($container_name);
     start_user_container( $container_name, @start_args );
     generate_container_service($container_name);
-    elevate_if_needed_register_container($container_name);
 
     my $service_name = get_container_service_name($container_name);
     sysctl( start => $service_name );
@@ -475,7 +475,7 @@ sub load_known_containers {
     return $containers_hr;
 }
 
-sub register_container {
+sub register_container_as_root {
     my ( $container_name, $user ) = @_;
 
     my $containers_hr = load_known_containers();
@@ -498,7 +498,7 @@ sub register_container {
     return;
 }
 
-sub deregister_container {
+sub deregister_container_as_root {
     my ($container_name) = @_;
 
     my $containers_hr = load_known_containers();
@@ -522,7 +522,7 @@ sub remove_container_by_name {
 
     ea_podman::util::remove_port_authority_ports($container_name);
     ea_podman::util::uninstall_container($container_name);
-    ea_podman::util::elevate_if_needed_deregister_container($container_name);
+    ea_podman::util::deregister_container($container_name);
     ea_podman::util::move_container_dir($container_name);
 
     return;
@@ -550,7 +550,7 @@ sub remove_containers_for_a_user {
     return;
 }
 
-sub elevate_if_needed_register_container {
+sub register_container {
     my ($container_name) = @_;
 
     if ( $> == 0 ) {
@@ -564,7 +564,7 @@ sub elevate_if_needed_register_container {
     }
 }
 
-sub elevate_if_needed_deregister_container {
+sub deregister_container {
     my ($container_name) = @_;
 
     if ( $> == 0 ) {
