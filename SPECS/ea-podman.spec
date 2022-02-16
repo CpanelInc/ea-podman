@@ -74,7 +74,7 @@ rm -rf %{buildroot}
 /usr/local/cpanel/scripts/ea-podman
 %attr(0755,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman
 %attr(0744,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
-%attr(0644,root,root) /opt/cpanel/ea-podman/registered-containers.json
+%attr(0600,root,root) /opt/cpanel/ea-podman/registered-containers.json
 
 %changelog
 * Wed Jan 19 2022 Dan Muey <dan@cpanel.net> - 1.0-2

@@ -116,7 +116,13 @@ sub get_next_available_container_name {    # ¿TODO/YAGNI?: make less racey
     $name .= "." . scalar getpwuid($>) . ".%02d";
 
     my $max          = 99;
-    my $container_hr = get_containers();
+    my $container_hr = load_known_containers();    # running (get_containers()) or not
+
+    # $container_hr does not need non-root entires filtered out when $> == 0 because
+    #   1. The $name has the user so root’s call will not get mixed up when $container_hr has a key name foo.bob.99
+    #   2. Since the names are generated a non-root user can’t register foo.root.42
+    #   3. If they found a way to do ^^^ the worst case senario is root get a different number
+    #      * if they used up all 99 options then there would be an error to indicate something is awry
 
     my $container_name;
     for my $n ( 1 .. $max ) {
@@ -469,6 +475,11 @@ sub uninstall_container {
 }
 
 sub load_known_containers {
+    return load_known_containers_as_root() if $> == 0;
+    return Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REGISTERED_CONTAINERS' );
+}
+
+sub load_known_containers_as_root {
     my $containers_hr = {};
     $containers_hr = Cpanel::JSON::LoadFile($known_containers_file) if ( -e $known_containers_file );
 
@@ -478,7 +489,7 @@ sub load_known_containers {
 sub register_container_as_root {
     my ( $container_name, $user ) = @_;
 
-    my $containers_hr = load_known_containers();
+    my $containers_hr = load_known_containers_as_root();
 
     my $pkg = get_pkg_from_container_name($container_name);
 
@@ -501,7 +512,7 @@ sub register_container_as_root {
 sub deregister_container_as_root {
     my ($container_name) = @_;
 
-    my $containers_hr = load_known_containers();
+    my $containers_hr = load_known_containers_as_root();
 
     if ( !exists $containers_hr->{$container_name} ) {
         warn "$container_name is not registered";

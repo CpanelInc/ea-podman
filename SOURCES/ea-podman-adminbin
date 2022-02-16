@@ -30,7 +30,7 @@ if ($@) {                                                     # … if its not 
 __PACKAGE__->run( 'alarm' => 120 ) unless caller;
 
 sub _actions {
-    return qw(LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER);
+    return qw(LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS);
 }
 
 sub LIST {
@@ -113,6 +113,21 @@ sub DEREGISTER {
     return 1;
 }
 
+sub REGISTERED_CONTAINERS {
+    my ($self) = @_;
+    my $cpuser = $self->_debug_and_user(1);
+
+    my $usr_containers = {};
+    my $all_containers = ea_podman::util::load_known_containers_as_root();
+    for my $contname ( keys %{$all_containers} ) {
+        if ( $all_containers->{$contname}{user} eq $cpuser ) {
+            $usr_containers->{$contname} = $all_containers->{$contname};
+        }
+    }
+
+    return $usr_containers;
+}
+
 ###############
 #### helpers ##
 ###############
@@ -152,17 +167,17 @@ ea_podman
 
 =head1 SYNOPSIS
 
-my $ea_podman = bin::admin::Cpanel::ea_podman->new ();
+my $ea_podman = bin::admin::Cpanel::ea_podman->new();
 
-@actions = $ea_podman->_actions ();
+@actions = $ea_podman->_actions();
 
-$ea_podman->LIST ();
+print $ea_podman->LIST();
 
 =head1 DESCRIPTION
 
 This runs ea-podman functions that need to be run as an admin.
 
-ea_podman is deployed by the RPM to /usr/local/cpanel/bin/admin/Cpanel.
+ea_podman is deployed by the ea-podman package to /usr/local/cpanel/bin/admin/Cpanel.
 
 =head1 SUBROUTINES
 
@@ -172,27 +187,28 @@ Lists the actions allowed by this admin bin script.
 
 =head2 LIST
 
-This function determines lists all ports already assigned to this user.
+This function returns JSON object of all ports already assigned to this user.
 
 =head2 GIVE
 
-This function assigns a num of ports to the user under the name container_name.
+This function assigns the given num of ports to the user for the given container name.
 
 =head2 TAKE
 
-This function removes all ports assigned to this user and container_name.
+This function removes all ports assigned the given container name.
 
 =head2 ENSURE_USER
 
-This function updates podman's subuids and subgids to add this user.
+This function ensures that the user has subuids and subgids for podman functionality.
 
 =head2 REGISTER
 
-This function adds to podman's known containers list.
+This function adds the given container to ea-podman’s known containers list.
 
 =head2 DEREGISTER
 
-This function removes from podman's known containers list.
+This function removes the given container from ea-podman’s known containers list.
 
-=cut
+=head2 REGISTERED_CONTAINERS
 
+This function returns a hashref of the user’s containers.

@@ -108,7 +108,7 @@ sub get_dispatch_args {
         list => {
             clue     => "list",
             abstract => "Show container information",
-            help     => "Dumps the information about user's running containers in human readable JSON",
+            help     => "Dumps the information about user’s running containers in human readable JSON",
             code     => sub {
                 my ($app) = @_;
                 print Cpanel::JSON::pretty_canonical_dump( ea_podman::util::get_containers() );
@@ -225,7 +225,9 @@ This is intended to make it easier for a user to purge their ea-podman based con
             code => sub {
                 my ( $app, $pkg ) = @_;
 
-                print "Please provide a package name or the word --all\n" if ( !$pkg );
+                print "Please provide a package name or the flag `--all`\n" if ( !$pkg );
+
+                # TODO ZC-9746: have them verify they want to do this destructive thing
 
                 my $user          = getpwuid($>);
                 my $containers_hr = ea_podman::util::load_known_containers();
