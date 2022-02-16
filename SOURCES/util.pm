@@ -30,7 +30,7 @@ sub ensure_su_login {    # needed when $user is from root `su - $user` and not S
     delete $ENV{XDG_RUNTIME_DIR} if $ENV{XDG_RUNTIME_DIR} && $ENV{XDG_RUNTIME_DIR} ne "/run/user/$>";
 
     if ( !$ENV{XDG_RUNTIME_DIR} ) {
-        my $user = scalar getpwuid($>);
+        my $user = getpwuid($>);
         system("loginctl enable-linger $user");
         $ENV{XDG_RUNTIME_DIR} = "/run/user/$>";
     }
@@ -555,9 +555,9 @@ sub register_container {
 
     if ( $> == 0 ) {
         local $@;
-        eval { register_container( $container_name, "root" ); };
+        eval { register_container_as_root( $container_name, "root" ); };
 
-        die "Unable to add to known containers\n" if $@;
+        die "Unable to register “$container_name”: $@\n" if $@;
     }
     else {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REGISTER', $container_name );
@@ -569,9 +569,9 @@ sub deregister_container {
 
     if ( $> == 0 ) {
         local $@;
-        eval { deregister_container($container_name); };
+        eval { deregister_container_as_root($container_name); };
 
-        die "Unable to remove from known containers\n" if $@;
+        die "Unable to deregister “$container_name”: $@\n" if $@;
     }
     else {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'DEREGISTER', $container_name );

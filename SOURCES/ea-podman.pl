@@ -184,8 +184,9 @@ sub get_dispatch_args {
             code     => sub {
                 my ( $app, $all ) = @_;
 
-                $all = "" if !$all;
-                my $user = scalar getpwuid($>);
+                die "Unknown argument “$all”\n" if defined $all && $all ne '--all';
+
+                my $user = getpwuid($>);
 
                 my $containers_hr = ea_podman::util::load_known_containers();
 
@@ -224,9 +225,9 @@ This is intended to make it easier for a user to purge their ea-podman based con
             code => sub {
                 my ( $app, $pkg ) = @_;
 
-                print "Please provide a package name or the word all\n" if ( !$pkg );
+                print "Please provide a package name or the word --all\n" if ( !$pkg );
 
-                my $user          = scalar getpwuid($>);
+                my $user          = getpwuid($>);
                 my $containers_hr = ea_podman::util::load_known_containers();
 
                 my @containers = values %{$containers_hr};
@@ -295,7 +296,7 @@ sub subids {
         }
     }
     else {
-        my $user = scalar getpwuid($>);
+        my $user = getpwuid($>);
         _check_output_user( $user, $subuid_lu, $subgid_lu );
     }
 }
