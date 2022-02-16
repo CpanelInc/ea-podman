@@ -215,8 +215,13 @@ sub get_dispatch_args {
         remove_containers => {
             clue     => "remove_containers [<PKG|NON-PKG-NAME>|--all]",
             abstract => "Remove containers",
-            help     => "Remove containers for a user (if you are not root) or for all users if you are root, for a package or all",
-            code     => sub {
+            help     => qq{Remove ea-podman registered containers by EA4 package, an arbitrary non-package name, or all via `--all`.
+    - as non-root will only affect only the user
+    - as root this will effect all users
+
+This is intended to make it easier for a user to purge their ea-podman based containers and to facilitate cleanup when uninstalling packages that the containers need to run.
+            },
+            code => sub {
                 my ( $app, $pkg ) = @_;
 
                 print "Please provide a package name or the word all\n" if ( !$pkg );
