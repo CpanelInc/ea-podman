@@ -234,7 +234,15 @@ This is intended to make it easier for a user to purge their ea-podman based con
 
                 my @containers = values %{$containers_hr};
                 @containers = grep { $_->{user} eq $user } @containers if ( $user ne "root" );
-                @containers = grep { $_->{pkg} eq $pkg } @containers   if ( $pkg ne "--all" );
+
+                if ( $pkg ne '--all' ) {
+                    @containers = grep {
+                        ( defined $_->{pkg} && $_->{pkg} eq $pkg )                                              # <PKG> form …
+                          ||                                                                                    # … OR …
+                          ( !defined $_->{pkg} && $_->{container_name} =~ m/^\Q$pkg\E\.$user\.[0-9][0-9]$/ )    # … <NON-PKG-NAME> form
+                    } @containers;
+                }
+
                 @containers = sort { $a->{user} cmp $b->{user} } @containers;
 
                 if ( @containers == 0 ) {
