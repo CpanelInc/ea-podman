@@ -130,6 +130,7 @@ If given more startup args on the CLI it should error out.
    * the end result would be -p `10001:8080 -p 10002:10002 10003:4200` (the `0` means use the hosts port for th econtainer too)
 3. If `ea-podman-local-dir-setup` needs files it is suggested to keep them in `ea-podman-local-dir-setup.skel` and have your script operate on those.
 4. `ea-podman-local-dir-upgrade <CONTAINERS-HOST-PATH> <PKG-VERSION-OF-CONTAINER> <PKG-VERSION-ON-THE-SYSTEM-ATM> [PORT [,PORT, PORT, …]]
+   * for the versions, splitting on `[+-]` (limit 2) will get the program version and package release version
 5. If `ea-podman-local-dir-upgrade` needs files beyond what setup has it is suggested to keep them in `ea-podman-local-dir-upgrade.skel` and have your script operate on those.
 
 #### Updating
