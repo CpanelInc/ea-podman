@@ -124,10 +124,11 @@ sub get_next_available_container_name {    # ¿TODO/YAGNI?: make less racey
     #   3. If they found a way to do ^^^ the worst case senario is root get a different number
     #      * if they used up all 99 options then there would be an error to indicate something is awry
 
+    my $homedir = ( getpwuid($>) )[7];
     my $container_name;
     for my $n ( 1 .. $max ) {
         my $path = sprintf( $name, $n );
-        if ( !exists $container_hr->{$path} ) {
+        if ( !exists $container_hr->{$path} && !-e "$homedir/$path" && !-e "$homedir/$path.bak" ) {
             $container_name = $path;
             last;
         }
