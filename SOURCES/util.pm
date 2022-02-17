@@ -248,10 +248,11 @@ sub _ensure_latest_container {
                 }
             }
 
-            path("$container_dir/$pkg.ver")->spew($package_ver)->chmod(0600)
+            path("$container_dir/$pkg.ver")->spew($package_ver)->chmod(0600);
         }
         else {
-            die "“$container_name” looks like an EA4 package but it is not a container based EA4 package. Please use the correct package name (or install it if it was uninstalled but its directory left behind) or use a name that does not start w/ `ea-`.\n";
+            rmdir $container_dir unless $isupgrade;
+            die "“$pkg” looks like an EA4 package but it is not a container based EA4 package. Please use the correct package name (or install it if it was uninstalled but its directory left behind) or use a name that does not start w/ `ea-`.\n";
         }
     }
     else {
