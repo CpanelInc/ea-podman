@@ -59,7 +59,7 @@ echo "{}" > %{buildroot}/opt/cpanel/ea-podman/registered-containers.json
 
 %post
 
-source %{SOURCE5}
+%include %{SOURCE5}
 
 %clean
 rm -rf %{buildroot}
