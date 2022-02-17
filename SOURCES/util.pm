@@ -10,7 +10,6 @@ use warnings;
 package ea_podman::util;
 
 use Cpanel::JSON           ();
-use Cpanel::PackMan        ();
 use Cpanel::AdminBin::Call ();
 use File::Path::Tiny       ();
 
@@ -326,8 +325,11 @@ sub _file_write_chmod {
 sub get_pkg_versions {
     my ( $container_dir, $pkg ) = @_;
     my $container_ver = -s "$container_dir/$pkg.ver" ? path("$container_dir/$pkg.ver")->slurp() : undef;
-    my $pkg_info      = Cpanel::PackMan->instance->is_installed($pkg);
-    my $package_ver   = $pkg_info ? $pkg_info->{version_installed} : undef;
+
+    require Cpanel::PackMan;
+    my $pkg_info    = Cpanel::PackMan->instance->is_installed($pkg);
+    my $package_ver = $pkg_info ? $pkg_info->{version_installed} : undef;
+
     return ( $container_ver, $package_ver );    # scalar context will do  $package_ver
 }
 
