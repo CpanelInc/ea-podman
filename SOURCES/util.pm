@@ -250,6 +250,9 @@ sub _ensure_latest_container {
 
             path("$container_dir/$pkg.ver")->spew($package_ver);
         }
+        else {
+            die "“$container_name” looks like an EA4 package but it is not a container based EA4 package. Please use the correct package name or use a name that does not start w/ `ea-`.\n";
+        }
     }
     else {
         my @real_start_args;
