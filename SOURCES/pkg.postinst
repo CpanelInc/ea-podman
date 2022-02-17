@@ -7,7 +7,7 @@ cd /opt/cpanel/ea-podman/bin
 CPANEL_PERLCC=/usr/local/cpanel/3rdparty/bin/perlcc
 CC_OPTIMIZATIONS=--Wc='-Os'
 PERLCC_OPTS="-v4 -UO -UB::Stash -UTie::Hash::NamedCapture -L /usr/lib64"
-PERLCC_DORMANT_OPTS="${PERLCC_OPTS} -UB -Uwarnings"
+PERLCC_DORMANT_OPTS="${PERLCC_OPTS} -UB"
 $CPANEL_PERLCC $CC_OPTIMIZATIONS $PERLCC_DORMANT_OPTS ea-podman.pl -o ea-podman
 cd -
 
