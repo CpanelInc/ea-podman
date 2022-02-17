@@ -22,3 +22,9 @@ if [ -f "/usr/bin/apt" ]; then
     chmod 0600 /opt/cpanel/ea-podman/registered-containers.json
 fi
 
+if [ -e "/tmp/registered-containers.json" ]; then
+    # This is an upgrade, we copied the file to tmp, so copy it back
+    cp -f /tmp/registered-containers.json /opt/cpanel/ea-podman/registered-containers.json
+    chmod 0600 /opt/cpanel/ea-podman/registered-containers.json
+    rm -f /tmp/registered-containers.json
+fi
