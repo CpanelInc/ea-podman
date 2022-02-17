@@ -314,8 +314,11 @@ sub _ensure_latest_container {
 sub _file_write_chmod {
     my ( $file, $cont, $mode ) = @_;
     my $path = path($file);
-    $path->chmod($mode);
+
+    local $@;
+    eval { $path->chmod($mode) };    # try to chmod it first to protect data we are spewing into it
     $path->spew($cont);
+    $path->chmod($mode);             # spew() first to ensure it exists
     return 1;
 }
 
