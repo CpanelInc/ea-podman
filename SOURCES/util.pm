@@ -232,7 +232,23 @@ sub _ensure_latest_container {
                 push @start_args, "-p", "$ports[$idx]:$container_port";
             }
             push @start_args, $docker_name;
-            system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports ) if -x "$pkg_dir/ea-podman-local-dir-setup";
+
+            my ( $container_ver, $package_ver ) = get_pkg_versions( $container_dir => $pkg );
+
+            if ($isupgrade) {
+                if ( -x "$pkg_dir/ea-podman-local-dir-upgrade" ) {
+                    system( "$pkg_dir/ea-podman-local-dir-upgrade", $container_dir, $container_ver, $package_ver, @ports );
+                    warn "$pkg_dir/ea-podman-local-dir-upgrade did not exit cleanly\n" if $? != 0;
+                }
+            }
+            else {
+                if ( -x "$pkg_dir/ea-podman-local-dir-setup" ) {
+                    system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports );
+                    warn "$pkg_dir/ea-podman-local-dir-setup did not exit cleanly\n" if $? != 0;
+                }
+            }
+
+            path("$container_dir/$pkg.ver")->spew($package_ver);
         }
     }
     else {
@@ -289,6 +305,14 @@ sub _ensure_latest_container {
 
     my $service_name = get_container_service_name($container_name);
     sysctl( start => $service_name );
+}
+
+sub get_pkg_versions {
+    my ( $container_dir, $pkg ) = @_;
+    my $container_ver = -s "$container_dir/$pkg.ver" ? path("$container_dir/$pkg.ver")->slurp() : undef;
+    my $pkg_info      = Cpanel::PackMan->instance->is_installed($pkg);
+    my $package_ver   = $pkg_info ? $pkg_info->{version_installed} : undef;
+    return ( $container_ver, $package_ver );    # scalar context will do  $package_ver
 }
 
 sub _get_current_ports {
