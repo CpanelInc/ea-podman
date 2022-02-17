@@ -143,9 +143,7 @@ ZC-9686: Perhaps the tooling could contain boiler plate scripts that packages ca
 
 Should have start up options specified in the CLI. Except the ones ea-podman manages.
 
-`--cpuser-ports=N` can be used to specify the number of ports it needs.
-
-ZC-9730: will allow them to bind to different ports on the inside.
+`--cpuser-port=<CONTAINER-PORT>` can be used to specify ports it needs. They will be assigned host ports as described above.
 
 Those options will be recorded in `<CONTAINERS-HOST-PATH>/ea-podman.json` for later.
 
