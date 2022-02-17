@@ -10,6 +10,7 @@ use warnings;
 package ea_podman::util;
 
 use Cpanel::JSON           ();
+use Cpanel::PackMan        ();
 use Cpanel::AdminBin::Call ();
 use File::Path::Tiny       ();
 
