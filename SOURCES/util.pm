@@ -248,7 +248,7 @@ sub _ensure_latest_container {
                 }
             }
 
-            path("$container_dir/$pkg.ver")->spew($package_ver)->chmod(0600);
+            _file_write_chmod( "$container_dir/$pkg.ver", $package_ver, 0600 );
         }
         else {
             rmdir $container_dir unless $isupgrade;
@@ -289,7 +289,7 @@ sub _ensure_latest_container {
 
         if ( !$isupgrade ) {
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
-            path("$container_dir/ea-podman.json")->spew($json)->chmod(0600);
+            _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
         }
 
         # then add the ports if any
@@ -309,6 +309,14 @@ sub _ensure_latest_container {
 
     my $service_name = get_container_service_name($container_name);
     sysctl( start => $service_name );
+}
+
+sub _file_write_chmod {
+    my ( $file, $cont, $mode ) = @_;
+    my $path = path($file);
+    $path->chmod($mode);
+    $path->spew($cont);
+    return 1;
 }
 
 sub get_pkg_versions {
