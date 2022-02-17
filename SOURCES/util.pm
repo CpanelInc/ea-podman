@@ -248,7 +248,7 @@ sub _ensure_latest_container {
                 }
             }
 
-            path("$container_dir/$pkg.ver")->chmod(0600)->spew($package_ver);
+            path("$container_dir/$pkg.ver")->spew($package_ver)->chmod(0600)
         }
         else {
             die "“$container_name” looks like an EA4 package but it is not a container based EA4 package. Please use the correct package name (or install it if it was uninstalled but its directory left behind) or use a name that does not start w/ `ea-`.\n";
@@ -288,7 +288,7 @@ sub _ensure_latest_container {
 
         if ( !$isupgrade ) {
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
-            path("$container_dir/ea-podman.json")->chmod(0600)->spew($json);
+            path("$container_dir/ea-podman.json")->spew($json)->chmod(0600);
         }
 
         # then add the ports if any
