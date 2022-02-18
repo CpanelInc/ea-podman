@@ -20,11 +20,10 @@ Source0:        ea-podman.pl
 Source1:        subids.pm
 Source2:        util.pm
 
-Source24:       ea-podman-adminbin
-Source25:       ea-podman-adminbin.conf
+Source3:       ea-podman-adminbin
+Source4:       ea-podman-adminbin.conf
 
-Source50:       pkg.postinst
-Source51:       pkg.prerm
+Source5:       pkg.postinst
 
 %if 0%{?rhel} >= 8
 Requires:       gcc-toolset-11
@@ -49,22 +48,18 @@ mkdir -p %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman
 install %{SOURCE1} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/subids.pm
 install %{SOURCE2} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/util.pm
 
-cp -f %{SOURCE24} .
-cp -f %{SOURCE25} .
+cp -f %{SOURCE3} .
+cp -f %{SOURCE4} .
 
 mkdir -p %{buildroot}/usr/local/cpanel/bin/admin/Cpanel
-install -p %{SOURCE24} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman
-install -p %{SOURCE25} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
+install -p %{SOURCE3} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman
+install -p %{SOURCE4} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
 
 echo "{}" > %{buildroot}/opt/cpanel/ea-podman/registered-containers.json
 
 %post
 
-%include %{SOURCE50}
-
-%preun
-
-%include %{SOURCE51}
+%include %{SOURCE5}
 
 %clean
 rm -rf %{buildroot}

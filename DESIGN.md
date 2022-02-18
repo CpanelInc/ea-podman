@@ -27,7 +27,7 @@ We run the containers as the user meaning they can only damage or hack themselve
 
 Make the most common things consistent and simpler to do.
 
-User can still call `podman` and `systclt` however they wish, we just offer a simpler more consistent interface for the commone things.
+User can still call `podman` and `systclt` however they wish, we just offer a simpler more consistent interface for the common things.
 
 e.g. `ea-podman restart ea-tomcat100.dantest.42` instead of `systemctl --user restart container-ea-tomcat100.dantest.42.service`
 * **Note**: they can still do the full `systemctl` if they really really want to.
@@ -67,7 +67,7 @@ If they want to manage containers for users they can use `su` (hint/help output 
   * makes it easier to query for updates since we know right off where it came from
 * We should only provide “Official Images” or “Verified Publisher”
 * We should use `docker.io`
-  * that is a popular and trysted registry
+  * that is a popular and trusted registry
   * makes it easier to query for updates with one API
 * non-EA4 packages can use whatever registries and images they wish
 
@@ -97,7 +97,7 @@ This is referred to here as `<CONTAINERS-HOST-PATH>`
 
 #### Should have its info and logic in `/opt/cpanel/<pkg>`.
 
-If given on the CLI it should error out.
+If given more startup args on the CLI it should error out.
 
 1. ea-podman.json
 ```
@@ -116,17 +116,22 @@ If given on the CLI it should error out.
 ```
    * `-v` the local path is relative to `<CONTAINERS-HOST-PATH>`
       * e.g. `logs:/usr/local/tomcat/logs` will end up being `-v <CONTAINERS-HOST-PATH>/logs:/usr/local/tomcat/logs`
-   * Note: ports and other typical start up flasg are done for the user. Flags that should be set here (in long or short form):
+   * Note: ports and other typical start up flags are done for the user. Flags that should not be set here (in long or short form):
       1. `-p`, `--publish`
       2. `-d`, `--detach`
       3. `-h`, `--hostname`
       4. `--name`
       5. `--rm` and `--rmi` — not used because these are intended to be long lived container and systemd handles this nicely
       6. `--replace` — not used for the same reason as `--rm`
+      7. `-i, `--interactive` — same as `--rm`, instead use `ea-podman bash`
+      8. `-t`, `--tty` — same as `-i`
 2. `ea-podman-local-dir-setup <CONTAINERS-HOST-PATH> [PORT [,PORT, PORT, …]]` — a script that will setup any files the container needs as well as configuring the ports (if needed) in the application itself
    * in the `ports` example above this would be something like 10001, 10002, 10003
    * the end result would be -p `10001:8080 -p 10002:10002 10003:4200` (the `0` means use the hosts port for th econtainer too)
 3. If `ea-podman-local-dir-setup` needs files it is suggested to keep them in `ea-podman-local-dir-setup.skel` and have your script operate on those.
+4. `ea-podman-local-dir-upgrade <CONTAINERS-HOST-PATH> <PKG-VERSION-OF-CONTAINER> <PKG-VERSION-ON-THE-SYSTEM-ATM> [PORT [,PORT, PORT, …]]
+   * for the versions, splitting on `[+-]` (limit 2) will get the program version and package release version
+5. If `ea-podman-local-dir-upgrade` needs files beyond what setup has it is suggested to keep them in `ea-podman-local-dir-upgrade.skel` and have your script operate on those.
 
 #### Updating
 
@@ -137,9 +142,11 @@ ZC-9686: Perhaps the tooling could contain boiler plate scripts that packages ca
 
 ### Arbitrary Images
 
-Should have start up options specified in the CLI.
+Should have start up options specified in the CLI. Except the ones ea-podman manages.
 
-… TODO ZC-9695 …
+`--cpuser-port=<CONTAINER-PORT>` can be used to specify ports it needs. They will be assigned host ports as described above.
+
+Those options will be recorded in `<CONTAINERS-HOST-PATH>/ea-podman.json` for later.
 
 ## Child Documents
 

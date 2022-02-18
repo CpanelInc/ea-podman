@@ -67,10 +67,24 @@ sub assert_has_user_namespaces {
     chomp( my $max_uns = `sysctl --values user.max_user_namespaces 2>/dev/null` );
 
     if ( !$max_uns ) {
+        my $c7_msg = <<'C7';
+
+    • On CentOS 7 running these command enable user namespaces:
+        1. grubby --args="namespce.unpriv_enable=1 user_namespace.enable=1" --update-kernel="$(grubby --default-kernel)"
+        2. echo "user.max_user_namespaces=15076" >> /etc/sysctl.conf
+        3. reboot
+C7
+        chomp($c7_msg);
+
+        # I wish there was a better way …
+        my $os = -f "/etc/os-release" ? `source /etc/os-release; echo \$ID\$VERSION_ID` : "??";
+        chomp($os);
+        $c7_msg = "" if $os ne "centos7";
+
         die <<"END_NO_UNS";
 $bad User Namespaces not available (`sysctl --values user.max_user_namespaces`):
     • Container based packages will not work until they are.
-    • To learn more read `man user_namespaces`
+    • To learn more read `man user_namespaces`$c7_msg
 END_NO_UNS
     }
 

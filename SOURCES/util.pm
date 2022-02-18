@@ -232,7 +232,27 @@ sub _ensure_latest_container {
                 push @start_args, "-p", "$ports[$idx]:$container_port";
             }
             push @start_args, $docker_name;
-            system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports ) if -x "$pkg_dir/ea-podman-local-dir-setup";
+
+            my ( $container_ver, $package_ver ) = get_pkg_versions( $container_dir => $pkg );
+
+            if ($isupgrade) {
+                if ( -x "$pkg_dir/ea-podman-local-dir-upgrade" ) {
+                    system( "$pkg_dir/ea-podman-local-dir-upgrade", $container_dir, $container_ver, $package_ver, @ports );
+                    warn "$pkg_dir/ea-podman-local-dir-upgrade did not exit cleanly\n" if $? != 0;
+                }
+            }
+            else {
+                if ( -x "$pkg_dir/ea-podman-local-dir-setup" ) {
+                    system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports );
+                    warn "$pkg_dir/ea-podman-local-dir-setup did not exit cleanly\n" if $? != 0;
+                }
+            }
+
+            _file_write_chmod( "$container_dir/$pkg.ver", $package_ver, 0600 );
+        }
+        else {
+            rmdir $container_dir unless $isupgrade;
+            die "“$pkg” looks like an EA4 package but it is not a container based EA4 package. Please use the correct package name (or install it if it was uninstalled but its directory left behind) or use a name that does not start w/ `ea-`.\n";
         }
     }
     else {
@@ -269,7 +289,7 @@ sub _ensure_latest_container {
 
         if ( !$isupgrade ) {
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
-            path("$container_dir/ea-podman.json")->spew($json);
+            _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
         }
 
         # then add the ports if any
@@ -289,6 +309,28 @@ sub _ensure_latest_container {
 
     my $service_name = get_container_service_name($container_name);
     sysctl( start => $service_name );
+}
+
+sub _file_write_chmod {
+    my ( $file, $cont, $mode ) = @_;
+    my $path = path($file);
+
+    local $@;
+    eval { $path->chmod($mode) };    # try to chmod it first to protect data we are spewing into it
+    $path->spew($cont);
+    $path->chmod($mode);             # spew() first to ensure it exists
+    return 1;
+}
+
+sub get_pkg_versions {
+    my ( $container_dir, $pkg ) = @_;
+    my $container_ver = -s "$container_dir/$pkg.ver" ? path("$container_dir/$pkg.ver")->slurp() : undef;
+
+    require Cpanel::PackMan;
+    my $pkg_info    = Cpanel::PackMan->instance->is_installed($pkg);
+    my $package_ver = $pkg_info ? $pkg_info->{version_installed} : undef;
+
+    return ( $container_ver, $package_ver );    # scalar context will do  $package_ver
 }
 
 sub _get_current_ports {
@@ -353,7 +395,7 @@ sub validate_user_container_name {
 # 2 ➜ these are intended to be long running not one offs
 #     systemd management handles them quite nicely
 # 3 ➜ these are intended to be long running not one offs
-#     `ea-podman bash bash <CONTAINER_NAME> [CMD]` can be used to get a shell on a running container
+#     `ea-podman bash <CONTAINER_NAME> [CMD]` can be used to get a shell on a running container
 my %invalid_start_args = (
     "-p"            => 1,
     "--publish"     => 1,
