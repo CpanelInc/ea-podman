@@ -14,7 +14,7 @@ if [[ "$1" == "0" || "$1" == "remove" ]]; then
 else
     if [ -e "/opt/cpanel/ea-podman/registered-containers.json" ]; then
         # This is an upgrade, we need to preserve /opt/cpanel/ea-podman/registered-containers.json
-        if [ -e "/root/.ea-podman-tmp"]; then
+        if [ -e "/root/.ea-podman-tmp" ]; then
             # remove it just in case it has something we do not want in it
             rm -rf /root/.ea-podman-tmp
         fi
