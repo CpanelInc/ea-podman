@@ -225,7 +225,7 @@ This is intended to make it easier for a user to purge their ea-podman based con
             code => sub {
                 my ( $app, $pkg ) = @_;
 
-                print "Please provide a package name or the flag `--all`\n" if ( !$pkg );
+                die "Please provide a package name or the flag `--all`\n" if ( !$pkg );
 
                 # TODO ZC-9746: have them verify they want to do this destructive thing
 

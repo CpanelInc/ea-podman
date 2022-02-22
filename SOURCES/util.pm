@@ -79,7 +79,12 @@ sub stop_user_container {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
 
-    return podman( stop => "--ignore", $container_name );
+    # It is impossible to suppress the error messages emanating from this call
+    # via system, however backticks suppresses them
+
+    `podman stop --ignore --time 30 $container_name 2> /dev/null > /dev/null`;
+
+    return;
 }
 
 sub start_user_container {
