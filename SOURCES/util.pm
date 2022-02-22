@@ -326,13 +326,18 @@ sub _file_write_chmod {
 
 sub get_pkg_versions {
     my ( $container_dir, $pkg ) = @_;
+
+    # ZC-9765 will move this to the registry so user’s can not goof it up
     my $container_ver = -s "$container_dir/$pkg.ver" ? path("$container_dir/$pkg.ver")->slurp() : undef;
+    chomp($container_ver) if defined $container_ver;
 
-    require Cpanel::PackMan;
-    my $pkg_info    = Cpanel::PackMan->instance->is_installed($pkg);
-    my $package_ver = $pkg_info ? $pkg_info->{version_installed} : undef;
+    # we want this to die, it means the pkg left out an important requirement
+    my $package_ver = path("/opt/cpanel/$pkg/pkg-version")->slurp;    # dies if can’t open
+    chomp($package_ver);
+    die "/opt/cpanel/$pkg/pkg-version does not define the version\n" if !length($package_ver);
 
-    return ( $container_ver, $package_ver );    # scalar context will do  $package_ver
+    # scalar context will do $package_ver
+    return ( $container_ver, $package_ver );
 }
 
 sub _get_current_ports {

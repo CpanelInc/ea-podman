@@ -99,6 +99,9 @@ This is referred to here as `<CONTAINERS-HOST-PATH>`
 
 If given more startup args on the CLI it should error out.
 
+0. `pkg-version` should contain the package’s version (including release prefix) w/ no newline. This give us 2 things:
+   1. We can bypass the package management system (which is a boon on `dnf` systems since dnf does not play well w/ users (e.g. ZC-9780 and ZC-9770)
+   2. Will work on older systems that don’t have newer code.
 1. ea-podman.json
 ```
 {
@@ -111,7 +114,7 @@ If given more startup args on the CLI it should error out.
             "logs:/usr/local/tomcat/logs",
             "webapps:/usr/local/tomcat/webapps",
         ]
-    },
+    }
 }
 ```
    * `-v` the local path is relative to `<CONTAINERS-HOST-PATH>`
