@@ -260,6 +260,9 @@ sub _ensure_latest_container {
     else {
         my @real_start_args;
         my @cpuser_ports;
+
+        # note the docker container name HAS to be the last argument
+        my $docker_name = pop @start_args;
         for my $item (@start_args) {
             if ( $item =~ m/^--cpuser-port(?:=(.+))?/ ) {
                 my $val = $1;
@@ -286,6 +289,8 @@ sub _ensure_latest_container {
             @real_start_args = @{ $container_conf->{start_args} };
         }
 
+        push @real_start_args, $docker_name;
+
         # ensure the user isn’t specifying something they shouldn’t
         validate_start_args( \@real_start_args );
 
@@ -293,6 +298,7 @@ sub _ensure_latest_container {
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
             _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
         }
+        pop @real_start_args;    # so we can put ports before the container
 
         # then add the ports if any
         my @ports = $portsfunc->( $container_name => scalar(@cpuser_ports) );
@@ -302,6 +308,7 @@ sub _ensure_latest_container {
         }
 
         @start_args = @real_start_args;
+        push @start_args, $docker_name;
     }
 
     uninstall_container($container_name) if $isupgrade;    # avoid spurious warnings on install
