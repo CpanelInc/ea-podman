@@ -58,6 +58,15 @@ sub ensure_user {
         }
     }
 
+    # best effort
+    mkdir "/run/user";
+    my ( $uid, $gid ) = ( getpwnam($user) )[ 2, 3 ];
+    mkdir( "/run/user/$uid", 0700 );
+    chown( $uid, $gid, "/run/user/$uid" );
+    if ( !-d "/run/user/$uid" ) {
+        die "The directory “/run/user/$uid” is missing and could not be created (mode: 0700; owner & group: $user).\n";
+    }
+
     return;
 }
 
