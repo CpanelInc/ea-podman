@@ -31,6 +31,7 @@ sub ensure_su_login {    # needed when $user is from root `su - $user` and not S
 
     if ( !$ENV{XDG_RUNTIME_DIR} ) {
         my $user = getpwuid($>);
+
         # Error messages from loginctl are almost always benign, suppress them
         system("loginctl enable-linger $user 2> /dev/null");
         $ENV{XDG_RUNTIME_DIR} = "/run/user/$>";
@@ -104,7 +105,7 @@ sub get_containers {
 
     for my $line (`podman ps --no-trunc --format "{{.Names}} {{.Image}}"`) {
         my ( $name, $image ) = split( " ", $line, 2 );
-        $containers{$name} = { image => $image };    # TODO ZC-9691: incorporate ports for $image if any
+        $containers{$name} = { image => $image, ports => [ _get_current_ports($name) ] };    # empty list == no ports
     }
 
     return \%containers;
