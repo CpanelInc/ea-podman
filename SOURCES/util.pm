@@ -197,9 +197,6 @@ sub _ensure_latest_container {
     if ($isupgrade) {
         die "“$container_dir” does not exist\n" if !-d $container_dir;
     }
-    else {
-        mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
-    }
 
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
         my $pkg_dir = "/opt/cpanel/$pkg";
@@ -226,6 +223,7 @@ sub _ensure_latest_container {
 
             # ensure ea-podman.json isn’t specifying something it shouldn’t
             validate_start_args( \@start_args );
+            mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
 
             # then add the ports if any
             my @container_ports = $pkg_conf->{ports} && ref $pkg_conf->{ports} eq "ARRAY" ? @{ $pkg_conf->{ports} } : ();
@@ -293,6 +291,7 @@ sub _ensure_latest_container {
 
         # ensure the user isn’t specifying something they shouldn’t
         validate_start_args( \@real_start_args );
+        mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
 
         if ( !$isupgrade ) {
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
