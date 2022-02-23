@@ -276,6 +276,8 @@ sub _ensure_latest_container {
         my @real_start_args;
         my @cpuser_ports;
 
+        die "No start args given\n"         if !@start_args;
+
         # note the docker container name HAS to be the last argument
         my $docker_name = pop @start_args;
         for my $item (@start_args) {
