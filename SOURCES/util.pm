@@ -32,6 +32,19 @@ sub ensure_su_login {    # needed when $user is from root `su - $user` and not S
     if ( !$ENV{XDG_RUNTIME_DIR} ) {
         my $user = getpwuid($>);
 
+        # I wish there was a better way …
+        if ( -f "/etc/os-release" ) {
+            my $os = `source /etc/os-release; echo -n \$ID\$VERSION_ID`;
+
+            if ( $os eq "centos7" ) {
+                my $logged_in_user = `logname`;
+                chomp($logged_in_user);
+                if ( $logged_in_user ne $user ) {
+                    die "On CentOS 7 you can only use podman when $user is connected directly via SSH (i.e. `su - $user` is not sufficient)\n";
+                }
+            }
+        }
+
         # Error messages from loginctl are almost always benign, suppress them
         system("loginctl enable-linger $user 2> /dev/null");
         $ENV{XDG_RUNTIME_DIR} = "/run/user/$>";
@@ -223,7 +236,7 @@ sub _ensure_latest_container {
 
             # ensure ea-podman.json isn’t specifying something it shouldn’t
             validate_start_args( \@start_args );
-            if (!$isupgrade) {
+            if ( !$isupgrade ) {
                 mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
             }
 
@@ -295,7 +308,7 @@ sub _ensure_latest_container {
 
         # ensure the user isn’t specifying something they shouldn’t
         validate_start_args( \@real_start_args );
-        if (!$isupgrade) {
+        if ( !$isupgrade ) {
             mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
         }
 
@@ -468,6 +481,7 @@ sub validate_start_args {
 
 sub install_container {
     my ( $name, @start_args ) = @_;
+    ensure_su_login();
 
     # The very first command has to be ensure_user which establishes this user
     # in the /etc/subuid and /etc/subgid files, critical to podman
@@ -487,6 +501,7 @@ sub install_container {
 sub upgrade_container {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
+    ensure_su_login();
 
     _ensure_latest_container($container_name);
 }
@@ -519,6 +534,7 @@ sub remove_port_authority_ports {
 sub uninstall_container {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
+    ensure_su_login();
 
     stop_user_container($container_name);
 
