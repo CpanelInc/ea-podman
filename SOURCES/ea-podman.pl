@@ -272,6 +272,7 @@ This is intended to make it easier for a user to purge their ea-podman based con
 
                                     chdir($homedir);
 
+                                    ea_podman::util::ensure_su_login ();
                                     ea_podman::util::remove_containers_for_a_user( @{ $user_breakdown{$c_user} } );
                                 }
                             );
