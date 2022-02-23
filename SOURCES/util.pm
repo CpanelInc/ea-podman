@@ -256,7 +256,6 @@ sub _ensure_latest_container {
             _file_write_chmod( "$container_dir/$pkg.ver", $package_ver, 0600 );
         }
         else {
-            rmdir $container_dir unless $isupgrade;
             die "“$pkg” looks like an EA4 package but it is not a container based EA4 package. Please use the correct package name (or install it if it was uninstalled but its directory left behind) or use a name that does not start w/ `ea-`.\n";
         }
     }
@@ -291,7 +290,9 @@ sub _ensure_latest_container {
 
         # ensure the user isn’t specifying something they shouldn’t
         validate_start_args( \@real_start_args );
-        mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
+        if (!$isupgrade) {
+            mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
+        }
 
         if ( !$isupgrade ) {
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
