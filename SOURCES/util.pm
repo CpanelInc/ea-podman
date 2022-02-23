@@ -223,7 +223,9 @@ sub _ensure_latest_container {
 
             # ensure ea-podman.json isn’t specifying something it shouldn’t
             validate_start_args( \@start_args );
-            mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
+            if (!$isupgrade) {
+                mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
+            }
 
             # then add the ports if any
             my @container_ports = $pkg_conf->{ports} && ref $pkg_conf->{ports} eq "ARRAY" ? @{ $pkg_conf->{ports} } : ();
