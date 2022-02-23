@@ -88,12 +88,12 @@ sub ENSURE_USER {
 }
 
 sub REGISTER {
-    my ( $self, $container_name ) = @_;
+    my ( $self, $container_name, $isupgrade ) = @_;
     my $cpuser = $self->_debug_and_user(0);
 
     _die_with_message("Must provide a container name") if !defined $container_name;
 
-    eval { ea_podman::util::register_container_as_root( $container_name, $cpuser ); };
+    eval { ea_podman::util::register_container_as_root( $container_name, $cpuser, $isupgrade ); };
 
     _die_with_message("Unable to add to known_containers: $@") if ($@);
 
@@ -204,6 +204,8 @@ This function ensures that the user has subuids and subgids for podman functiona
 =head2 REGISTER
 
 This function adds the given container to ea-podman’s known containers list.
+
+Second argument is a boolean indicating if it is updating a registry (as opposed to creating a new one).
 
 =head2 DEREGISTER
 
