@@ -240,7 +240,7 @@ sub _ensure_latest_container {
             }
             push @start_args, $docker_name;
 
-            my ( $container_ver, $package_ver ) = get_pkg_versions( $container_dir => $pkg );
+            my ( $container_ver, $package_ver ) = get_pkg_versions( $container_name => $pkg );
 
             if ($isupgrade) {
                 if ( -x "$pkg_dir/ea-podman-local-dir-upgrade" ) {
@@ -254,8 +254,6 @@ sub _ensure_latest_container {
                     warn "$pkg_dir/ea-podman-local-dir-setup did not exit cleanly\n" if $? != 0;
                 }
             }
-
-            _file_write_chmod( "$container_dir/$pkg.ver", $package_ver, 0600 );
         }
         else {
             die "“$pkg” looks like an EA4 package but it is not a container based EA4 package. Please use the correct package name (or install it if it was uninstalled but its directory left behind) or use a name that does not start w/ `ea-`.\n";
@@ -319,7 +317,7 @@ sub _ensure_latest_container {
     }
 
     uninstall_container($container_name) if $isupgrade;    # avoid spurious warnings on install
-    register_container($container_name);
+    register_container( $container_name, $isupgrade );
     start_user_container( $container_name, @start_args );
     generate_container_service($container_name);
 
@@ -339,10 +337,10 @@ sub _file_write_chmod {
 }
 
 sub get_pkg_versions {
-    my ( $container_dir, $pkg ) = @_;
+    my ( $container_name, $pkg ) = @_;
 
-    # ZC-9765 will move this to the registry so user’s can not goof it up
-    my $container_ver = -s "$container_dir/$pkg.ver" ? path("$container_dir/$pkg.ver")->slurp() : undef;
+    my $registered    = load_known_containers();
+    my $container_ver = $registered->{$container_name} ? $registered->{$container_name}{pkg_version} : undef;
     chomp($container_ver) if defined $container_ver;
 
     # we want this to die, it means the pkg left out an important requirement
@@ -551,21 +549,29 @@ sub load_known_containers_as_root {
 }
 
 sub register_container_as_root {
-    my ( $container_name, $user ) = @_;
+    my ( $container_name, $user, $isupgrade ) = @_;
 
     my $containers_hr = load_known_containers_as_root();
 
     my $pkg = get_pkg_from_container_name($container_name);
 
-    if ( exists $containers_hr->{$container_name} ) {
+    # We want the slurp to error out if a package looking thing is not a container based package
+    my $pkg_ver = $pkg ? path("/opt/cpanel/$pkg/pkg-version")->slurp : undef;
+    chomp($pkg_ver) if defined $pkg_ver;
+
+    if ( exists $containers_hr->{$container_name} && !$isupgrade ) {
         warn "$container_name is already registered";
         return;
+    }
+    elsif ( !exists $containers_hr->{$container_name} && $isupgrade ) {
+        warn "$container_name is not registered, registering now …\n";
     }
 
     $containers_hr->{$container_name} = {
         container_name => $container_name,
         user           => $user,
         pkg            => $pkg,
+        pkg_version    => $pkg_ver,
     };
 
     Cpanel::JSON::DumpFile( $known_containers_file, $containers_hr ) or die "Cannot open known containers file";
@@ -626,16 +632,16 @@ sub remove_containers_for_a_user {
 }
 
 sub register_container {
-    my ($container_name) = @_;
+    my ( $container_name, $isupgrade ) = @_;
 
     if ( $> == 0 ) {
         local $@;
-        eval { register_container_as_root( $container_name, "root" ); };
+        eval { register_container_as_root( $container_name, "root", $isupgrade ); };
 
         die "Unable to register “$container_name”: $@\n" if $@;
     }
     else {
-        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REGISTER', $container_name );
+        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REGISTER', $container_name, $isupgrade );
     }
 }
 
