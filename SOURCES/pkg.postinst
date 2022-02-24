@@ -2,14 +2,8 @@
 
 set -x
 
-cd /opt/cpanel/ea-podman/bin
-# Prep for calling perlcc
-CPANEL_PERLCC=/usr/local/cpanel/3rdparty/bin/perlcc
-CC_OPTIMIZATIONS=--Wc='-Os'
-PERLCC_OPTS="-v4 -UO -UB::Stash -UTie::Hash::NamedCapture -L /usr/lib64"
-PERLCC_DORMANT_OPTS="${PERLCC_OPTS} -UB"
-$CPANEL_PERLCC $CC_OPTIMIZATIONS $PERLCC_DORMANT_OPTS ea-podman.pl -o ea-podman
-cd -
+chmod 0700 /opt/cpanel/ea-podman/bin/compile.sh
+/opt/cpanel/ea-podman/bin/compile.sh
 
 if [ -f "/usr/local/cpanel/scripts/ea-podman" ]; then
     echo ""
@@ -28,3 +22,8 @@ if [ -e "/root/.ea-podman-tmp/registered-containers.json" ]; then
     chmod 0600 /opt/cpanel/ea-podman/registered-containers.json
     rm -rf /root/.ea-podman-tmp
 fi
+
+# Always install the hooks, they are always removed on pre
+/usr/local/cpanel/bin/manage_hooks prune; /bin/true;
+/usr/local/cpanel/bin/manage_hooks add module PodmanHooks
+

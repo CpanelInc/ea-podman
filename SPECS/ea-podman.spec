@@ -24,6 +24,10 @@ Source3:       ea-podman-adminbin
 Source4:       ea-podman-adminbin.conf
 
 Source5:       pkg.postinst
+Source6:       pkg.prerm
+Source7:       compile.sh
+Source8:       PodmanHooks.pm
+Source9:       pkg.preinst
 
 %if 0%{?rhel} >= 8
 Requires:       gcc-toolset-11
@@ -36,6 +40,14 @@ Ensures container based EA4 packages have podman available as well as any common
 
 %build
 echo "Nothing to build"
+
+%pre
+
+%include %{SOURCE9}
+
+%preun
+
+%include %{SOURCE6}
 
 %install
 mkdir -p %{buildroot}/usr/local/cpanel/scripts
@@ -50,10 +62,16 @@ install %{SOURCE2} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/util.pm
 
 cp -f %{SOURCE3} .
 cp -f %{SOURCE4} .
+cp -f %{SOURCE8} .
 
 mkdir -p %{buildroot}/usr/local/cpanel/bin/admin/Cpanel
 install -p %{SOURCE3} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman
 install -p %{SOURCE4} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
+
+install %{SOURCE7} %{buildroot}/opt/cpanel/ea-podman/bin
+
+mkdir -p %{buildroot}/var/cpanel/perl5/lib
+install -p %{SOURCE8} %{buildroot}/var/cpanel/perl5/lib/PodmanHooks.pm
 
 echo "{}" > %{buildroot}/opt/cpanel/ea-podman/registered-containers.json
 
@@ -70,6 +88,8 @@ rm -rf %{buildroot}
 %attr(0755,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman
 %attr(0744,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
 %attr(0600,root,root) /opt/cpanel/ea-podman/registered-containers.json
+%attr(0700,root,root) /opt/cpanel/ea-podman/bin/compile.sh
+%attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
 
 %changelog
 * Wed Jan 19 2022 Dan Muey <dan@cpanel.net> - 1.0-2
