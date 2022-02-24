@@ -12,21 +12,21 @@ use Cpanel::AdminBin::Call ();
 use Cpanel::Debug          ();
 
 sub describe {
-        {
-            'category' => 'System',
-            'event'    => 'upcp',
-            'stage'    => 'post',
-            'hook'     => 'PodmanHooks::_compile_podman',
-            'exectype' => 'module',
-        }
+    {
+        'category' => 'System',
+        'event'    => 'upcp',
+        'stage'    => 'post',
+        'hook'     => 'PodmanHooks::_compile_podman',
+        'exectype' => 'module',
+    }
 
 }
 
 sub _compile_podman {
     my ( $hook, $event ) = @_;
 
-    if (-x '/opt/cpanel/ea-podman/bin/compile.sh') {
-        system( '/opt/cpanel/ea-podman/bin/compile.sh' );
+    if ( -x '/opt/cpanel/ea-podman/bin/compile.sh' ) {
+        system('/opt/cpanel/ea-podman/bin/compile.sh');
     }
 }
 
