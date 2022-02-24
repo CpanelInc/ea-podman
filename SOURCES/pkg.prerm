@@ -25,3 +25,9 @@ else
     fi
 fi
 
+# Remove the hooks
+numhooks=`/usr/local/cpanel/bin/manage_hooks list 2> /dev/null | grep 'hook: PodmanHooks::' | wc -l`
+if [ "$numhooks" -ge 1 ]; then
+    /usr/local/cpanel/bin/manage_hooks delete module PodmanHooks
+fi
+
