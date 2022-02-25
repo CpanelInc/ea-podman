@@ -505,7 +505,7 @@ sub install_container {
     # in the /etc/subuid and /etc/subgid files, critical to podman
     if ( $> == 0 ) {
         local $@;
-        eval { ea_podman::subids::ensure_user("root"); };
+        eval { ea_podman::subids::ensure_user_root("root"); };
 
         die "Unable to ensure the root has subuids and subgids\n" if $@;
     }
@@ -691,6 +691,23 @@ sub deregister_container {
     else {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'DEREGISTER', $container_name );
     }
+}
+
+sub ensure_user {
+
+    # The very first command has to be ensure_user which establishes this user
+    # in the /etc/subuid and /etc/subgid files, critical to podman
+    if ( $> == 0 ) {
+        local $@;
+        eval { ea_podman::subids::ensure_user_root("root"); };
+
+        die "Unable to ensure the root has subuids and subgids\n" if $@;
+    }
+    else {
+        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );
+    }
+
+    return;
 }
 
 1;

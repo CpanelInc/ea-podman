@@ -14,7 +14,7 @@ use Path::Tiny 'path';
 our $good = "✅";
 our $bad  = "❌";
 
-sub ensure_user {
+sub ensure_user_root {
     my ( $user, $num_uids ) = @_;
 
     $num_uids = 65537 if !$num_uids;
