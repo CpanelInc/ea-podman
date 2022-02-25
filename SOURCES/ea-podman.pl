@@ -88,6 +88,10 @@ sub get_dispatch_args {
             help     => "Upgrade the container named CONTAINER_NAME",
             code     => sub {
                 my ( $app, $container_name ) = @_;
+
+                # user can provide a container name that passes validation but
+                # ensure has not happened
+                ea_podman::util::ensure_user();
                 ea_podman::util::upgrade_container($container_name);
             },
         },
@@ -102,6 +106,9 @@ sub get_dispatch_args {
                     return;
                 }
 
+                # user can provide a container name that passes validation but
+                # ensure has not happened
+                ea_podman::util::ensure_user();
                 ea_podman::util::remove_container_by_name($container_name);
             },
         },
@@ -111,6 +118,7 @@ sub get_dispatch_args {
             help     => "Dumps the information about user’s running containers in human readable JSON",
             code     => sub {
                 my ($app) = @_;
+                ea_podman::util::ensure_user();
                 print Cpanel::JSON::pretty_canonical_dump( ea_podman::util::get_containers() );
             },
         },
@@ -121,6 +129,10 @@ sub get_dispatch_args {
             code     => sub {
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
+
+                # user can provide a container name that passes validation but
+                # ensure has not happened
+                ea_podman::util::ensure_user();
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
 
                 ea_podman::util::sysctl( start => $service_name );
@@ -133,6 +145,10 @@ sub get_dispatch_args {
             code     => sub {
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
+
+                # user can provide a container name that passes validation but
+                # ensure has not happened
+                ea_podman::util::ensure_user();
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
 
                 ea_podman::util::sysctl( stop => $service_name );
@@ -145,6 +161,10 @@ sub get_dispatch_args {
             code     => sub {
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
+
+                # user can provide a container name that passes validation but
+                # ensure has not happened
+                ea_podman::util::ensure_user();
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
 
                 ea_podman::util::sysctl( restart => $service_name );
@@ -157,6 +177,10 @@ sub get_dispatch_args {
             code     => sub {
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
+
+                # user can provide a container name that passes validation but
+                # ensure has not happened
+                ea_podman::util::ensure_user();
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
 
                 ea_podman::util::sysctl( status => $service_name );
@@ -169,6 +193,10 @@ sub get_dispatch_args {
             code     => sub {
                 my ( $app, $container_name, $cmd ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
+
+                # user can provide a container name that passes validation but
+                # ensure has not happened
+                ea_podman::util::ensure_user();
                 if ($cmd) {
                     ea_podman::util::podman( exec => "-it", $container_name, "/bin/bash", "-c" => $cmd );
                 }
@@ -272,7 +300,7 @@ This is intended to make it easier for a user to purge their ea-podman based con
 
                                     chdir($homedir);
 
-                                    ea_podman::util::ensure_su_login ();
+                                    ea_podman::util::ensure_su_login();
                                     ea_podman::util::remove_containers_for_a_user( @{ $user_breakdown{$c_user} } );
                                 }
                             );

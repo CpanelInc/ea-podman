@@ -78,7 +78,7 @@ sub ENSURE_USER {
     my $cpuser = $self->_debug_and_user(1);
 
     local $@;
-    eval { ea_podman::subids::ensure_user($cpuser); };
+    eval { ea_podman::subids::ensure_user_root($cpuser); };
 
     if ($@) {
         _die_with_message("Unable to ensure the user has subuids and subgids");
