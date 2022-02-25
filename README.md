@@ -25,6 +25,9 @@ An EA4 container-based package contains everything necessary to setup and manage
 
 As such no additional arguments are needed, simply `ea-podman install <PKG>`.
 
+* You can however pass additional start up args like `-e` and `-v`
+   * Some start up args are handled by ea-podman and will error out if used.
+
 ## How to use `ea-podman` to manage an arbitrary image like we do an EA4 container based package
 
 **Note**: It recommended that you only use images you trust. For example, from docker hub it is best to only use images from a “Verified Publisher” and/or only “Official Images”.

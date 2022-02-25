@@ -214,7 +214,8 @@ sub _ensure_latest_container {
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
         my $pkg_dir = "/opt/cpanel/$pkg";
         if ( -f "$pkg_dir/ea-podman.json" ) {
-            die "Start args not allowed for container based packages\n" if @start_args;
+            die "Upgrade takes no start args\n" if $isupgrade && @start_args;
+            my @given_start_args = @start_args;
 
             # do needful based on /opt/cpanel/$pkg
             my $pkg_conf = Cpanel::JSON::LoadFile("$pkg_dir/ea-podman.json");
@@ -232,10 +233,21 @@ sub _ensure_latest_container {
                     }
                 }
             }
+
+            if ($isupgrade) {
+                if ( -e "$container_dir/ea-podman.json" ) {
+                    my $container_conf = Cpanel::JSON::LoadFile("$container_dir/ea-podman.json");
+                    die "`start_args` is missing from $container_dir/ea-podman.json\n" if !exists $container_conf->{start_args};
+                    die "`start_args` is not a list\n"                                 if ref( $container_conf->{start_args} ) ne "ARRAY";
+                    push @start_args, @{ $container_conf->{start_args} };
+                }
+            }
+
             push @start_args, $pkg_conf->{image};
 
             # ensure ea-podman.json isn’t specifying something it shouldn’t
             validate_start_args( \@start_args );
+
             if ( !$isupgrade ) {
                 mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
             }
@@ -266,6 +278,12 @@ sub _ensure_latest_container {
                     system( "$pkg_dir/ea-podman-local-dir-setup", $container_dir, @ports );
                     warn "$pkg_dir/ea-podman-local-dir-setup did not exit cleanly\n" if $? != 0;
                 }
+
+                # has to happen after script so the script can easily bail if the dir is not empty
+                if (@given_start_args) {
+                    my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@given_start_args } );
+                    _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
+                }
             }
         }
         else {
@@ -276,7 +294,7 @@ sub _ensure_latest_container {
         my @real_start_args;
         my @cpuser_ports;
 
-        die "No start args given\n"         if !@start_args;
+        die "No start args given\n" if !@start_args;
 
         # note the docker container name HAS to be the last argument
         my $docker_name = pop @start_args;
@@ -310,11 +328,9 @@ sub _ensure_latest_container {
 
         # ensure the user isn’t specifying something they shouldn’t
         validate_start_args( \@real_start_args );
-        if ( !$isupgrade ) {
-            mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
-        }
 
         if ( !$isupgrade ) {
+            mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
             _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
         }
