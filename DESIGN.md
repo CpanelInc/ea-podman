@@ -97,7 +97,9 @@ This is referred to here as `<CONTAINERS-HOST-PATH>`
 
 #### Should have its info and logic in `/opt/cpanel/<pkg>`.
 
-If given more startup args on the CLI it should error out.
+Should allow for additional start up options specified in the CLI. Except the ones ea-podman manages.
+
+Those options will be recorded in `<CONTAINERS-HOST-PATH>/ea-podman.json` for later.
 
 0. `pkg-version` should contain the package’s version (including release prefix) w/ no newline. This give us 2 things:
    1. We can bypass the package management system (which is a boon on `dnf` systems since dnf does not play well w/ users (e.g. ZC-9780 and ZC-9770)
@@ -131,6 +133,8 @@ If given more startup args on the CLI it should error out.
 2. `ea-podman-local-dir-setup <CONTAINERS-HOST-PATH> [PORT [,PORT, PORT, …]]` — a script that will setup any files the container needs as well as configuring the ports (if needed) in the application itself
    * in the `ports` example above this would be something like 10001, 10002, 10003
    * the end result would be -p `10001:8080 -p 10002:10002 10003:4200` (the `0` means use the hosts port for th econtainer too)
+   * Should change into <CONTAINERS-HOST-PATH> to do it works and should die if the directory is not empty.
+     * TODO/YAGNI?: ea-podman do both of those things for them. more consistent and less code in setup
 3. If `ea-podman-local-dir-setup` needs files it is suggested to keep them in `ea-podman-local-dir-setup.skel` and have your script operate on those.
 4. `ea-podman-local-dir-upgrade <CONTAINERS-HOST-PATH> <PKG-VERSION-OF-CONTAINER> <PKG-VERSION-ON-THE-SYSTEM-ATM> [PORT [,PORT, PORT, …]]
    * for the versions, splitting on `[+-]` (limit 2) will get the program version and package release version

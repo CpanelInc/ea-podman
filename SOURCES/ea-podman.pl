@@ -74,9 +74,9 @@ sub get_dispatch_args {
         },
 
         install => {
-            clue     => "install <PKG>|<NON-PKG-NAME> [--cpuser-port=<CONTAINER PORT|0> [--cpuser-port=<ANOTHER CONTAINER PORT|0> …]] [`run` flags] <IMAGE>",
+            clue     => "install <PKG> [`run` flags]|install <NON-PKG-NAME> [--cpuser-port=<CONTAINER PORT|0> [--cpuser-port=<ANOTHER CONTAINER PORT|0> …]] [`run` flags] <IMAGE>",
             abstract => "Install a container",
-            help     => "Has two modes:\n\t<PKG> - An EA4 container based package.\n\t\tNeeds no other arguments or setup as that is all provided by the package\n\t<NON-PKG-NAME> - manage an arbitrary image as if it where an EA4 container based package.\n\t\tSee https://github.com/CpanelInc/ea-podman/blob/master/README.md for details",
+            help     => "Has two modes:\n\t<PKG> - An EA4 container based package.\n\t\tNeeds no other arguments or setup as that is all provided by the package. It can take some additional start up arguments.\n\t<NON-PKG-NAME> - manage an arbitrary image as if it where an EA4 container based package.\n\t\tSee https://github.com/CpanelInc/ea-podman/blob/master/README.md for details",
             code     => sub {
                 my ( $app, $name, @start_args ) = @_;
                 ea_podman::util::install_container( $name, @start_args );
@@ -272,7 +272,7 @@ This is intended to make it easier for a user to purge their ea-podman based con
 
                                     chdir($homedir);
 
-                                    ea_podman::util::ensure_su_login ();
+                                    ea_podman::util::ensure_su_login();
                                     ea_podman::util::remove_containers_for_a_user( @{ $user_breakdown{$c_user} } );
                                 }
                             );
