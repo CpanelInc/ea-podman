@@ -294,27 +294,8 @@ sub _ensure_latest_container {
         my @real_start_args;
         my @cpuser_ports;
 
-        die "No start args given for install\n" if !@start_args && !$isupgrade;
-
-        # note the docker image name HAS to be the last argument
-        my $docker_name = pop @start_args;
-        for my $item (@start_args) {
-            if ( $item =~ m/^--cpuser-port(?:=(.+))?/ ) {
-                my $val = $1;
-                die "--cpuser-port is not valid for upgrade\n" if $isupgrade;    # should never get here but juuuust in case
-
-                if ( !length($val) || $val !~ m/^(?:0|[1-9][0-9]+?)$/ ) {
-                    die "--cpuser-port requires a port the container uses (or 0 to be the same as the corresponding host port). e.g. --cpuser-port=8080\n";
-                }
-                push @cpuser_ports, $val;
-            }
-            else {
-                push @real_start_args, $item;
-            }
-        }
-
         if ($isupgrade) {
-            die "Upgrade takes no start args\n"                             if @real_start_args;
+            die "Upgrade takes no start args\n"                             if @start_args;
             die "Missing non-EA4-container $container_dir/ea-podman.json\n" if !-e "$container_dir/ea-podman.json";
             my $container_conf = Cpanel::JSON::LoadFile("$container_dir/ea-podman.json");
             die "`start_args` is missing from $container_dir/ea-podman.json\n" if !exists $container_conf->{start_args};
@@ -323,8 +304,27 @@ sub _ensure_latest_container {
             @cpuser_ports    = @{ $container_conf->{ports} || [] };
             @real_start_args = @{ $container_conf->{start_args} };
         }
+        else {    # install
+            die "No start args given for install\n" if !@start_args;
 
-        push @real_start_args, $docker_name if defined $docker_name;
+            # note the docker image name HAS to be the last argument
+            my $docker_name = pop @start_args;
+            for my $item (@start_args) {
+                if ( $item =~ m/^--cpuser-port(?:=(.+))?/ ) {
+                    my $val = $1;
+
+                    if ( !length($val) || $val !~ m/^(?:0|[1-9][0-9]+?)$/ ) {
+                        die "--cpuser-port requires a port the container uses (or 0 to be the same as the corresponding host port). e.g. --cpuser-port=8080\n";
+                    }
+                    push @cpuser_ports, $val;
+                }
+                else {
+                    push @real_start_args, $item;
+                }
+            }
+
+            push @real_start_args, $docker_name;
+        }
 
         # ensure the user isn’t specifying something they shouldn’t
         validate_start_args( \@real_start_args );
@@ -334,7 +334,8 @@ sub _ensure_latest_container {
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
             _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
         }
-        $docker_name = pop @real_start_args;    # so we can put ports before the image
+
+        my $docker_name = pop @real_start_args;    # so we can put ports before the image
 
         # then add the ports if any
         my @ports = $portsfunc->( $container_name => scalar(@cpuser_ports) );
