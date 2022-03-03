@@ -134,15 +134,22 @@ Those options will be recorded in `<CONTAINERS-HOST-PATH>/ea-podman.json` for la
    * in the `ports` example above this would be something like 10001, 10002, 10003
    * the end result would be -p `10001:8080 -p 10002:10002 10003:4200` (the `0` means use the hosts port for th econtainer too)
    * Should change into <CONTAINERS-HOST-PATH> to do it works and should die if the directory is not empty.
-     * TODO/YAGNI?: ea-podman do both of those things for them. more consistent and less code in setup
+     * ¿TODO/YAGNI?: ea-podman do both of those things for them. more consistent and less code in setup
 3. If `ea-podman-local-dir-setup` needs files it is suggested to keep them in `ea-podman-local-dir-setup.skel` and have your script operate on those.
 4. `ea-podman-local-dir-upgrade <CONTAINERS-HOST-PATH> <PKG-VERSION-OF-CONTAINER> <PKG-VERSION-ON-THE-SYSTEM-ATM> [PORT [,PORT, PORT, …]]
    * for the versions, splitting on `[+-]` (limit 2) will get the program version and package release version
 5. If `ea-podman-local-dir-upgrade` needs files beyond what setup has it is suggested to keep them in `ea-podman-local-dir-upgrade.skel` and have your script operate on those.
+6. `README.md`
+   * This should be installed in `/opt/cpanel/<PKG>/README.md` and will be syminked to at `<CONTAINERS-HOST-PATH>/README.md`
+      * The `ea-podman-local-dir-*` scripts, nor the user, should use `<CONTAINERS-HOST-PATH>/README.md`. If they do it will be corrected in time.
+   * this is used in ZC-9759’s `avail` subcommand
+   * This could also be slurped into (or simply linked to) in docs so we avoid duplicating our efforts and maximize the likelihood a user will find it.
 
 #### Updating
 
-1. The `find-latest-version` should look for the nexest available image from upstream.
+1. The `find-latest-version` should use ea4_tool::util::get_docker_hub_newest_release() (see `ea-tomcat100` for an example).
+   * This makes container based pkgs consistent until in version lookup (and findable during ZC-9774)
+   * This also means naming the package based on docker hub (`ea-{name}{minor sans period}` from `https://registry.hub.docker.com/v2/repositories/{namespace}{name}/tags/{minor}[.<RELEASE>]`)
 2. To fully automate updates: the `ea4-tool-post-update` script just needs to update the version in the `image` field of `ea-podman.json`.
 
 ZC-9686: Perhaps the tooling could contain boiler plate scripts that packages can link to like we do w/ PHPs’ find-latest-version.
