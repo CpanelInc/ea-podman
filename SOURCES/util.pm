@@ -285,6 +285,13 @@ sub _ensure_latest_container {
                     _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
                 }
             }
+
+            # Ensure "$container_dir/README.md" is correct
+            unlink "$container_dir/README.md";
+            symlink( "$pkg_dir/README.md", "$container_dir/README.md" );
+            if ( -l "$container_dir/README.md" && !-e _ ) {
+                warn "!!!! ATTN DEVELOPER !! - failed to include required README.md for “$pkg” in “$pkg_dir/README.md”\n";
+            }
         }
         else {
             die "“$pkg” looks like an EA4 package but it is not a container based EA4 package. Please use the correct package name (or install it if it was uninstalled but its directory left behind) or use a name that does not start w/ `ea-`.\n";
