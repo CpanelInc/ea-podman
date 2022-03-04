@@ -494,6 +494,50 @@ sub validate_start_args {
     return 1;
 }
 
+use constant passwd_file => "/etc/passwd";
+
+sub is_running_jailshell {
+
+    # for reasons unknown, when running jailshell
+    # getpwent says your running bash, but SHELL var
+    # and /etc/passwd show jailshell
+
+    if ( exists $ENV{SHELL} ) {
+        my $shell = $ENV{SHELL};
+        return 1 if ( $shell =~ m/jailshell/ );
+        return 0;
+    }
+
+    # for reasons unknown var SHELL is not set, go to passwd manually
+    # because getpwent still says bash even if we are jailshell
+
+    if ( -r passwd_file ) {    # we might have permission issues
+        my $user = getpwent();
+
+        if ( open my $fh, '<', passwd_file ) {
+            while (<$fh>) {
+                chomp;
+                my @array = split( ':', $_ );
+                if ( $array[0] eq $user ) {
+                    close $fh;
+                    if ( $array[6] =~ m/jailshell/ ) {
+                        return 1;
+                    }
+                    else {
+                        return 0;
+                    }
+                }
+            }
+        }
+    }
+
+    # we have run out of options
+
+    my $shell = ( getpwent() )[-1];
+    return 1 if ( $shell =~ m/jailshell/ );
+    return 0;
+}
+
 ###########################
 #### main container CRUD ##
 ###########################

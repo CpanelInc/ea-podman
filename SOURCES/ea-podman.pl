@@ -48,6 +48,7 @@ run(@ARGV) unless caller;
 sub run {
     my @args = @_;
     local $Term::ReadLine::termcap_nowarn = 1;
+    die "Cannot run ea-podman from jailshell\n" if ( ea_podman::util::is_running_jailshell() );
     return App::CmdDispatch->new( get_dispatch_args() )->run(@args);
 }
 
