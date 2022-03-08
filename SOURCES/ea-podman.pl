@@ -36,9 +36,10 @@ BEGIN {
     }
 }
 
-use Cpanel::Config::Users ();
-use Cpanel::JSON          ();
-use Cpanel::AccessIds     ();
+use Cpanel::Config::Users     ();
+use Cpanel::JSON              ();
+use Cpanel::AccessIds         ();
+use Whostmgr::Accounts::Shell ();
 
 use Term::ReadLine   ();
 use App::CmdDispatch ();
@@ -48,6 +49,10 @@ run(@ARGV) unless caller;
 sub run {
     my @args = @_;
     local $Term::ReadLine::termcap_nowarn = 1;
+
+    my $user = getpwuid($>);
+    die "Cannot run ea-podman from a restricted shell\n" if ( !Whostmgr::Accounts::Shell::has_unrestricted_shell($user) );
+
     return App::CmdDispatch->new( get_dispatch_args() )->run(@args);
 }
 
