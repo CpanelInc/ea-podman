@@ -11,15 +11,56 @@ use warnings;
 use Cpanel::AdminBin::Call ();
 use Cpanel::Debug          ();
 
-sub describe {
-    {
-        'category' => 'System',
-        'event'    => 'upcp',
-        'stage'    => 'post',
-        'hook'     => 'PodmanHooks::_compile_podman',
-        'exectype' => 'module',
-    }
+BEGIN {
+    # I cannot get this to work using FindBin in 4 different environments, this works in all
+    # 4 enviroments.
+    #
+    # The environments:
+    #
+    # Testing,  in the ea-podman repo dir
+    # Script,   in /opt/cpanel/ea-podman/bin/ea-podman
+    # Script,   in /usr/local/cpanel/scripts/ea-podman
+    # AdminBin, in /usr/cpanel/local/bin/admin/Cpanel
 
+    if ( -e '/opt/cpanel/ea-podman/lib' ) {    # it has been installed on the machine
+        require '/opt/cpanel/ea-podman/lib/ea_podman/util.pm';
+    }
+    else {                                     # this is for testing
+        if ( -d 'SOURCES' ) {
+            require './SOURCES/util.pm';
+        }
+        else {
+            require '/root/git/ea-podman/SOURCES/util.pm';
+        }
+    }
+}
+
+sub describe {
+    my $hooks = [
+        {
+            'category' => 'System',
+            'event'    => 'upcp',
+            'stage'    => 'post',
+            'hook'     => 'PodmanHooks::_compile_podman',
+            'exectype' => 'module',
+        },
+        {
+            'category' => 'Whostmgr',
+            'event'    => 'Accounts::Modify',
+            'stage'    => 'pre',
+            'hook'     => 'PodmanHooks::_pre_username_change',
+            'exectype' => 'module',
+        },
+        {
+            'category' => 'Whostmgr',
+            'event'    => 'Accounts::Remove',
+            'stage'    => 'pre',
+            'hook'     => 'PodmanHooks::_delete_user',
+            'exectype' => 'module',
+        },
+    ];
+
+    return $hooks;
 }
 
 sub _compile_podman {
@@ -28,6 +69,67 @@ sub _compile_podman {
     if ( -x '/opt/cpanel/ea-podman/bin/compile.sh' ) {
         system('/opt/cpanel/ea-podman/bin/compile.sh');
     }
+
+    return;
+}
+
+sub _pre_username_change {
+    my ( $hook, $event ) = @_;
+
+    # no work if the username is not changed
+    return ( 1, "Success" ) if ( $event->{newuser} && $event->{newuser} eq $event->{user} );
+
+    my $user = $event->{user};
+
+    my $containers_hr   = ea_podman::util::load_known_containers();
+    my $user_containers = {};
+    foreach my $container ( grep { $_->{user} eq $user } values %{$containers_hr} ) {
+        $user_containers->{ $container->{container_name} } = $container;
+    }
+
+    # no problem if the user does not have containers
+    return 1, "Success" if ( keys %{$user_containers} == 0 );
+
+    return 0, qq{
+
+You cannot change the name of this user.
+This user's account uses podman containers and these will not function if the name is changed.
+For more information, read our documentation: https://go.cpanel.net/containers
+
+};
+}
+
+sub _delete_user {
+    my ( $hook, $event ) = @_;
+
+    my $user = $event->{user};
+
+    my $containers_hr = ea_podman::util::load_known_containers();
+
+    my $user_containers = {};
+    foreach my $container ( grep { $_->{user} eq $user } values %{$containers_hr} ) {
+        $user_containers->{ $container->{container_name} } = $container;
+    }
+
+    return 1, "Success" if ( keys %{$user_containers} == 0 );
+
+    # now remove the containers
+
+    Cpanel::AccessIds::do_as_user_with_exception(
+        $user,
+        sub {
+            my $homedir = ( getpwuid($>) )[7];
+            local $ENV{HOME} = $homedir;
+            local $ENV{USER} = $user;
+
+            chdir($homedir);
+
+            ea_podman::util::ensure_su_login();
+            ea_podman::util::remove_containers_for_a_user( values %{$user_containers} );
+        }
+    );
+
+    return 1, "Success";
 }
 
 1;
