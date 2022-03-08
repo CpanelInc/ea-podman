@@ -183,7 +183,7 @@ sub generate_container_service {
     `podman generate systemd --restart-policy on-failure --name $container_name_qx > ~/.config/systemd/user/$service_name_qx`;
     die "Failed to generate service file\n" if $? != 0;
 
-    sysctl( enable => $service_name ) || die "Failed to enabled “$service_name”\n";
+    sysctl( enable => $service_name ) || die "Failed to enable “$service_name”\n";
     return 1;
 }
 
