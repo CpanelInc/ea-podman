@@ -102,16 +102,14 @@ sub stop_user_container {
     return;
 }
 
-sub start_user_container {
+sub create_user_container {
     my ( $container_name, @start_args ) = @_;
     validate_user_container_name($container_name);
 
     # start args should already have been validated and ports added
     # So we do not want this here: validate_start_args( \@start_args );
 
-    my $output = podman( 'create', "--hostname" => $container_name, "--name" => $container_name, @start_args );
-
-    return $output;
+    return podman( 'create', "--hostname" => $container_name, "--name" => $container_name, @start_args );
 }
 
 sub get_container_service_name {
@@ -358,8 +356,14 @@ sub _ensure_latest_container {
     }
 
     uninstall_container($container_name) if $isupgrade;    # avoid spurious warnings on install
-    register_container( $container_name, $isupgrade );
-    start_user_container( $container_name, @start_args );
+    register_container( $container_name, $isupgrade );     # register before create just in case
+
+    if ( !$isupgrade && !create_user_container( $container_name, @start_args ) ) {
+        deregister_container($container_name);
+        File::Path::Tiny::rm($container_dir);
+        die "Failed to create container\n";
+    }
+
     generate_container_service($container_name);
 
     my $service_name = get_container_service_name($container_name);
