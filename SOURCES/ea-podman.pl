@@ -74,10 +74,10 @@ sub run {
 sub get_dispatch_args {
     my $hint_blurb = "This tool supports the following commands (i.e. $0 {command} …):";
     my %opts       = (
-        'default_commands' => 'help',                                                                                                                                                                                               # shell is probably not useful here and potentially confusing
+        'default_commands' => 'help',                                                                                                                                                                                                                                                       # shell is probably not useful here and potentially confusing
         'help:pre_hint'    => $hint_blurb,
         'help:pre_help'    => "Various EA4 user-container based service/app/etc management\n\n$hint_blurb",
-        alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop", sid => "subids", si => "subids", registered => "containers" },
+        alias              => { stat => "status", in => "install", up => "upgrade", un => "uninstall", li => "list", re => "restart", st => "start", sp => "stop", sid => "subids", si => "subids", registered => "containers", running => "list", available => "avail", av => "avail" },
     );
 
     if ( $> == 0 ) {
@@ -330,6 +330,29 @@ This is intended to make it easier for a user to purge their ea-podman based con
                 else {
                     ea_podman::util::remove_containers_for_a_user(@containers);
                 }
+            },
+        },
+        avail => {
+            clue     => "avail",
+            abstract => "list available EA4 container based packages",
+            help     => "lists available EA4 container based packages and, for each one, shows if its installed locally or not and has a URL to its documentation",
+            code     => sub {
+                my ($app) = @_;
+
+                my $e4m = Cpanel::JSON::LoadFile("/etc/cpanel/ea4/ea4-metainfo.json");
+                if ( !exists $e4m->{container_based_packages} ) {
+                    die "Container based packages list not found (need to upgrade ea-cpanel-tools?)\n";
+                }
+
+                my %avail;
+                for my $pkg ( @{ $e4m->{container_based_packages} } ) {
+                    $avail{$pkg}{installed_locally} = -e "/opt/cpanel/$pkg/pkg-version" ? 1 : 0;
+                    $avail{$pkg}{url}               = "https://github.com/CpanelInc/$pkg/blob/master/SOURCES/README.md";
+                }
+
+                print Cpanel::JSON::pretty_canonical_dump( \%avail );
+
+                return 1;
             },
         },
     );
