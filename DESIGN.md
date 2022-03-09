@@ -61,6 +61,12 @@ Typically will be run by users but if root wants to do containers they can use t
 
 If they want to manage containers for users they can use `su` (hint/help output should indicate that).
 
+#### When a container runs as `USER` other than `root` && needs to work with files in `~/<CONTAINER-NAME>`
+
+The host user will not be able to see files owned by the container user (and vice vers).
+
+See ZC-9813 for details on how to get that to work.
+
 ### Images we use in EA4 container based packages
 
 * We should use the full URL
@@ -70,8 +76,12 @@ If they want to manage containers for users they can use `su` (hint/help output 
   * that is a popular and trusted registry
   * makes it easier to query for updates with one API
 * non-EA4 packages can use whatever registries and images they wish
+* The tag we choose should be `{major}.{minor}.{build}` so its easy to work with automatically for us and clear for users.
+   * like `1.2.3` w/ no letters or other characters
 
 ### Naming
+
+A package should be `ea-{docker-hub-name}{major}{minor}`. This adds consistency and allows us to automatically update it.
 
 To remain unique on the system and support multiple instances of the same image we will:
 
