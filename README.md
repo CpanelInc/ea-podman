@@ -50,7 +50,7 @@ Let’s say the user `bob` wanted to use the latest official mongo from docker h
 `ea-podman install mymongo --cpuser-port=8081 -e "ME_CONFIG_MONGODB_ADMINUSERNAME=root" -e "ME_CONFIG_MONGODB_ADMINPASSWORD=example" docker.io/library/mongo:latest`
 
 Now `bob`:
-1. has a directory `~/mymongo.bob.01` for use by the container (useful for `-v`)
+1. has a directory `~/ea-podman/mymongo.bob.01` for use by the container (useful for `-v`)
 2. Can use `mymongo.bob.01` for various `ea-podman` subcommands, e.g.
    * `ea-podman restart mymongo.bob.01` restart the container
    * `ea-podman bash mymongo.bob.01` get a shell inside the container (if it has bash)

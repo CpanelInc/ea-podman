@@ -144,11 +144,11 @@ sub get_next_available_container_name {    # ¿TODO/YAGNI?: make less racey
     #   3. If they found a way to do ^^^ the worst case senario is root get a different number
     #      * if they used up all 99 options then there would be an error to indicate something is awry
 
-    my $homedir = ( getpwuid($>) )[7];
+    my $container_root = _get_container_root();
     my $container_name;
     for my $n ( 1 .. $max ) {
         my $path = sprintf( $name, $n );
-        if ( !exists $container_hr->{$path} && !-e "$homedir/$path" && !-e "$homedir/$path.bak" ) {
+        if ( !exists $container_hr->{$path} && !-e "$container_root/$path" && !-e "$container_root/$path.bak" ) {
             $container_name = $path;
             last;
         }
@@ -204,8 +204,8 @@ sub _ensure_latest_container {
         die "_ensure_latest_container() should only be called by install_container() or upgrade_container() (i.e. not $caller_func())\n";
     }
 
-    my $homedir       = ( getpwuid($>) )[7];
-    my $container_dir = "$homedir/$container_name";
+    my $container_root = _get_container_root();
+    my $container_dir  = "$container_root/$container_name";
 
     if ($isupgrade) {
         die "“$container_dir” does not exist\n" if !-d $container_dir;
@@ -249,7 +249,7 @@ sub _ensure_latest_container {
             validate_start_args( \@start_args );
 
             if ( !$isupgrade ) {
-                mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
+                File::Path::Tiny::mk($container_dir) || die "Could not create “$container_dir”: $!\n";
             }
 
             # then add the ports if any
@@ -337,7 +337,7 @@ sub _ensure_latest_container {
         validate_start_args( \@real_start_args );
 
         if ( !$isupgrade ) {
-            mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
+            File::Path::Tiny::mk($container_dir) || die "Could not create “$container_dir”: $!\n";
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
             _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
         }
@@ -541,10 +541,10 @@ sub upgrade_container {
 sub move_container_dir {
     my ($container_name) = @_;
 
-    my $homedir       = ( getpwuid($>) )[7];
-    my $container_dir = "$homedir/$container_name";
+    my $container_root = _get_container_root();
+    my $container_dir  = "$container_root/$container_name";
 
-    print "Moving “~/$container_name” to “~/$container_name.bak”\n";
+    print "Moving “~/ea-podman.d/$container_name” to “~/ea-podman.d/$container_name.bak”\n";
     path($container_dir)->move("$container_dir.bak");
 
     return;
@@ -722,6 +722,11 @@ sub ensure_user {
     }
 
     return;
+}
+
+sub _get_container_root {
+    my $homedir = ( getpwuid($>) )[7];
+    return "$homedir/ea-podman.d";
 }
 
 1;
