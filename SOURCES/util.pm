@@ -298,6 +298,8 @@ sub _ensure_latest_container {
         }
     }
     else {
+        _arbitrary_image_warning( \@start_args ) if !$isupgrade;
+
         my @real_start_args;
         my @cpuser_ports;
 
@@ -521,7 +523,7 @@ sub install_container {
         local $@;
         eval { ea_podman::subids::ensure_user_root("root"); };
 
-        die "Unable to ensure the root has subuids and subgids\n" if $@;
+        #die "Unable to ensure the root has subuids and subgids\n" if $@;
     }
     else {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );
@@ -727,6 +729,34 @@ sub ensure_user {
 sub _get_container_root {
     my $homedir = ( getpwuid($>) )[7];
     return "$homedir/ea-podman.d";
+}
+
+sub _arbitrary_image_warning {
+    my ($start_args) = @_;
+
+    warn <<"DRAGONS";
+🐉🐲🀄️
+!!!! Important message about arbitrary images !!
+
+For security and reliability, when using arbitrary images, we highly recommend the following:
+
+  • only use a trusted registry
+  • only use “Official Image” and/or “Verified Publisher” images
+  • specifying a version specific tag so that a major or minor change won’t break your containers
+
+DRAGONS
+
+    if ( grep m/^--i-understand-the-risks-do-it-anyway$/, @{$start_args} ) {
+        my @new_start_args = grep { $_ !~ m/^--i-understand-the-risks-do-it-anyway$/ } @{$start_args};
+        @{$start_args} = @new_start_args;
+        print "Proceeding per --i-understand-the-risks-do-it-anyway flag …\n";
+    }
+    else {
+        # do not document, do not want to encourage ignoring this via copy and paste
+        die "If you really want to continue pass `--i-understand-the-risks-do-it-anyway`\n";
+    }
+
+    return 1;
 }
 
 1;

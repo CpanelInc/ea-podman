@@ -30,7 +30,17 @@ As such no additional arguments are needed, simply `ea-podman install <PKG>`.
 
 ## How to use `ea-podman` to manage an arbitrary image like we do an EA4 container based package
 
-**Note**: It recommended that you only use images you trust. For example, from docker hub it is best to only use images from a “Verified Publisher” and/or only “Official Images”.
+**Note**: It recommended that you only use images you trust. For example, from docker hub it is best to only use images from a “Verified Publisher” and/or only “Official Images”. To help encourage that you will see this message on install:
+```
+🐉🐲🀄️
+!!!! Heads up about arbitrary images !!
+
+For security and reliability, when using arbitrary images, we highly recommend the following:
+
+  • only use a trusted registry
+  • only use “Official Image” and/or “Verified Publisher” images
+  • specifying a version specific tag so that a major or minor change won’t break your containers
+```
 
 To use any image you wish you need at least two things:
 
