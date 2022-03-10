@@ -60,3 +60,19 @@ Now `bob`:
 
 * get a list of subcommands via `ea-podman`
 * get help in a given subcommand: `ea-podman help <SUBCMD>`
+
+## FAQ
+
+### What about networking?
+
+It works the same as using podman directly.
+
+**Details**: https://podman.io/getting-started/network
+
+**TL;DR**:
+
+You can:
+
+1. create a network however you like
+   * e.g. `podman network create skynet` for a bridged network named `skynet`
+2. pass `--network` to `ea-podman install` of 2 or more images that need it
