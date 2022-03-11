@@ -144,11 +144,11 @@ sub get_next_available_container_name {    # ¿TODO/YAGNI?: make less racey
     #   3. If they found a way to do ^^^ the worst case senario is root get a different number
     #      * if they used up all 99 options then there would be an error to indicate something is awry
 
-    my $homedir = ( getpwuid($>) )[7];
+    my $container_root = _get_container_root();
     my $container_name;
     for my $n ( 1 .. $max ) {
         my $path = sprintf( $name, $n );
-        if ( !exists $container_hr->{$path} && !-e "$homedir/$path" && !-e "$homedir/$path.bak" ) {
+        if ( !exists $container_hr->{$path} && !-e "$container_root/$path" && !-e "$container_root/$path.bak" ) {
             $container_name = $path;
             last;
         }
@@ -204,8 +204,8 @@ sub _ensure_latest_container {
         die "_ensure_latest_container() should only be called by install_container() or upgrade_container() (i.e. not $caller_func())\n";
     }
 
-    my $homedir       = ( getpwuid($>) )[7];
-    my $container_dir = "$homedir/$container_name";
+    my $container_root = _get_container_root();
+    my $container_dir  = "$container_root/$container_name";
 
     if ($isupgrade) {
         die "“$container_dir” does not exist\n" if !-d $container_dir;
@@ -249,7 +249,7 @@ sub _ensure_latest_container {
             validate_start_args( \@start_args );
 
             if ( !$isupgrade ) {
-                mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
+                File::Path::Tiny::mk($container_dir) || die "Could not create “$container_dir”: $!\n";
             }
 
             # then add the ports if any
@@ -298,6 +298,8 @@ sub _ensure_latest_container {
         }
     }
     else {
+        _arbitrary_image_warning( \@start_args ) if !$isupgrade;
+
         my @real_start_args;
         my @cpuser_ports;
 
@@ -337,7 +339,7 @@ sub _ensure_latest_container {
         validate_start_args( \@real_start_args );
 
         if ( !$isupgrade ) {
-            mkdir $container_dir || die "Could not create “$container_dir”: $!\n";
+            File::Path::Tiny::mk($container_dir) || die "Could not create “$container_dir”: $!\n";
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
             _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
         }
@@ -541,10 +543,10 @@ sub upgrade_container {
 sub move_container_dir {
     my ($container_name) = @_;
 
-    my $homedir       = ( getpwuid($>) )[7];
-    my $container_dir = "$homedir/$container_name";
+    my $container_root = _get_container_root();
+    my $container_dir  = "$container_root/$container_name";
 
-    print "Moving “~/$container_name” to “~/$container_name.bak”\n";
+    print "Moving “$container_root/$container_name” to “$container_root/$container_name.bak”\n";
     path($container_dir)->move("$container_dir.bak");
 
     return;
@@ -722,6 +724,39 @@ sub ensure_user {
     }
 
     return;
+}
+
+sub _get_container_root {
+    my $homedir = ( getpwuid($>) )[7];
+    return "$homedir/ea-podman.d";
+}
+
+sub _arbitrary_image_warning {
+    my ($start_args) = @_;
+
+    warn <<"DRAGONS";
+🐉🐲🀄️
+!!!! Important message about arbitrary images !!
+
+For security and reliability, when using arbitrary images, we highly recommend the following:
+
+  • only use a trusted registry
+  • only use “Official Image” and/or “Verified Publisher” images
+  • specifying a version specific tag so that a major or minor change won’t break your containers
+
+DRAGONS
+
+    if ( grep m/^--i-understand-the-risks-do-it-anyway$/, @{$start_args} ) {
+        my @new_start_args = grep { $_ !~ m/^--i-understand-the-risks-do-it-anyway$/ } @{$start_args};
+        @{$start_args} = @new_start_args;
+        print "Proceeding per --i-understand-the-risks-do-it-anyway flag …\n";
+    }
+    else {
+        # do not document, do not want to encourage ignoring this via copy and paste
+        die "If you really want to continue pass `--i-understand-the-risks-do-it-anyway`\n";
+    }
+
+    return 1;
 }
 
 1;

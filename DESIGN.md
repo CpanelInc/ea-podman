@@ -61,7 +61,7 @@ Typically will be run by users but if root wants to do containers they can use t
 
 If they want to manage containers for users they can use `su` (hint/help output should indicate that).
 
-#### When a container runs as `USER` other than `root` && needs to work with files in `~/<CONTAINER-NAME>`
+#### When a container runs as `USER` other than `root` && needs to work with files in `~/ea-podman.d/<CONTAINER-NAME>`
 
 The host user will not be able to see files owned by the container user (and vice vers).
 
@@ -99,7 +99,7 @@ We are going with user level systemd:
 
 ### If it needs files on the host
 
-Each instance will have a directory `~/<CONTAINER_NAME>/`.
+Each instance will have a directory `~/ea-podman.d/<CONTAINER_NAME>/`.
 
 This is referred to here as `<CONTAINERS-HOST-PATH>`
 
