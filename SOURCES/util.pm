@@ -523,7 +523,7 @@ sub install_container {
         local $@;
         eval { ea_podman::subids::ensure_user_root("root"); };
 
-        #die "Unable to ensure the root has subuids and subgids\n" if $@;
+        die "Unable to ensure the root has subuids and subgids\n" if $@;
     }
     else {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );
@@ -546,7 +546,7 @@ sub move_container_dir {
     my $container_root = _get_container_root();
     my $container_dir  = "$container_root/$container_name";
 
-    print "Moving “~/ea-podman.d/$container_name” to “~/ea-podman.d/$container_name.bak”\n";
+    print "Moving “$container_root/$container_name” to “$container_root/$container_name.bak”\n";
     path($container_dir)->move("$container_dir.bak");
 
     return;
