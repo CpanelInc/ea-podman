@@ -360,9 +360,12 @@ sub _ensure_latest_container {
     uninstall_container($container_name) if $isupgrade;    # avoid spurious warnings on install
     register_container( $container_name, $isupgrade );     # register before create just in case
 
-    if ( !$isupgrade && !create_user_container( $container_name, @start_args ) ) {
-        deregister_container($container_name);
-        File::Path::Tiny::rm($container_dir);
+    if ( !create_user_container( $container_name, @start_args ) ) {
+        if ( !$isupgrade ) {
+            deregister_container($container_name);
+            File::Path::Tiny::rm($container_dir);
+        }
+
         die "Failed to create container\n";
     }
 
