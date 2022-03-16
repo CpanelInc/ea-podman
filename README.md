@@ -77,11 +77,19 @@ Now `bob`:
 
 It works the same as using podman directly.
 
-**Details**: https://podman.io/getting-started/network
+**Details**:
+
+* https://podman.io/getting-started/network
+* https://www.redhat.com/sysadmin/container-networking-podman
 
 **TL;DR**:
 
-You can:
+If you are not `root` you have two options:
+
+1. Use `--pod` to group the containers that need to talk to each other
+2. Do communication via your containers’ ports
+
+If you are `root` you can additionally:
 
 1. create a network however you like
    * e.g. `podman network create skynet` for a bridged network named `skynet`
