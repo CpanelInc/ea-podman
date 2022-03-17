@@ -87,9 +87,9 @@ sub get_dispatch_args {
 
     my %cmds = (
         subids => {
-            clue     => "subids",
+            clue     => "subids [--ensure]",
             abstract => "Check and report on sub id config",
-            help     => "Checks that use name spaces are enabled or not and if so what sub uids and sub gids are allocated",
+            help     => "Checks that use name spaces are enabled or not and if so what sub uids and sub gids are allocated\nOptional --ensure flag, makes sure the subids are setup for this user.",
             code     => \&subids,
         },
 
@@ -365,9 +365,17 @@ This is intended to make it easier for a user to purge their ea-podman based con
 ####################
 
 sub subids {
-    my ($app) = @_;
+    my ( $app, @other ) = @_;
 
     ea_podman::subids::assert_has_user_namespaces(1);
+
+    if ( @other == 1 && $other[0] eq "--ensure" ) {
+        ea_podman::util::ensure_user();
+    }
+    else {
+        die "Too many arguments"                    if @other > 1;
+        die "--ensure is the only allowed argument" if @other && $other[0] ne "--ensure";
+    }
 
     my $subuid_lu = ea_podman::subids::get_subuids();
     my $subgid_lu = ea_podman::subids::get_subgids();
