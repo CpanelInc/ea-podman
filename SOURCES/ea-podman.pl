@@ -372,6 +372,10 @@ sub subids {
     if ( @other == 1 && $other[0] eq "--ensure" ) {
         ea_podman::util::ensure_user();
     }
+    else {
+        die "Too many arguments"                    if @other > 1;
+        die "--ensure is the only allowed argument" if @other && $other[0] ne "--ensure";
+    }
 
     my $subuid_lu = ea_podman::subids::get_subuids();
     my $subgid_lu = ea_podman::subids::get_subgids();
