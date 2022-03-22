@@ -135,7 +135,6 @@ sub get_dispatch_args {
             help     => "Dumps the information about user’s running containers in human readable JSON",
             code     => sub {
                 my ($app) = @_;
-                ea_podman::util::init_user();
                 print Cpanel::JSON::pretty_canonical_dump( ea_podman::util::get_containers() );
             },
         },

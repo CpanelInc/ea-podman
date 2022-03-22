@@ -13,7 +13,7 @@ package ea_podman::util;
 ######################
 # See POD for more on this, but TL;DR:
 # All consumers of this module must ensure ea_podman::util::init_user()
-#    is called prior to calling other functions (except validate_user_container_name())
+#    is called prior to calling other functions (there are some exceptions in POD)
 sub init_user {
     ensure_su_login();
     ensure_user();
@@ -813,4 +813,4 @@ All consumers of this module must ensure that this function is called prior to c
 
 Why? If this module doesn’t assume the consumer has init’d it’d need done in pretty much all functions. That would be wasteful and slow things down.
 
-One exception: C<validate_user_container_name()> is safe to call before C<init_user()>.
+Some exceptions where it is safe to call before C<init_user()> are C<validate_user_container_name()>, C<load_known_containers()>, and C<get_containers()>.
