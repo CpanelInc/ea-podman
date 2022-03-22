@@ -740,16 +740,16 @@ sub ensure_rootless_perms {
         print "Checking for paths not owned by host user …\n";
         my $time_start = time();
 
-        # `podman unshare chown root -h -R .local/share/containers/`
-        #     may be faster when there are tens of thousands of files that need fixed
-        system("find $homedir/.local/share/containers ! -user $> -exec podman unshare chown root {} \\;");
+        # when there are tens of thousands of mis-owned files the recursive chown if faster than:
+        #     system("find $local_cdir ! -user $> -exec podman unshare chown root {} \\;");
+        system("podman unshare chown root -h -R $local_cdir");
         print " … done. (took " . _elapsed_since($time_start) . ")\n";
 
         # paths can be 000, safe to give the user access to their own paths
         print "Checking for paths the host user has no rights on …\n";
         $time_start = time();
 
-        system("find $homedir/.local/share/containers ! -perm /u+rwx -exec podman unshare chmod u+rwx {} \\;");
+        system("find $local_cdir ! -perm /u+rwx -exec podman unshare chmod u+rwx {} \\;");
         print " … done. (took " . _elapsed_since($time_start) . ")\n";
     }
 

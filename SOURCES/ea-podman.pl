@@ -376,6 +376,8 @@ sub subids {
     else {
         my $user = getpwuid($>);
         _check_output_user( $user, $subuid_lu, $subgid_lu );
+        print "Count of ~/.local/share/containers permission issues (pass `--ensure` to resolve those):\n";
+        system("find ~/.local/share/containers ! -user $> -or ! -perm /u+rwx | wc -l");
     }
 }
 
