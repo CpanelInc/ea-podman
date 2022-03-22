@@ -737,13 +737,31 @@ sub ensure_rootless_perms {
 
         # paths can become owned by users other than `podman unshare whoami`
         #    i.e. the user-namespace’s root (which is safe because its not real root; its essentially the user)
+        print "Checking for paths not owned by host user …\n";
+        my $time_start = time();
+
         system("find $homedir/.local/share/containers ! -user $> -exec podman unshare chown root {} \\;");
+        print " … done. (took " . _elapsed_since($time_start) . ")\n";
 
         # paths can be 000, safe to give the user access to their own paths
+        print "Checking for paths the host user has no rights on …\n";
+        $time_start = time();
+
         system("find $homedir/.local/share/containers ! -perm /u+rwx -exec podman unshare chmod u+rwx {} \\;");
+        print " … done. (took " . _elapsed_since($time_start) . ")\n";
     }
 
     return;
+}
+
+sub _elapsed_since {
+    my ($since) = @_;
+
+    my $seconds = time() - $since;
+    my $minutes = int( $seconds / 60 );
+    my $hours   = int( $minutes / 60 );
+
+    return sprintf "%02d:%02d:%02d", $hours, $minutes, $seconds;
 }
 
 sub _get_container_root {
