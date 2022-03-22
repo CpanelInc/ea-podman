@@ -8,6 +8,16 @@ use strict;
 use warnings;
 
 package ea_podman::util;
+######################
+#### CAVEAT EMPTOR! ##
+######################
+# See POD for more on this, but TL;DR:
+# All consumers of this module must ensure ea_podman::util::init_user()
+#    is called prior to calling other functions (except validate_user_container_name())
+sub init_user {
+    ensure_su_login();
+    ensure_user();
+}
 
 use Cpanel::JSON           ();
 use Cpanel::AdminBin::Call ();
@@ -25,7 +35,7 @@ my $known_containers_file             = '/opt/cpanel/ea-podman/registered-contai
 my $image_name_regexp = qr'^(?:(?=[^:\/]{4,253})(?!-)[a-zA-Z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-zA-Z0-9-]{1,63}(?<!-))*(?::[0-9]{1,5})?/)?((?![._-])(?:[a-z0-9._-]*)(?<![._-])(?:/(?![._-])[a-z0-9._-]*(?<![._-]))*)(?::(?![.-])[a-zA-Z0-9_.-]{1,128})?$';
 
 sub ensure_su_login {    # needed when $user is from root `su - $user` and not SSH
-    $ENV{DBUS_SESSION_BUS_ADDRESS} ||= "unix:path=/run/user/$>/bus";
+    $ENV{DBUS_SESSION_BUS_ADDRESS} ||= "unix:path=/run/user/$>/bus";    # root can need this
 
     return if $> == 0;
 
@@ -54,21 +64,22 @@ sub ensure_su_login {    # needed when $user is from root `su - $user` and not S
 }
 
 sub podman {
-    ensure_su_login();
     system( podman => @_ );
-    return $? == 0 ? 1 : 0;
+    my $rv = $? == 0 ? 1 : 0;
+    ensure_rootless_perms();
+    return $rv;
 }
 
 sub sysctl {
-    ensure_su_login();
     system( systemctl => "--user", @_ );    # ¿ if $> == 0 do --root => "~/.config/systemd/user" instead of `--user` ?
-    return $? == 0 ? 1 : 0;
+    my $rv = $? == 0 ? 1 : 0;
+    ensure_rootless_perms();
+    return $rv;
 }
 
 sub is_user_container_name_running {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
-    ensure_su_login();
 
     $container_name = quotemeta($container_name);
     `podman ps --no-trunc --format "{{.Names}}" | grep --quiet ^$container_name\$`;
@@ -77,7 +88,6 @@ sub is_user_container_name_running {
 
 sub is_user_container_id_running {
     my ($container_id) = @_;    # short and long .ID (since the regex is not anchored at the end)
-    ensure_su_login();
 
     $container_id = quotemeta($container_id);
     `podman ps --no-trunc --format "{{.ID}}" | grep --quiet ^$container_id`;
@@ -98,6 +108,7 @@ sub stop_user_container {
     # via system, however backticks suppresses them
 
     `podman stop --ignore --time 30 $container_name 2> /dev/null > /dev/null`;
+    ensure_rootless_perms();
 
     return;
 }
@@ -518,28 +529,12 @@ sub validate_start_args {
 
 sub install_container {
     my ( $name, @start_args ) = @_;
-    ensure_su_login();
-
-    # The very first command has to be ensure_user which establishes this user
-    # in the /etc/subuid and /etc/subgid files, critical to podman
-    if ( $> == 0 ) {
-        local $@;
-        eval { ea_podman::subids::ensure_user_root("root"); };
-
-        die "Unable to ensure the root has subuids and subgids\n" if $@;
-    }
-    else {
-        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );
-    }
-
     _ensure_latest_container( get_next_available_container_name($name), @start_args );
 }
 
 sub upgrade_container {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
-    ensure_su_login();
-
     _ensure_latest_container($container_name);
 }
 
@@ -571,7 +566,6 @@ sub remove_port_authority_ports {
 sub uninstall_container {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
-    ensure_su_login();
 
     stop_user_container($container_name);
 
@@ -724,6 +718,29 @@ sub ensure_user {
     }
     else {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );
+        ensure_rootless_perms();
+    }
+
+    return;
+}
+
+sub ensure_rootless_perms {
+    return if $> == 0;
+
+    #### fix potential permission issues with rootless containers ##
+    my $homedir = ( getpwuid($>) )[7];
+
+    my $local_cdir = "$homedir/.local/share/containers";
+
+    # no sense doing this if it does not yet exist
+    if ( -d $local_cdir ) {
+
+        # paths can become owned by users other than `podman unshare whoami`
+        #    i.e. the user-namespace’s root (which is safe because its not real root; its essentially the user)
+        system("find $homedir/.local/share/containers ! -user $> -exec podman unshare chown root {} \\;");
+
+        # paths can be 000, safe to give the user access to their own paths
+        system("find $homedir/.local/share/containers ! -perm /u+rwx -exec podman unshare chmod u+rwx {} \\;");
     }
 
     return;
@@ -763,3 +780,17 @@ DRAGONS
 }
 
 1;
+
+__END__
+
+=encoding utf-8
+
+=head1 CAVEAT EMPTOR!
+
+All consumers of this module must ensure that this function is called prior to calling other functions:
+
+    ea_podman::util::init_user();
+
+Why? If this module doesn’t assume the consumer has init’d it’d need done in pretty much all functions. That would be wasteful and slow things down.
+
+One exception: C<validate_user_container_name()> is safe to call before C<init_user()>.

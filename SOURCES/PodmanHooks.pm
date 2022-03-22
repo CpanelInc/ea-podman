@@ -124,7 +124,7 @@ sub _delete_user {
 
             chdir($homedir);
 
-            ea_podman::util::ensure_su_login();
+            ea_podman::util::init_user();
             ea_podman::util::remove_containers_for_a_user( values %{$user_containers} );
         }
     );
