@@ -94,3 +94,11 @@ If you are `root` you can additionally:
 1. create a network however you like
    * e.g. `podman network create skynet` for a bridged network named `skynet`
 2. pass `--network` to `ea-podman install` of 2 or more images that need it
+
+### There are files in my home directory that I don’t own/have access to!!!
+
+This happens when podman creates files in the user namespace (e.g. creating storage) using user’s sub ids.
+
+It is prefectly normal and is necessary for rootless containers to work. This is true whether inside the container is root or non-root. Flags like `--userns=keep-id` or `--uidmap` do not address it.
+
+We may be able to rectify this in a future iteration (ZC-9872).
