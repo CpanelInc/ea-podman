@@ -1,0 +1,216 @@
+#!/usr/local/cpanel/3rdparty/bin/perl
+
+# cpanel - bin/admin/Cpanel/ea_podman                Copyright 2022 cPanel L.L.C.
+#                                                           All rights reserved.
+# copyright@cpanel.net                                         http://cpanel.net
+# This code is subject to the cPanel license. Unauthorized copying is prohibited
+
+package bin::admin::Cpanel::ea_podman;
+
+use strict;
+
+use base qw( Cpanel::AdminBin::Script::Call );
+
+use lib '/var/cpanel/perl5/lib';
+use Cpanel::Debug     ();
+use Cpanel            ();
+use Cpanel::Exception ();
+use Cpanel::JSON      ();
+
+use Capture::Tiny 'capture_merged';
+
+eval { require '/opt/cpanel/ea-podman/bin/ea-podman.pl' };    # Prefer the package’s script …
+if ($@) {                                                     # … if its not installed do the devbox version
+    die "You must run tests from /root/git/ea-podman" if ( !-e '/root/git/ea-podman/SOURCES' );
+
+    require '/root/git/ea-podman/SOURCES/util.pm';
+    require '/root/git/ea-podman/SOURCES/subids.pm';
+}
+
+__PACKAGE__->run( 'alarm' => 120 ) unless caller;
+
+sub _actions {
+    return qw(LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS);
+}
+
+sub LIST {
+    my ($self) = @_;
+    my $cpuser = $self->_debug_and_user(0);
+
+    return capture_merged { system( '/scripts/cpuser_port_authority', 'list', $cpuser ); };
+}
+
+sub GIVE {
+    my ( $self, $num_ports, $container_name ) = @_;
+    my $cpuser = $self->_debug_and_user(0);
+
+    my $portassignments_json    = $self->LIST();
+    my $portassignments_hr      = Cpanel::JSON::Load($portassignments_json);
+    my $num_ports_already_owned = scalar( keys %{$portassignments_hr} );
+    my $total_ports             = $num_ports + $num_ports_already_owned;
+
+    _die_with_message("Must provide a number of ports")         if !defined $num_ports;
+    _die_with_message("ports must be numeric")                  if $num_ports !~ m/^[1-9][0-9]?$/;
+    _die_with_message("Cannot be assigned more than 100 ports") if $total_ports > 100;
+    ea_podman::util::validate_user_container_name($container_name);
+
+    return capture_merged { system( '/scripts/cpuser_port_authority', 'give', $cpuser, $num_ports, "--service=$container_name" ); };
+}
+
+sub TAKE {
+    my ( $self, $container_name ) = @_;
+    my $cpuser = $self->_debug_and_user(0);
+
+    my $raw_json = capture_merged { system( '/scripts/cpuser_port_authority', 'list', $cpuser ); };
+
+    my $hr = Cpanel::JSON::Load($raw_json);
+
+    my @ports;
+    for my $port ( keys %{$hr} ) {
+        push( @ports, $port ) if ( $hr->{$port}->{service} eq $container_name );
+    }
+
+    return capture_merged { system( '/scripts/cpuser_port_authority', 'take', $cpuser, @ports ); };
+}
+
+sub ENSURE_USER {
+    my ($self) = @_;
+    my $cpuser = $self->_debug_and_user(1);
+
+    local $@;
+    eval { ea_podman::subids::ensure_user_root($cpuser); };
+
+    if ($@) {
+        _die_with_message("Unable to ensure the user has subuids and subgids");
+    }
+
+    return 1;
+}
+
+sub REGISTER {
+    my ( $self, $container_name, $isupgrade ) = @_;
+    my $cpuser = $self->_debug_and_user(0);
+
+    _die_with_message("Must provide a container name") if !defined $container_name;
+
+    eval { ea_podman::util::register_container_as_root( $container_name, $cpuser, $isupgrade ); };
+
+    _die_with_message("Unable to add to known_containers: $@") if ($@);
+
+    return 1;
+}
+
+sub DEREGISTER {
+    my ( $self, $container_name ) = @_;
+    my $cpuser = $self->_debug_and_user(0);
+
+    _die_with_message("Must provide a container name") if !defined $container_name;
+
+    eval { ea_podman::util::deregister_container_as_root($container_name); };
+
+    _die_with_message("Unable to remove from known_containers: $@") if ($@);
+
+    return 1;
+}
+
+sub REGISTERED_CONTAINERS {
+    my ($self) = @_;
+    my $cpuser = $self->_debug_and_user(1);
+
+    my $usr_containers = {};
+    my $all_containers = ea_podman::util::load_known_containers_as_root();
+    for my $contname ( keys %{$all_containers} ) {
+        if ( $all_containers->{$contname}{user} eq $cpuser ) {
+            $usr_containers->{$contname} = $all_containers->{$contname};
+        }
+    }
+
+    return $usr_containers;
+}
+
+###############
+#### helpers ##
+###############
+
+sub _debug_and_user {
+    my ($self) = @_;
+
+    my @caller = caller(1);
+    my $method = $caller[3];
+    $method =~ s/^.*::([^:]+)$/$1/;
+
+    if ($Cpanel::Debug::level) {
+        Cpanel::Debug::log_info("$method() called");
+    }
+
+    my $cpuser = $self->get_caller_username();
+
+    return $cpuser;
+}
+
+sub _die_with_message {
+    my ($msg) = @_;
+
+    my $suppress = Cpanel::Exception::get_stack_trace_suppressor();
+    die Cpanel::Exception::create( 'AdminError', [ message => $msg ] ) . "\n";
+}
+
+1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+ea_podman
+
+=head1 SYNOPSIS
+
+my $ea_podman = bin::admin::Cpanel::ea_podman->new();
+
+@actions = $ea_podman->_actions();
+
+print $ea_podman->LIST();
+
+=head1 DESCRIPTION
+
+This runs ea-podman functions that need to be run as an admin.
+
+ea_podman is deployed by the ea-podman package to /usr/local/cpanel/bin/admin/Cpanel.
+
+=head1 SUBROUTINES
+
+=head2 _actions
+
+Lists the actions allowed by this admin bin script.
+
+=head2 LIST
+
+This function returns JSON object of all ports already assigned to this user.
+
+=head2 GIVE
+
+This function assigns the given num of ports to the user for the given container name.
+
+=head2 TAKE
+
+This function removes all ports assigned the given container name.
+
+=head2 ENSURE_USER
+
+This function ensures that the user has subuids and subgids for podman functionality.
+
+=head2 REGISTER
+
+This function adds the given container to ea-podman’s known containers list.
+
+Second argument is a boolean indicating if it is updating a registry (as opposed to creating a new one).
+
+=head2 DEREGISTER
+
+This function removes the given container from ea-podman’s known containers list.
+
+=head2 REGISTERED_CONTAINERS
+
+This function returns a hashref of the user’s containers.

@@ -1,3 +1,16 @@
 {
-   "fix_dh_usrlocal" : true
+    "fix_dh_usrlocal" : true,
+    "dont_override_config" : true,
+    "remove_from_install" : [
+        "^./ea-podman$"
+    ],
+    "remove_from_requires" : [
+        "gcc-toolset-11",
+        "libnsl2",
+        "libnsl2-devel",
+        "podman"
+    ],
+    "add_to_requires": {
+        "ea-podman": [ "podman" ]
+    }
 }

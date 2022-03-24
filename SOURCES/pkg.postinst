@@ -1,0 +1,29 @@
+#!/bin/bash
+
+set -x
+
+chmod 0700 /opt/cpanel/ea-podman/bin/compile.sh
+/opt/cpanel/ea-podman/bin/compile.sh
+
+if [ -f "/usr/local/cpanel/scripts/ea-podman" ]; then
+    echo ""
+else
+    ln -s /opt/cpanel/ea-podman/bin/ea-podman /usr/local/cpanel/scripts/ea-podman
+fi
+
+if [ -f "/usr/bin/apt" ]; then
+    chmod 0700 /usr/local/cpanel/bin/admin/Cpanel/ea_podman
+    chmod 0600 /opt/cpanel/ea-podman/registered-containers.json
+fi
+
+if [ -e "/root/.ea-podman-tmp/registered-containers.json" ]; then
+    # This is an upgrade, we copied the file to tmp, so copy it back
+    mv /root/.ea-podman-tmp/registered-containers.json /opt/cpanel/ea-podman/registered-containers.json
+    chmod 0600 /opt/cpanel/ea-podman/registered-containers.json
+    rm -rf /root/.ea-podman-tmp
+fi
+
+# Always install the hooks, they are always removed on pre
+/usr/local/cpanel/bin/manage_hooks prune; /bin/true;
+/usr/local/cpanel/bin/manage_hooks add module PodmanHooks
+
