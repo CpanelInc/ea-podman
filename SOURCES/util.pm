@@ -66,14 +66,12 @@ sub ensure_su_login {    # needed when $user is from root `su - $user` and not S
 sub podman {
     system( podman => @_ );
     my $rv = $? == 0 ? 1 : 0;
-    ensure_rootless_perms();
     return $rv;
 }
 
 sub sysctl {
     system( systemctl => "--user", @_ );    # ¿ if $> == 0 do --root => "~/.config/systemd/user" instead of `--user` ?
     my $rv = $? == 0 ? 1 : 0;
-    ensure_rootless_perms();
     return $rv;
 }
 
@@ -108,7 +106,6 @@ sub stop_user_container {
     # via system, however backticks suppresses them
 
     `podman stop --ignore --time 30 $container_name 2> /dev/null > /dev/null`;
-    ensure_rootless_perms();
 
     return;
 }
@@ -718,52 +715,9 @@ sub ensure_user {
     }
     else {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );
-        ensure_rootless_perms();
     }
 
     return;
-}
-
-sub ensure_rootless_perms {
-    return if $> == 0;
-
-    #### fix potential permission issues with rootless containers ##
-    my $homedir = ( getpwuid($>) )[7];
-
-    my $local_cdir = "$homedir/.local/share/containers";
-
-    # no sense doing this if it does not yet exist
-    if ( -d $local_cdir ) {
-
-        # paths can become owned by users other than `podman unshare whoami`
-        #    i.e. the user-namespace’s root (which is safe because its not real root; its essentially the user)
-        print "Checking for paths not owned by host user …\n";
-        my $time_start = time();
-
-        # when there are tens of thousands of mis-owned files the recursive chown if faster than:
-        #     system("find $local_cdir ! -user $> -exec podman unshare chown root {} \\;");
-        system("podman unshare chown root -h -R $local_cdir");
-        print " … done. (took " . _elapsed_since($time_start) . ")\n";
-
-        # paths can be 000, safe to give the user access to their own paths
-        print "Checking for paths the host user has no rights on …\n";
-        $time_start = time();
-
-        system("find $local_cdir ! -perm /u+rwx -exec podman unshare chmod u+rwx {} \\;");
-        print " … done. (took " . _elapsed_since($time_start) . ")\n";
-    }
-
-    return;
-}
-
-sub _elapsed_since {
-    my ($since) = @_;
-
-    my $seconds = time() - $since;
-    my $minutes = int( $seconds / 60 );
-    my $hours   = int( $minutes / 60 );
-
-    return sprintf "%02d:%02d:%02d", $hours, $minutes, $seconds;
 }
 
 sub _get_container_root {

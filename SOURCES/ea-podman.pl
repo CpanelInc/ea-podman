@@ -89,7 +89,7 @@ sub get_dispatch_args {
         subids => {
             clue     => "subids [--ensure]",
             abstract => "Check and report on sub id config",
-            help     => "Checks that use name spaces are enabled or not and if so what sub uids and sub gids are allocated\nOptional --ensure flag, makes sure the subids are setup for this user (including addressing potential subid related permission issues).",
+            help     => "Checks that use name spaces are enabled or not and if so what sub uids and sub gids are allocated\nOptional --ensure flag, makes sure the subids are setup for this user.",
             code     => \&subids,
         },
 
