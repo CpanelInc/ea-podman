@@ -675,6 +675,28 @@ sub remove_containers_for_a_user {
     return;
 }
 
+sub upgrade_containers_for_a_user {
+    my (@containers) = @_;
+
+    # They should be for all the same user
+    my $user;
+    foreach my $container (@containers) {
+        my $c_user = $container->{user};
+        if ( !$user ) {
+            $user = $c_user;
+            next;
+        }
+
+        die "upgrade_users_containers: Containers listed must be for all the same user" if ( $c_user ne $user );
+    }
+
+    foreach my $container (@containers) {
+        upgrade_container( $container->{container_name} );
+    }
+
+    return;
+}
+
 sub register_container {
     my ( $container_name, $isupgrade ) = @_;
 
