@@ -320,6 +320,74 @@ This is intended to make it easier for a user to purge their ea-podman based con
                 }
             },
         },
+        upgrade_containers => {
+            clue     => "upgrade_containers [<PKG|NON-PKG-NAME>|--all]",
+            abstract => "Upgrade containers",
+            help     => qq{Upgrade ea-podman registered containers by EA4 package, an arbitrary non-package name, or all via `--all`.
+    - as non-root will only affect only the user
+    - as root this will effect all users
+            },
+            code => sub {
+                my ( $app, $pkg ) = @_;
+
+                die "Please provide a package name or the flag `--all`\n" if ( !$pkg );
+
+                my $user          = getpwuid($>);
+                my $containers_hr = ea_podman::util::load_known_containers();
+
+                my @containers = values %{$containers_hr};
+                @containers = grep { $_->{user} eq $user } @containers if ( $user ne "root" );
+
+                if ( $pkg ne '--all' ) {
+                    @containers = grep {
+                        ( defined $_->{pkg} && $_->{pkg} eq $pkg )                                              # <PKG> form …
+                          ||                                                                                    # … OR …
+                          ( !defined $_->{pkg} && $_->{container_name} =~ m/^\Q$pkg\E\.$user\.[0-9][0-9]$/ )    # … <NON-PKG-NAME> form
+                    } @containers;
+                }
+
+                @containers = sort { $a->{user} cmp $b->{user} } @containers;
+
+                if ( @containers == 0 ) {
+                    print "There are no containers\n";
+                    exit 0;
+                }
+
+                if ( $user eq "root" ) {
+                    my %user_breakdown;
+
+                    foreach my $container (@containers) {
+                        my $c_user = $container->{user};
+                        push( @{ $user_breakdown{$c_user} }, $container );
+                    }
+
+                    foreach my $c_user ( keys %user_breakdown ) {
+                        if ( $c_user eq "root" ) {
+                            ea_podman::util::upgrade_containers_for_a_user( @{ $user_breakdown{$c_user} } );
+                        }
+                        else {
+                            Cpanel::AccessIds::do_as_user_with_exception(
+                                $c_user,
+                                sub {
+                                    my $homedir = ( getpwuid($>) )[7];
+                                    local $ENV{HOME} = $homedir;
+                                    local $ENV{USER} = $c_user;
+
+                                    chdir($homedir);
+
+                                    ea_podman::util::init_user();
+                                    ea_podman::util::upgrade_containers_for_a_user( @{ $user_breakdown{$c_user} } );
+                                }
+                            );
+                        }
+                    }
+                }
+                else {
+                    ea_podman::util::init_user();
+                    ea_podman::util::upgrade_containers_for_a_user(@containers);
+                }
+            },
+        },
         avail => {
             clue     => "avail",
             abstract => "list available EA4 container based packages",
