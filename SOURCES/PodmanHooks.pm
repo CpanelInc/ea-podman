@@ -10,6 +10,7 @@ use warnings;
 
 use Cpanel::AdminBin::Call ();
 use Cpanel::Debug          ();
+use Cpanel::AccessIds      ();
 
 BEGIN {
     # I cannot get this to work using FindBin in 4 different environments, this works in all

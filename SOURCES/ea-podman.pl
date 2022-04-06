@@ -90,7 +90,11 @@ sub get_dispatch_args {
             clue     => "subids [--ensure]",
             abstract => "Check and report on sub id config",
             help     => "Checks that use name spaces are enabled or not and if so what sub uids and sub gids are allocated\nOptional --ensure flag, makes sure the subids are setup for this user.",
-            code     => \&subids,
+            code     => sub {
+                my ( $app, @other_args ) = @_;
+                ea_podman::util::init_user();
+                subids( $app, @other_args );
+            },
         },
 
         install => {
@@ -135,6 +139,7 @@ sub get_dispatch_args {
             help     => "Dumps the information about user’s running containers in human readable JSON",
             code     => sub {
                 my ($app) = @_;
+                ea_podman::util::init_user();
                 print Cpanel::JSON::pretty_canonical_dump( ea_podman::util::get_containers() );
             },
         },
@@ -223,6 +228,8 @@ sub get_dispatch_args {
 
                 my $user = getpwuid($>);
 
+                ea_podman::util::init_user();
+
                 my $containers_hr = ea_podman::util::load_known_containers();
 
                 my %user_containers;
@@ -261,6 +268,8 @@ This is intended to make it easier for a user to purge their ea-podman based con
                 my ( $app, $pkg ) = @_;
 
                 die "Please provide a package name or the flag `--all`\n" if ( !$pkg );
+
+                ea_podman::util::init_user();
 
                 # TODO ZC-9746: have them verify they want to do this destructive thing
 
