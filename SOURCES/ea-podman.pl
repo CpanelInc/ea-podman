@@ -397,6 +397,35 @@ This is intended to make it easier for a user to purge their ea-podman based con
                 }
             },
         },
+        backup => {
+            clue     => "backup",
+            abstract => "Backup containers",
+            help     => qq{Backup all ea-podman registered containers for a user.
+
+                  Outputs a file ea_podman_backup_<USER>.json
+            },
+            code => sub {
+                my ($app) = @_;
+
+                ea_podman::util::perform_user_backup();
+            },
+        },
+        restore => {
+            clue     => "restore",
+            abstract => "Restore containers that have been backed up.",
+            help     => qq{Will restore containers that bave been backed up.
+
+                  Caveat:
+
+                  * There must be no containers installed currently.
+                  * Backup json file must be present.
+                  * All the ea-podman.d container directories must be present.
+            },
+            code => sub {
+                my ($app) = @_;
+                ea_podman::util::perform_user_restore();
+            },
+        },
         avail => {
             clue     => "avail",
             abstract => "list available EA4 container based packages",

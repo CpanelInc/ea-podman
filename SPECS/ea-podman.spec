@@ -93,6 +93,7 @@ rm -rf %{buildroot}
 
 %changelog
 * Mon Apr 25 2022 Julian Brown <julian.brown@cpanel.net> - 1.0-6
+- ZC-9877: Add backup/restore sub commands, and manage backup exclude file
 - ZC-9909: Add /scripts/removeacct Hook
 
 * Mon Apr 11 2022 Dan Muey <dan@cpanel.net> - 1.0-5

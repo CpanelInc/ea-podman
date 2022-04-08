@@ -42,6 +42,7 @@ sub check_proc {
 
 use Cpanel::JSON           ();
 use Cpanel::AdminBin::Call ();
+use Cpanel::Time           ();
 use File::Path::Tiny       ();
 
 use Path::Tiny 'path';
@@ -219,8 +220,11 @@ sub _ensure_latest_container {
 
     validate_user_container_name($container_name);
 
+    _ensure_backup_conf_excludes_files();
+
     my $caller_func = ( caller(1) )[3];
     my $isupgrade   = 0;
+    my $isrestore   = 0;
     my $portsfunc;
     if ( $caller_func eq "ea_podman::util::install_container" ) {
         $portsfunc = \&_get_new_ports;
@@ -229,6 +233,10 @@ sub _ensure_latest_container {
         $portsfunc = \&_get_current_ports;
         $isupgrade = 1;
     }
+    elsif ( $caller_func eq "ea_podman::util::restore_containers_for_user" ) {
+        $isrestore = 1;
+        $portsfunc = \&_get_new_ports;
+    }
     else {
         die "_ensure_latest_container() should only be called by install_container() or upgrade_container() (i.e. not $caller_func())\n";
     }
@@ -236,7 +244,7 @@ sub _ensure_latest_container {
     my $container_root = _get_container_root();
     my $container_dir  = "$container_root/$container_name";
 
-    if ($isupgrade) {
+    if ( $isupgrade || $isrestore ) {
         die "“$container_dir” does not exist\n" if !-d $container_dir;
     }
 
@@ -263,7 +271,7 @@ sub _ensure_latest_container {
                 }
             }
 
-            if ($isupgrade) {
+            if ( $isupgrade || $isrestore ) {
                 if ( -e "$container_dir/ea-podman.json" ) {
                     my $container_conf = Cpanel::JSON::LoadFile("$container_dir/ea-podman.json");
                     die "`start_args` is missing from $container_dir/ea-podman.json\n" if !exists $container_conf->{start_args};
@@ -277,7 +285,7 @@ sub _ensure_latest_container {
             # ensure ea-podman.json isn’t specifying something it shouldn’t
             validate_start_args( \@start_args );
 
-            if ( !$isupgrade ) {
+            if ( !$isupgrade && !$isrestore ) {
                 File::Path::Tiny::mk( $container_dir, 0750 ) || die "Could not create “$container_dir”: $!\n";
             }
 
@@ -301,6 +309,10 @@ sub _ensure_latest_container {
                     system( "$pkg_dir/ea-podman-local-dir-upgrade", $container_dir, $container_ver, $package_ver, @ports );
                     warn "$pkg_dir/ea-podman-local-dir-upgrade did not exit cleanly\n" if $? != 0;
                 }
+            }
+            elsif ($isrestore) {
+
+                # nothing needed here
             }
             else {
                 if ( -x "$pkg_dir/ea-podman-local-dir-setup" ) {
@@ -327,13 +339,13 @@ sub _ensure_latest_container {
         }
     }
     else {
-        _arbitrary_image_warning( \@start_args ) if !$isupgrade;
+        _arbitrary_image_warning( \@start_args ) if !$isupgrade && !$isrestore;
 
         my @real_start_args;
         my @cpuser_ports;
 
-        if ($isupgrade) {
-            die "Upgrade takes no start args\n"                             if @start_args;
+        if ( $isupgrade || $isrestore ) {
+            die "Upgrade/Restore takes no start args\n"                     if @start_args;
             die "Missing non-EA4-container $container_dir/ea-podman.json\n" if !-e "$container_dir/ea-podman.json";
             my $container_conf = Cpanel::JSON::LoadFile("$container_dir/ea-podman.json");
             die "`start_args` is missing from $container_dir/ea-podman.json\n" if !exists $container_conf->{start_args};
@@ -367,7 +379,7 @@ sub _ensure_latest_container {
         # ensure the user isn’t specifying something they shouldn’t
         validate_start_args( \@real_start_args );
 
-        if ( !$isupgrade ) {
+        if ( !$isupgrade && !$isrestore ) {
             File::Path::Tiny::mk( $container_dir, 0750 ) || die "Could not create “$container_dir”: $!\n";
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
             _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
@@ -386,8 +398,8 @@ sub _ensure_latest_container {
         push @start_args, $docker_name;
     }
 
-    uninstall_container($container_name) if $isupgrade;    # avoid spurious warnings on install
-    register_container( $container_name, $isupgrade );     # register before create just in case
+    uninstall_container($container_name) if $isupgrade || $isrestore;    # avoid spurious warnings on install
+    register_container( $container_name, $isupgrade || $isrestore );     # register before create just in case
 
     if ( !create_user_container( $container_name, @start_args ) ) {
         if ( !$isupgrade ) {
@@ -554,6 +566,19 @@ sub upgrade_container {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
     _ensure_latest_container($container_name);
+}
+
+sub restore_containers_for_user {
+    my (@containers) = @_;
+
+    foreach my $container (@containers) {
+        my $container_name = $container->{container_name};
+
+        print "Restoring $container_name\n";
+
+        validate_user_container_name($container_name);
+        _ensure_latest_container($container_name);
+    }
 }
 
 sub move_container_dir {
@@ -794,6 +819,194 @@ DRAGONS
     }
 
     return 1;
+}
+
+sub _ensure_backup_conf_excludes_files {
+    my $homedir = ( getpwuid($>) )[7];
+
+    my $fname = "$homedir/cpbackup-exclude.conf";
+    $fname = "/etc/cpbackup-exclude.conf" if ( $> == 0 );
+
+    my $local_container_line = '.local/share/containers';
+    my $local_systemd_line   = '.config/systemd';
+
+    if ( $> == 0 ) {
+        $local_container_line = "$homedir/$local_container_line";
+        $local_systemd_line   = "$homedir/$local_systemd_line";
+    }
+
+    if ( -e $fname ) {
+        my @lines            = Path::Tiny::path($fname)->lines( { chomp => 1 } );
+        my $found_containers = 0;
+        my $found_systemd    = 0;
+
+        foreach my $line (@lines) {
+            $found_containers = 1 if ( $line eq $local_container_line );
+            $found_systemd    = 1 if ( $line eq $local_systemd_line );
+        }
+
+        push( @lines, $local_container_line . "\n" ) if ( !$found_containers );
+        push( @lines, $local_systemd_line . "\n" )   if ( !$found_systemd );
+
+        Path::Tiny::path($fname)->spew(@lines) if ( !$found_systemd || !$found_containers );
+    }
+    else {
+        my @lines;
+
+        push( @lines, $local_container_line . "\n" );
+        push( @lines, $local_systemd_line . "\n" );
+
+        Path::Tiny::path($fname)->spew(@lines);
+    }
+
+    return;
+}
+
+sub get_backup_filename {
+    my $homedir = ( getpwuid($>) )[7];
+    my $user    = getpwuid($>);
+
+    return "$homedir/ea_podman_backup_$user.json";
+}
+
+sub _get_backup_root {
+    my $homedir = ( getpwuid($>) )[7];
+    return "$homedir/ea-podman-backups";
+}
+
+sub _get_tarball_name {
+    my $timestamp_str = Cpanel::Time::time2condensedtime();
+    my $tarball_name  = _get_backup_root() . "/backup-" . $timestamp_str . ".tar.gz";
+
+    return $tarball_name;
+}
+
+our $num_backups_to_retain = 3;
+
+sub perform_user_backup {
+    my $user = getpwuid($>);
+
+    my $containers_hr = ea_podman::util::load_known_containers();
+
+    my @containers = values %{$containers_hr};
+    @containers = grep { $_->{user} eq $user } @containers;
+    @containers = sort { $a->{user} cmp $b->{user} } @containers;
+
+    if ( @containers == 0 ) {
+        print "There are no containers\n";
+        return 1;
+    }
+
+    foreach my $container (@containers) {
+        my @curr_ports = ea_podman::util::_get_current_ports( $container->{container_name} );
+        $container->{curr_ports} = \@curr_ports;
+    }
+
+    my $homedir = ( getpwuid($>) )[7];
+
+    {
+        # Normally I would use File::chdir, but it seems to cause perlcc to crash
+
+        my $pwd = `pwd`;
+        chdir $homedir;
+
+        my $backup_file = ea_podman::util::get_backup_filename();
+
+        Path::Tiny::path($backup_file)->spew( Cpanel::JSON::pretty_canonical_dump( \@containers ) );
+
+        # Now create the backup dir if needed
+
+        my $backups_dir = _get_backup_root();
+        if ( !-d $backups_dir ) {
+            File::Path::Tiny::mk($backups_dir) || die "Could not create “$backups_dir”: $!\n";
+        }
+
+        my $tarball_name = _get_tarball_name();
+
+        print `tar czf $tarball_name ea_podman_backup_$user.json ea-podman.d 2> /dev/null` . "\n";
+        unlink($backup_file);
+
+        chdir 'ea-podman-backups';
+        my @files = reverse sort glob("backup*.tar.gz");
+        while ( @files > $num_backups_to_retain ) {
+            my $file = pop @files;
+            print "Removing older backup $file\n";
+            unlink $file;
+        }
+
+        chdir $pwd;
+    }
+
+    return;
+}
+
+sub perform_user_restore {
+    die "RESTORE is NOT READY, see case ZC-9914\n";
+
+    my $homedir       = ( getpwuid($>) )[7];
+    my $user          = getpwuid($>);
+    my $containers_hr = ea_podman::util::load_known_containers();
+
+    my @containers = values %{$containers_hr};
+    @containers = grep { $_->{user} eq $user } @containers;
+    @containers = sort { $a->{user} cmp $b->{user} } @containers;
+
+    if ( @containers != 0 ) {
+        die "There are containers installed. Restore will not be attempted.\n";
+    }
+
+    my $backup_file = "$homedir/ea_podman_backup_$user.json";
+    if ( !-e $backup_file ) {
+        die "The container backup file is not present ($backup_file)\n";
+    }
+
+    @containers = @{ Cpanel::JSON::LoadFile($backup_file) };
+
+    # each of the container dirs must exist
+
+    foreach my $container (@containers) {
+        my $container_name = $container->{container_name};
+        my $container_dir  = "$homedir/ea-podman.d/$container_name";
+
+        if ( !-d $container_dir ) {
+            die "Container dir ($container_dir) does not exist.\n";
+        }
+    }
+
+    ea_podman::util::init_user();
+    ea_podman::util::restore_containers_for_user(@containers);
+
+    foreach my $container (@containers) {
+        my @new_ports = ea_podman::util::_get_current_ports( $container->{container_name} );
+        my %new_ports_lookup;
+        @new_ports_lookup{@new_ports} = ();
+
+        my @orig_ports;
+        @orig_ports = @{ $container->{curr_ports} } if ( exists $container->{curr_ports} );
+
+        my $ports_are_different = 0;
+        foreach my $port (@orig_ports) {
+            if ( !exists $new_ports_lookup{$port} ) {
+                $ports_are_different = 1;
+                last;
+            }
+        }
+
+        if ($ports_are_different) {
+            my $orig_ports = join( ', ', @orig_ports );
+            my $new_ports  = join( ', ', @new_ports );
+
+            warn qq{The TCP ports for $container->{container_name} have changed.
+
+Things configured for the old ports may fail until it is corrected to use the current ports.
+
+The ports originally assigned to the container are: $orig_ports
+
+The ports currently assigned to the container are: $new_ports
+
+            };
+        }
+    }
 }
 
 1;
