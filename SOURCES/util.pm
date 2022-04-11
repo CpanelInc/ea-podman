@@ -199,7 +199,7 @@ sub generate_container_service {
     validate_user_container_name($container_name);
 
     my $homedir = ( getpwuid($>) )[7];
-    File::Path::Tiny::mk("$homedir/.config/systemd/user");
+    File::Path::Tiny::mk( "$homedir/.config/systemd/user", 0750 );
     my $service_name = get_container_service_name($container_name);
 
     my $container_name_qx = quotemeta($container_name);
@@ -276,7 +276,7 @@ sub _ensure_latest_container {
             validate_start_args( \@start_args );
 
             if ( !$isupgrade ) {
-                File::Path::Tiny::mk($container_dir) || die "Could not create “$container_dir”: $!\n";
+                File::Path::Tiny::mk( $container_dir, 0750 ) || die "Could not create “$container_dir”: $!\n";
             }
 
             # then add the ports if any
@@ -366,7 +366,7 @@ sub _ensure_latest_container {
         validate_start_args( \@real_start_args );
 
         if ( !$isupgrade ) {
-            File::Path::Tiny::mk($container_dir) || die "Could not create “$container_dir”: $!\n";
+            File::Path::Tiny::mk( $container_dir, 0750 ) || die "Could not create “$container_dir”: $!\n";
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
             _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
         }
