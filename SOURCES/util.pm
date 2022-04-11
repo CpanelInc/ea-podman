@@ -15,8 +15,27 @@ package ea_podman::util;
 # All consumers of this module must ensure ea_podman::util::init_user()
 #    is called prior to calling other functions (there are some exceptions in POD)
 sub init_user {
+    check_proc();
     ensure_su_login();
     ensure_user();
+}
+
+sub check_proc {
+    my $warn = "This could lead to information disclosure.\n";
+    $warn .= "One way to mitigate this is for root to set hidepid to 2:\n";
+    $warn .= "\t!!!! before running any of these commands be sure to understand their implications !!\n";
+
+    `grep /proc /proc/mounts | grep hidepid=2`;
+    if ( $? != 0 ) {
+        warn "!!! pids are currently public (/proc is not mounted hidepid=2) !!\n";
+        warn "$warn\t`mount -o remount,rw,nosuid,nodev,noexec,relatime,hidepid=2 /proc`\n\n";
+    }
+
+    `grep /proc /etc/fstab | grep hidepid=2`;
+    if ( $? != 0 ) {
+        warn "!!! pids will be public on reboot (/proc hidepid is not 2 in fstab) !!\n";
+        warn "$warn\t`grep proc /etc/fstab`\n\tEnsure it has an entry like:\n\t\tproc    /proc    proc    defaults,nosuid,nodev,noexec,relatime,hidepid=2\n";
+    }
 }
 
 use Cpanel::JSON           ();
