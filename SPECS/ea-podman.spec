@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 4
+%define release_prefix 5
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -92,6 +92,9 @@ rm -rf %{buildroot}
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
 
 %changelog
+* Mon Apr 11 2022 Dan Muey <dan@cpanel.net> - 1.0-5
+- ZC-9916: Do not rely on perlcc symlink since it can be missing
+
 * Mon Apr 04 2022 Julian Brown <julian.brown@cpanel.net> - 1.0-4
 - ZC-9887: Fix error message for command list
            Fixed a bug in hooks on remove user

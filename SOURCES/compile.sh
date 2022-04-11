@@ -9,12 +9,14 @@ fi
 
 echo "Compiling ea-podman"
 
-cd /opt/cpanel/ea-podman/bin
-# Prep for calling perlcc
-CPANEL_PERLCC=/usr/local/cpanel/3rdparty/bin/perlcc
+pushd /opt/cpanel/ea-podman/bin
+
+# /usr/local/cpanel/3rdparty/bin/perlcc can go missing so don’t rely on it
+CPANEL_PERLCC=$(dirname $(readlink /usr/local/cpanel/3rdparty/bin/perl))/perlcc
 CC_OPTIMIZATIONS=--Wc='-Os'
 PERLCC_OPTS="-v4 -UO -UB::Stash -UTie::Hash::NamedCapture -L /usr/lib64"
 PERLCC_DORMANT_OPTS="${PERLCC_OPTS} -UB"
-$CPANEL_PERLCC $CC_OPTIMIZATIONS $PERLCC_DORMANT_OPTS ea-podman.pl -o ea-podman
-cd -
 
+$CPANEL_PERLCC $CC_OPTIMIZATIONS $PERLCC_DORMANT_OPTS ea-podman.pl -o ea-podman
+
+popd
