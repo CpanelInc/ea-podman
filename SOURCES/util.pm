@@ -21,6 +21,8 @@ sub init_user {
 }
 
 sub check_proc {
+    return if $> != 0;
+
     my $warn = "This could lead to information disclosure.\n";
     $warn .= "One way to mitigate this is for root to set hidepid to 2:\n";
     $warn .= "\t!!!! before running any of these commands be sure to understand their implications !!\n";
