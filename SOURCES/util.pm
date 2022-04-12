@@ -29,13 +29,13 @@ sub check_proc {
 
     `grep /proc /proc/mounts | grep hidepid=2`;
     if ( $? != 0 ) {
-        warn "!!! pids are currently public (/proc is not mounted hidepid=2) !!\n";
+        warn "!!!! pids are currently public (/proc is not mounted hidepid=2) !!\n";
         warn "$warn\t`mount -o remount,rw,nosuid,nodev,noexec,relatime,hidepid=2 /proc`\n\n";
     }
 
     `grep /proc /etc/fstab | grep hidepid=2`;
     if ( $? != 0 ) {
-        warn "!!! pids will be public on reboot (/proc hidepid is not 2 in fstab) !!\n";
+        warn "!!!! pids will be public on reboot (/proc hidepid is not 2 in fstab) !!\n";
         warn "$warn\t`grep proc /etc/fstab`\n\tEnsure it has an entry like:\n\t\tproc    /proc    proc    defaults,nosuid,nodev,noexec,relatime,hidepid=2\n";
     }
 }
