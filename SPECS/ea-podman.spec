@@ -93,6 +93,7 @@ rm -rf %{buildroot}
 
 %changelog
 * Mon Apr 11 2022 Dan Muey <dan@cpanel.net> - 1.0-5
+- ZC-9925: cleanup /opt/cpanel/ea-podman/bin/ea-podman on all systems, not just apt based ones
 - ZC-9916: Do not rely on perlcc symlink since it can be missing
 - ZC-9917: if users can see each others' processes give advice about how to address that
 - ZC-9917: make ~/ea-podman.d and ~/ea-podman.d/<CONTAINER-DIR> inaccessible to other users
