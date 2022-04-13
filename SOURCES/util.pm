@@ -15,8 +15,29 @@ package ea_podman::util;
 # All consumers of this module must ensure ea_podman::util::init_user()
 #    is called prior to calling other functions (there are some exceptions in POD)
 sub init_user {
+    check_proc();
     ensure_su_login();
     ensure_user();
+}
+
+sub check_proc {
+    return if $> != 0;
+
+    my $warn = "This could lead to information disclosure.\n";
+    $warn .= "One way to mitigate this is for root to set hidepid to 2:\n";
+    $warn .= "\t!!!! before running any of these commands be sure to understand their implications !!\n";
+
+    `grep /proc /proc/mounts | grep hidepid=2`;
+    if ( $? != 0 ) {
+        warn "!!!! pids are currently public (/proc is not mounted hidepid=2) !!\n";
+        warn "$warn\t`mount -o remount,rw,nosuid,nodev,noexec,relatime,hidepid=2 /proc`\n\n";
+    }
+
+    `grep /proc /etc/fstab | grep hidepid=2`;
+    if ( $? != 0 ) {
+        warn "!!!! pids will be public on reboot (/proc hidepid is not 2 in fstab) !!\n";
+        warn "$warn\t`grep proc /etc/fstab`\n\tEnsure it has an entry like:\n\t\tproc    /proc    proc    defaults,nosuid,nodev,noexec,relatime,hidepid=2\n";
+    }
 }
 
 use Cpanel::JSON           ();
@@ -180,7 +201,7 @@ sub generate_container_service {
     validate_user_container_name($container_name);
 
     my $homedir = ( getpwuid($>) )[7];
-    File::Path::Tiny::mk("$homedir/.config/systemd/user");
+    File::Path::Tiny::mk( "$homedir/.config/systemd/user", 0750 );
     my $service_name = get_container_service_name($container_name);
 
     my $container_name_qx = quotemeta($container_name);
@@ -257,7 +278,7 @@ sub _ensure_latest_container {
             validate_start_args( \@start_args );
 
             if ( !$isupgrade ) {
-                File::Path::Tiny::mk($container_dir) || die "Could not create “$container_dir”: $!\n";
+                File::Path::Tiny::mk( $container_dir, 0750 ) || die "Could not create “$container_dir”: $!\n";
             }
 
             # then add the ports if any
@@ -347,7 +368,7 @@ sub _ensure_latest_container {
         validate_start_args( \@real_start_args );
 
         if ( !$isupgrade ) {
-            File::Path::Tiny::mk($container_dir) || die "Could not create “$container_dir”: $!\n";
+            File::Path::Tiny::mk( $container_dir, 0750 ) || die "Could not create “$container_dir”: $!\n";
             my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
             _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
         }
