@@ -94,6 +94,8 @@ rm -rf %{buildroot}
 %changelog
 * Mon Apr 11 2022 Dan Muey <dan@cpanel.net> - 1.0-5
 - ZC-9916: Do not rely on perlcc symlink since it can be missing
+- ZC-9917: if users can see each others' processes give advice about how to address that
+- ZC-9917: make ~/ea-podman.d and ~/ea-podman.d/<CONTAINER-DIR> inaccessible to other users
 
 * Mon Apr 04 2022 Julian Brown <julian.brown@cpanel.net> - 1.0-4
 - ZC-9887: Fix error message for command list
