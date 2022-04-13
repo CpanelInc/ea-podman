@@ -6,10 +6,7 @@ set -x
 if [[ "$1" == "0" || "$1" == "remove" ]]; then
     if [ -x "/opt/cpanel/ea-podman/bin/ea-podman" ]; then
         /opt/cpanel/ea-podman/bin/ea-podman remove_containers --all
-
-        if [ -x "/usr/bin/apt" ]; then
-            rm -f /opt/cpanel/ea-podman/bin/ea-podman
-        fi
+        rm -f /opt/cpanel/ea-podman/bin/ea-podman
     fi
 else
     if [ -e "/opt/cpanel/ea-podman/registered-containers.json" ]; then

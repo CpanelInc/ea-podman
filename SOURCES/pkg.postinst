@@ -27,8 +27,10 @@ fi
 /usr/local/cpanel/bin/manage_hooks prune; /bin/true;
 /usr/local/cpanel/bin/manage_hooks add module PodmanHooks
 
+set +x
 echo "!!!! ATTENTION !!"
 echo "!!!! If /proc is public it could lead to information disclosure. !!"
 echo "Setting /proc to hidepid level 2 is recommended if possible."
-echo "As root, run `ea-podman subids` and look for more information at the top of the output (if there is no output you are already covered)."
+echo "As root, run \`ea-podman subids\` and look for more information at the top of the output (if there is no output you are already covered)."
 echo "!!!! /ATTENTION !!"
+set -x
