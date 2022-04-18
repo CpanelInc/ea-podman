@@ -411,19 +411,21 @@ This is intended to make it easier for a user to purge their ea-podman based con
             },
         },
         restore => {
-            clue     => "restore",
+            clue     => "restore <BACKUP_FILE_PATH>",
             abstract => "Restore containers that have been backed up.",
             help     => qq{Will restore containers that bave been backed up.
 
-                  Caveat:
+                  NOTE:
 
-                  * There must be no containers installed currently.
-                  * Backup json file must be present.
-                  * All the ea-podman.d container directories must be present.
+                  * Will remove existing containers
+                  * Will destroy the ea-podman.d directory
             },
             code => sub {
-                my ($app) = @_;
-                ea_podman::util::perform_user_restore();
+                my ( $app, $backup_file ) = @_;
+
+                die "Backup file :$backup_file: does not exist or cannot be read\n" if ( !$backup_file || !-r $backup_file );
+
+                ea_podman::util::perform_user_restore($backup_file);
             },
         },
         avail => {

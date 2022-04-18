@@ -941,18 +941,32 @@ sub perform_user_backup {
 }
 
 sub perform_user_restore {
-    die "RESTORE is NOT READY, see case ZC-9914\n";
+    my ($backup_tarball) = @_;
 
-    my $homedir       = ( getpwuid($>) )[7];
-    my $user          = getpwuid($>);
-    my $containers_hr = ea_podman::util::load_known_containers();
+    my $homedir = ( getpwuid($>) )[7];
+    my $user    = getpwuid($>);
 
-    my @containers = values %{$containers_hr};
-    @containers = grep { $_->{user} eq $user } @containers;
-    @containers = sort { $a->{user} cmp $b->{user} } @containers;
+    # Remove any existing containers
 
-    if ( @containers != 0 ) {
-        die "There are containers installed. Restore will not be attempted.\n";
+    print "\nRemoving existing containers first\n\n";
+
+    system( '/opt/cpanel/ea-podman/bin/ea-podman', 'remove_containers', '--all' );
+    Path::Tiny::path("$homedir/ea-podman.d")->remove_tree( { safe => 0 } );
+    Path::Tiny::path("$homedir/.config/systemd/user")->remove_tree( { safe => 0 } );
+
+    # Now explode the tarball in the homedir, this sets up the restore
+
+    print "\nStarting the restore ...\n\n";
+
+    {
+        # Normally I would use File::chdir, but it seems to cause perlcc to crash
+
+        my $pwd = `pwd`;
+        chdir $homedir;
+
+        print `tar xf $backup_tarball 2> /dev/null` . "\n";
+
+        chdir $pwd;
     }
 
     my $backup_file = "$homedir/ea_podman_backup_$user.json";
@@ -960,7 +974,7 @@ sub perform_user_restore {
         die "The container backup file is not present ($backup_file)\n";
     }
 
-    @containers = @{ Cpanel::JSON::LoadFile($backup_file) };
+    my @containers = @{ Cpanel::JSON::LoadFile($backup_file) };
 
     # each of the container dirs must exist
 
