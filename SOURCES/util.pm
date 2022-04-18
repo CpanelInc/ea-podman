@@ -44,6 +44,7 @@ use Cpanel::JSON           ();
 use Cpanel::AdminBin::Call ();
 use Cpanel::Time           ();
 use File::Path::Tiny       ();
+use Cwd                    ();
 
 use Path::Tiny 'path';
 
@@ -905,9 +906,7 @@ sub perform_user_backup {
     my $homedir = ( getpwuid($>) )[7];
 
     {
-        # Normally I would use File::chdir, but it seems to cause perlcc to crash
-
-        my $pwd = `pwd`;
+        my $pwd = Cwd::getcwd();
         chdir $homedir;
 
         my $backup_file = ea_podman::util::get_backup_filename();
@@ -956,12 +955,10 @@ sub perform_user_restore {
 
     # Now explode the tarball in the homedir, this sets up the restore
 
-    print "\nStarting the restore ...\n\n";
+    print "\nStarting the restore …\n\n";
 
     {
-        # Normally I would use File::chdir, but it seems to cause perlcc to crash
-
-        my $pwd = `pwd`;
+        my $pwd = Cwd::getcwd();
         chdir $homedir;
 
         print `tar xf $backup_tarball 2> /dev/null` . "\n";

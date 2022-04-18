@@ -407,11 +407,12 @@ This is intended to make it easier for a user to purge their ea-podman based con
             code => sub {
                 my ($app) = @_;
 
+                die "Backup is not allowed for the root user at this time.\n" if ( $> == 0 );
                 ea_podman::util::perform_user_backup();
             },
         },
         restore => {
-            clue     => "restore <BACKUP_FILE_PATH>",
+            clue     => "restore <BACKUP_FILE_PATH> [--verify]",
             abstract => "Restore containers that have been backed up.",
             help     => qq{Will restore containers that bave been backed up.
 
@@ -419,11 +420,18 @@ This is intended to make it easier for a user to purge their ea-podman based con
 
                   * Will remove existing containers
                   * Will destroy the ea-podman.d directory
+                  * This is a destructive operation, you are required to pass ”--verify”
             },
             code => sub {
-                my ( $app, $backup_file ) = @_;
+                my ( $app, $backup_file, $verify ) = @_;
 
-                die "Backup file :$backup_file: does not exist or cannot be read\n" if ( !$backup_file || !-r $backup_file );
+                die "Restore is not allowed for the root user at this time.\n" if ( $> == 0 );
+
+                die "Backup file does not exist or cannot be read\n" if ( !$backup_file || !-r $backup_file );
+                if ( !length($verify) || $verify ne "--verify" ) {
+                    print "This operation can not be undone! Please pass `--verify` to verify you really want to do this.\n";
+                    return;
+                }
 
                 ea_podman::util::perform_user_restore($backup_file);
             },
