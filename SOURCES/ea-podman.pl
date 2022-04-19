@@ -61,7 +61,7 @@ sub run {
         # We cannot allow it, they instead should ssh $USER@localhost and
         # perform the operations.
 
-        print "You cannot run the /scripts/ea-podman script directly from the cPanel terminal.\n";
+        print "You cannot run the /scripts/ea-podman script directly from the cPanel and WHM terminal.\n";
         print "  To use this script, you must first log in via ssh with the following command:\n";
         print "  ssh $user\@localhost\n\n";
 
