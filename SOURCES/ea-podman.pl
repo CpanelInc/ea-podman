@@ -427,7 +427,9 @@ This is intended to make it easier for a user to purge their ea-podman based con
 
                 die "Restore is not allowed for the root user at this time.\n" if ( $> == 0 );
 
-                die "Backup file does not exist or cannot be read\n" if ( !$backup_file || !-r $backup_file );
+                die "Please pass in the path to the backup file you want to restore.\n" if ( !$backup_file );
+                die "Backup file cannot be read\n"                                      if ( !-r $backup_file );
+
                 if ( !length($verify) || $verify ne "--verify" ) {
                     print "This operation can not be undone! Please pass `--verify` to verify you really want to do this.\n";
                     return;
