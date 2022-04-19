@@ -887,6 +887,8 @@ our $num_backups_to_retain = 3;
 sub perform_user_backup {
     my $user = getpwuid($>);
 
+    die "Cannot be run as root\n" if ( $> == 0 );
+
     my $containers_hr = ea_podman::util::load_known_containers();
 
     my @containers = values %{$containers_hr};
@@ -906,6 +908,8 @@ sub perform_user_backup {
     my $homedir = ( getpwuid($>) )[7];
 
     {
+        # Normally I would use File::chdir, but it seems to cause perlcc to crash
+
         my $pwd = Cwd::getcwd();
         chdir $homedir;
 
@@ -949,6 +953,8 @@ sub perform_user_restore {
 
     print "\nRemoving existing containers first\n\n";
 
+    die "Cannot be run as root\n" if ( $> == 0 );
+
     system( '/opt/cpanel/ea-podman/bin/ea-podman', 'remove_containers', '--all' );
     Path::Tiny::path("$homedir/ea-podman.d")->remove_tree( { safe => 0 } );
     Path::Tiny::path("$homedir/.config/systemd/user")->remove_tree( { safe => 0 } );
@@ -958,6 +964,8 @@ sub perform_user_restore {
     print "\nStarting the restore …\n\n";
 
     {
+        # Normally I would use File::chdir, but it seems to cause perlcc to crash
+
         my $pwd = Cwd::getcwd();
         chdir $homedir;
 
