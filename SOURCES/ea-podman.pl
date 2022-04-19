@@ -53,7 +53,7 @@ sub run {
     my $user = getpwuid($>);
     die "Cannot run ea-podman from a restricted shell\n" if ( !Whostmgr::Accounts::Shell::has_unrestricted_shell($user) );
 
-    if ( $> > 0 && $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} && $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} == 1 ) {
+    if ( $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} && $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} == 1 ) {
 
         # This is a special case where they are trying to run ea-podman from
         # inside cPanel Terminal.
