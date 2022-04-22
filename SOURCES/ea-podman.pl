@@ -53,7 +53,7 @@ sub run {
     my $user = getpwuid($>);
     die "Cannot run ea-podman from a restricted shell\n" if ( !Whostmgr::Accounts::Shell::has_unrestricted_shell($user) );
 
-    if ( $> > 0 && $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} && $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} == 1 ) {
+    if ( $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} && $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} == 1 ) {
 
         # This is a special case where they are trying to run ea-podman from
         # inside cPanel Terminal.
@@ -61,7 +61,7 @@ sub run {
         # We cannot allow it, they instead should ssh $USER@localhost and
         # perform the operations.
 
-        print "You cannot run the /scripts/ea-podman script directly from the cPanel terminal.\n";
+        print "You cannot run the /scripts/ea-podman script directly from the cPanel and WHM terminal.\n";
         print "  To use this script, you must first log in via ssh with the following command:\n";
         print "  ssh $user\@localhost\n\n";
 
@@ -395,6 +395,47 @@ This is intended to make it easier for a user to purge their ea-podman based con
                     ea_podman::util::init_user();
                     ea_podman::util::upgrade_containers_for_a_user(@containers);
                 }
+            },
+        },
+        backup => {
+            clue     => "backup",
+            abstract => "Backup containers",
+            help     => qq{Backup all ea-podman registered containers for a user.
+
+                  Outputs a file ea_podman_backup_<USER>.json
+            },
+            code => sub {
+                my ($app) = @_;
+
+                die "Backup is not allowed for the root user at this time.\n" if ( $> == 0 );
+                ea_podman::util::perform_user_backup();
+            },
+        },
+        restore => {
+            clue     => "restore <BACKUP_FILE_PATH> [--verify]",
+            abstract => "Restore containers that have been backed up.",
+            help     => qq{Will restore containers that bave been backed up.
+
+                  NOTE:
+
+                  * Will remove existing containers
+                  * Will destroy the ea-podman.d directory
+                  * This is a destructive operation, you are required to pass ”--verify”
+            },
+            code => sub {
+                my ( $app, $backup_file, $verify ) = @_;
+
+                die "Restore is not allowed for the root user at this time.\n" if ( $> == 0 );
+
+                die "Please pass in the path to the backup file you want to restore.\n" if ( !$backup_file );
+                die "Backup file cannot be read\n"                                      if ( !-r $backup_file );
+
+                if ( !length($verify) || $verify ne "--verify" ) {
+                    print "This operation can not be undone! Please pass `--verify` to verify you really want to do this.\n";
+                    return;
+                }
+
+                ea_podman::util::perform_user_restore($backup_file);
             },
         },
         avail => {
