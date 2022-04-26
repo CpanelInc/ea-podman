@@ -59,6 +59,13 @@ sub describe {
             'hook'     => 'PodmanHooks::_delete_user',
             'exectype' => 'module',
         },
+        {
+            'category' => 'PkgAcct',
+            'event'    => 'Create',
+            'stage'    => 'pre',
+            'hook'     => 'PodmanHooks::_do_backup',
+            'exectype' => 'module',
+        },
     ];
 
     return $hooks;
@@ -129,6 +136,33 @@ sub _delete_user {
             ea_podman::util::remove_containers_for_a_user( values %{$user_containers} );
         }
     );
+
+    return 1, "Success";
+}
+
+sub _do_backup {
+    my ( $hook, $event ) = @_;
+
+    my $user = $event->{user};
+    if ( $user ne "root" ) {
+        Cpanel::AccessIds::do_as_user_with_exception(
+            $user,
+            sub {
+                my $homedir = ( getpwuid($>) )[7];
+                local $ENV{HOME} = $homedir;
+                local $ENV{USER} = $user;
+
+                chdir($homedir);
+
+                ea_podman::util::init_user();
+                ea_podman::util::perform_user_backup();
+            }
+        );
+    }
+    else {
+        ea_podman::util::init_user();
+        ea_podman::util::perform_user_backup();
+    }
 
     return 1, "Success";
 }
