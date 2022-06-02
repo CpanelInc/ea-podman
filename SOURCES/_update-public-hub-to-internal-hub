@@ -1,0 +1,30 @@
+#!/usr/local/cpanel/3rdparty/bin/perl
+# cpanel - _update-public-hub-to-internal-hub      Copyright 2022 cPanel, L.L.C.
+#                                                           All rights Reserved.
+# copyright@cpanel.net                                         http://cpanel.net
+# This code is subject to the cPanel license. Unauthorized copying is prohibited
+
+use strict;
+use warnings;
+use Cpanel::JSON ();
+use Path::Tiny 'path';
+
+if ( @ARGV != 1 || $ARGV[0] ne "--i-understand-do-it-anyway" ) {
+    die "This script changes where EA4 container based packages get their images.\n\nIt changes docker.io to an internal domain that only works if you are on the cpanel network.\n\nThis can only be done by manually doing the opposite of what this script does.\n\nIf you are sure that is what you want: re-run this script with the flag `--i-understand-do-it-anyway`\n";
+}
+
+my $meta = Cpanel::JSON::LoadFile("/etc/cpanel/ea4/ea4-metainfo.json");
+
+for my $pkg ( @{ $meta->{container_based_packages} } ) {
+    print "Updating “$pkg”’s image URL …\n";
+    my $eapodmanjson = "/opt/cpanel/$pkg/ea-podman.json";
+    my $conf         = -e $eapodmanjson ? Cpanel::JSON::LoadFile($eapodmanjson) : undef;    # acceptable TOCTOU, helps avoid ugly stack trace
+    if ( !$conf ) {
+        print " … N/A\n";
+        next;
+    }
+
+    $conf->{image} =~ s/^docker\.io/docker-registry-proxy.awe.cpanel.net/;
+    my $json = Cpanel::JSON::pretty_canonical_dump($conf);
+    path($eapodmanjson)->spew($json);
+}
