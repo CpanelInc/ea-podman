@@ -8,6 +8,7 @@ mkdir -p $DEB_INSTALL_ROOT/usr/local/cpanel/scripts
 ln -s /opt/cpanel/ea-podman/bin/ea-podman $DEB_INSTALL_ROOT/usr/local/cpanel/scripts/ea-podman
 mkdir -p $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin
 install $SOURCE0 $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin/ea-podman.pl
+install $SOURCE0 $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub
 mkdir -p $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/lib/ea_podman
 install $SOURCE1 $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/lib/ea_podman/subids.pm
 install $SOURCE2 $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/lib/ea_podman/util.pm

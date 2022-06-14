@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 6
+%define release_prefix 7
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -28,6 +28,7 @@ Source6:       pkg.prerm
 Source7:       compile.sh
 Source8:       PodmanHooks.pm
 Source9:       pkg.preinst
+Source10:      _update-public-hub-to-internal-hub
 
 %if 0%{?rhel} >= 8
 Requires:       gcc-toolset-11
@@ -55,6 +56,7 @@ ln -s /opt/cpanel/ea-podman/bin/ea-podman %{buildroot}/usr/local/cpanel/scripts/
 
 mkdir -p %{buildroot}/opt/cpanel/ea-podman/bin
 install %{SOURCE0} %{buildroot}/opt/cpanel/ea-podman/bin/ea-podman.pl
+install %{SOURCE10} %{buildroot}/opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub
 
 mkdir -p %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman
 install %{SOURCE1} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/subids.pm
@@ -89,9 +91,13 @@ rm -rf %{buildroot}
 %attr(0744,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
 %attr(0600,root,root) /opt/cpanel/ea-podman/registered-containers.json
 %attr(0700,root,root) /opt/cpanel/ea-podman/bin/compile.sh
+%attr(0700,root,root) /opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
 
 %changelog
+* Thu Jun 02 2022 Dan Muey <dan@cpanel.net> - 1.0-7
+- ZC-9993: Add script for dev/QA/smold4r to be able to test against internal docker hub
+
 * Mon Apr 25 2022 Julian Brown <julian.brown@cpanel.net> - 1.0-6
 - ZC-9877: Add backup/restore sub commands, and manage backup exclude file
 - ZC-9909: Add /scripts/removeacct Hook
