@@ -14,29 +14,25 @@ use Test::MockModule;
 use Test::MockFile qw< nostrict >;
 
 my %conf = (
-    require => "$FindBin::Bin/../SOURCES/ea-podman-adminbin",
+    require => "$FindBin::Bin/../SOURCES/subids.pm",
     package => 'bin::admin::Cpanel::ea_podman',
 );
 
 require $conf{require};
 
 our @system_cmds;
+our @qx_calls;
 
-BEGIN {
-    use Test::Mock::Cmd 'system' => sub {
-        my (@args) = @_;
-        my $str = join (":", @args);
-        push (@system_cmds, $str);
-        if (@args > 0) {
-            print "{}\n" if ($args[0] eq "/scripts/cpuser_port_authority");
-        }
-        return;
-    };
-}
+our $current_qx = sub {
+    push @qx_calls, [@_];
+    return "";
+};
+
+use Test::Mock::Cmd qx => sub { $current_qx->(@_) }
 
 $| = 1;
 
-describe "subids" => sub {
+describe "ea-podman-adminbin" => sub {
     describe "_actions" => sub {
         it "should LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS" => sub {
             my @ret = bin::admin::Cpanel::ea_podman::_actions();
