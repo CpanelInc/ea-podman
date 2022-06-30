@@ -10,8 +10,7 @@ use Test::Spec;    # automatically turns on strict and warnings
 
 use FindBin;
 
-use Test::MockModule;
-use Test::MockFile qw< nostrict >;
+use File::Temp;
 
 my %conf = (
     require => "$FindBin::Bin/../SOURCES/subids.pm",
@@ -20,188 +19,220 @@ my %conf = (
 
 require $conf{require};
 
-our @system_cmds;
+our $max_usernamespaces = 15000;
+our $os                 = "AlmaLinux8";
+
 our @qx_calls;
 
 our $current_qx = sub {
     push @qx_calls, [@_];
+    if ( $_[0] =~ m/user\.max_user_namespaces/ ) {
+        return $max_usernamespaces;
+    }
+    elsif ( $_[0] =~ m:source /etc/os-release: ) {
+        return $os;
+    }
     return "";
 };
 
-use Test::Mock::Cmd qx => sub { $current_qx->(@_) }
+use Test::Mock::Cmd qx => sub { $current_qx->(@_) };
+
+our $getpwnam_called = 0;
+
+BEGIN {
+    # Temp::User::Cpanel, gets a permission denied when creating a user
+    # Not sure why, so I have to override this function.
+    # This could cause problems, but works for this test right now
+
+    *CORE::GLOBAL::getpwnam = sub {
+        my ($user_name) = @_;
+        $getpwnam_called++;
+        return ( $user_name, "Haha", 11002, 11004, 20, "Hi Mom", "No idea", "/home/$user_name", '/bin/bash' );
+    };
+}
 
 $| = 1;
 
-describe "ea-podman-adminbin" => sub {
-    describe "_actions" => sub {
-        it "should LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS" => sub {
-            my @ret = bin::admin::Cpanel::ea_podman::_actions();
-            is_deeply \@ret, [qw(LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS)];
-        };
-    };
+describe "subids" => sub {
+    share %conf;
 
-    describe "LIST" => sub {
-        share my %mi;
+    describe "get_subuids" => sub {
         around {
-            %mi = %conf;
+            local $conf{mock_dir}    = File::Temp->newdir();
+            local $conf{mock_subuid} = $conf{mock_dir} . "/subuid";
+            local $conf{mock_subgid} = $conf{mock_dir} . "/subgid";
 
-            local $mi{mocks} = {};
-            @system_cmds = ();
-
-            $mi{mocks}->{list} = Test::MockModule->new('Capture::Tiny');
-            $mi{mocks}->{list}->redefine(
-                capture_merged => sub {
-                    my ($coderef) = @_;
-                    $coderef->();
-                }
+            Path::Tiny::path( $conf{mock_subuid} )->spew(
+                qq{ubuntu:100000:65536
+cptest1:165537:65536
+}
             );
 
-            # Cannot use Test::MockModule for this one
-            local *bin::admin::Cpanel::ea_podman::new = sub {
-                my ($class) = @_;
+            Path::Tiny::path( $conf{mock_subgid} )->spew(
+                qq{ubuntu:100000:65536
+cptest1:165537:65536
+}
+            );
 
-                my $self = {};
-                return bless {}, $class;
-            };
+            no warnings qw/once/;
 
-            local *bin::admin::Cpanel::ea_podman::get_caller_username = sub {
-                return 'cptest1';
-            };
-
-            # $self->{'_arguments'} = $line1_ar;
-
-            $mi{mocks}->{object} = bin::admin::Cpanel::ea_podman->new();
+            local $ea_podman::subids::file_subuid = $conf{mock_subuid};
+            local $ea_podman::subids::file_subgid = $conf{mock_subgid};
 
             yield;
         };
 
-        it "should call port authority" => sub {
-            $mi{mocks}->{object}->LIST();
+        it "should properly list" => sub {
+            my $hr = ea_podman::subids::get_subuids();
 
-            is_deeply (\@system_cmds, [ '/scripts/cpuser_port_authority:list:cptest1' ]);
+            my $expected_hr = {
+                ubuntu  => '100000:65536',
+                cptest1 => '165537:65536'
+            };
+
+            cmp_deeply( $hr, $expected_hr );
         };
     };
 
-    describe "ENSURE_USER" => sub {
-        share my %mi;
+    describe "get_subgids" => sub {
         around {
-            %mi = %conf;
+            local $conf{mock_dir}    = File::Temp->newdir();
+            local $conf{mock_subuid} = $conf{mock_dir} . "/subuid";
+            local $conf{mock_subgid} = $conf{mock_dir} . "/subgid";
 
-            local $mi{mocks} = {};
-            @system_cmds = ();
-
-            $mi{mocks}->{list} = Test::MockModule->new('Capture::Tiny');
-            $mi{mocks}->{list}->redefine(
-                capture_merged => sub {
-                    my ($coderef) = @_;
-                    $coderef->();
-                }
+            Path::Tiny::path( $conf{mock_subuid} )->spew(
+                qq{ubuntu:100000:65536
+cptest1:165537:65536
+}
             );
 
-            # Cannot use Test::MockModule for this one
-            local *bin::admin::Cpanel::ea_podman::new = sub {
-                my ($class) = @_;
+            Path::Tiny::path( $conf{mock_subgid} )->spew(
+                qq{ubuntu:100000:65536
+cptest1:165537:65536
+}
+            );
 
-                my $self = {};
-                return bless {}, $class;
-            };
+            no warnings qw/once/;
 
-            local *bin::admin::Cpanel::ea_podman::get_caller_username = sub {
-                return 'cptest1';
-            };
-
-            # $self->{'_arguments'} = $line1_ar;
-
-            $mi{mocks}->{object} = bin::admin::Cpanel::ea_podman->new();
+            local $ea_podman::subids::file_subuid = $conf{mock_subuid};
+            local $ea_podman::subids::file_subgid = $conf{mock_subgid};
 
             yield;
         };
 
-        it "should call ensure_user" => sub {
-            my $ensure_user = "";
+        it "should properly list" => sub {
+            my $hr = ea_podman::subids::get_subgids();
 
-            no warnings qw(redefine once);
-
-            local *ea_podman::subids::ensure_user_root = sub {
-                my ($user) = @_;
-                $ensure_user = $user;
-                return;
+            my $expected_hr = {
+                ubuntu  => '100000:65536',
+                cptest1 => '165537:65536'
             };
 
-            $mi{mocks}->{object}->ENSURE_USER();
-
-            is ($ensure_user, "cptest1");
+            cmp_deeply( $hr, $expected_hr );
         };
     };
 
-    describe "GIVE" => sub {
-        share my %mi;
+    describe "assert_has_user_namespaces" => sub {
+        it "should work correctly if max_usernamespaces is supported" => sub {
+            my $val = ea_podman::subids::assert_has_user_namespaces();
+            is( $val, 15000 );
+        };
+
+        it "should output horrible things if not supported" => sub {
+            local $max_usernamespaces = 0;
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+
+            ok( $@ =~ m/User Namespaces not available/ );
+        };
+
+        it "should output more horrible things if on c7" => sub {
+            local $max_usernamespaces = 0;
+            local $os                 = "centos7";
+
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+
+            ok( $@ =~ m/CentOS 7 running these command/ );
+        };
+    };
+
+    describe "ensure_user_root" => sub {
         around {
-            %mi = %conf;
+            local $conf{mock_dir}    = File::Temp->newdir();
+            local $conf{mock_subuid} = $conf{mock_dir} . "/subuid";
+            local $conf{mock_subgid} = $conf{mock_dir} . "/subgid";
 
-            local $mi{mocks} = {};
-            @system_cmds = ();
-
-            $mi{mocks}->{list} = Test::MockModule->new('Capture::Tiny');
-            $mi{mocks}->{list}->redefine(
-                capture_merged => sub {
-                    my ($coderef) = @_;
-                    $coderef->();
-                }
+            Path::Tiny::path( $conf{mock_subuid} )->spew(
+                qq{ubuntu:100000:65536
+cptest1:165537:65536
+}
             );
 
-            # Cannot use Test::MockModule for this one
-            local *bin::admin::Cpanel::ea_podman::new = sub {
-                my ($class) = @_;
+            Path::Tiny::path( $conf{mock_subgid} )->spew(
+                qq{ubuntu:100000:65536
+cptest1:165537:65536
+}
+            );
 
-                my $self = {};
-                $self->{_arguments} = [];
-                return bless {}, $class;
-            };
+            no warnings qw/once/;
 
-            local *bin::admin::Cpanel::ea_podman::get_caller_username = sub {
-                return 'cptest1';
-            };
+            local $ea_podman::subids::file_subuid = $conf{mock_subuid};
+            local $ea_podman::subids::file_subgid = $conf{mock_subgid};
 
-            $mi{mocks}->{object} = bin::admin::Cpanel::ea_podman->new();
+            local $conf{mock_rundir} = $conf{mock_dir} . "/run";
+            mkdir $conf{mock_rundir};
+
+            local $ea_podman::subids::dir_run = $conf{mock_rundir};
 
             yield;
         };
 
-        it "should call port authority" => sub {
-            $mi{mocks}->{object}->GIVE(1, "container.cptest1.01");
+        it "should not call getpwnam when user exists in subids" => sub {
+            my $user_name = "cptest1";
+            local $getpwnam_called = 0;
 
-            is_deeply (\@system_cmds, [
-                '/scripts/cpuser_port_authority:list:cptest1',
-                '/scripts/cpuser_port_authority:give:cptest1:1:--service=container.cptest1.01'
-            ]);
+            eval { ea_podman::subids::ensure_user_root( $user_name, 65537 ); };
+
+            is( $getpwnam_called, 0 );
         };
 
-        it "should die if no ports are provided" => sub {
-            local $@;
-            eval {
-                $mi{mocks}->{object}->GIVE();
-            };
+        it "should call getpwnam when user does not exist in subids" => sub {
+            my $user_name = "cptest9";
+            local $getpwnam_called = 0;
 
-            ok ($@ =~ m/Must provide a number of ports/);
+            eval { ea_podman::subids::ensure_user_root( $user_name, 65537 ); };
+
+            is( $getpwnam_called, 1 );
         };
 
-        it "should die if more than 100 ports are provided" => sub {
-            local $@;
-            eval {
-                $mi{mocks}->{object}->GIVE(102, "container.cptest1.01");
-            };
+        it "should create subdir in /run/user" => sub {
+            my $user_name = "cptest9";
 
-            ok ($@ =~ m/Cannot be assigned more than 100 ports/);
+            eval { ea_podman::subids::ensure_user_root( $user_name, 65537 ); };
+
+            my $dir = $conf{mock_rundir} . "/11002";
+            ok( -d $dir );
         };
 
-        it "should die if no container name is provided" => sub {
-            local $@;
+        it "should create entry in /etc/subuid" => sub {
+            my $user_name = "cptest9";
+            my $hr;
             eval {
-                $mi{mocks}->{object}->GIVE(1);
+                ea_podman::subids::ensure_user_root( $user_name, 65537 );
+                $hr = ea_podman::subids::get_subuids();
             };
 
-            ok ($@ =~ m/Invalid container name/);
+            ok( exists $hr->{$user_name} );
+        };
+
+        it "should create entry in /etc/subgid" => sub {
+            my $user_name = "cptest9";
+            my $hr;
+            eval {
+                ea_podman::subids::ensure_user_root( $user_name, 65537 );
+                $hr = ea_podman::subids::get_subgids();
+            };
+
+            ok( exists $hr->{$user_name} );
         };
     };
 };

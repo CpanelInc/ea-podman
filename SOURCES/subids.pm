@@ -14,6 +14,11 @@ use Path::Tiny 'path';
 our $good = "✅";
 our $bad  = "❌";
 
+# FOR Testability
+our $file_subuid = "/etc/subuid";
+our $file_subgid = "/etc/subgid";
+our $dir_run     = "/run/user";
+
 sub ensure_user_root {
     my ( $user, $num_uids ) = @_;
 
@@ -45,26 +50,26 @@ sub ensure_user_root {
 
     my $num_uids_minus_one = $num_uids - 1;
     if ( !exists $subuid->{$user} ) {
-        if ( open my $fh, ">>", '/etc/subuid' ) {
+        if ( open my $fh, ">>", $file_subuid ) {
             print $fh "$user:$getuid_max:$num_uids_minus_one\n";
             close $fh;
         }
     }
 
     if ( !exists $subgid->{$user} ) {
-        if ( open my $fh, ">>", '/etc/subgid' ) {
+        if ( open my $fh, ">>", $file_subgid ) {
             print $fh "$user:$getgid_max:$num_uids_minus_one\n";
             close $fh;
         }
     }
 
     # best effort
-    mkdir "/run/user";
+    mkdir $dir_run;
     my ( $uid, $gid ) = ( getpwnam($user) )[ 2, 3 ];
-    mkdir( "/run/user/$uid", 0700 );
-    chown( $uid, $gid, "/run/user/$uid" );
-    if ( !-d "/run/user/$uid" ) {
-        die "The directory “/run/user/$uid” is missing and could not be created (mode: 0700; owner & group: $user).\n";
+    mkdir( "$dir_run/$uid", 0700 );
+    chown( $uid, $gid, "$dir_run/$uid" );
+    if ( !-d "$dir_run/$uid" ) {
+        die "The directory “$dir_run/$uid” is missing and could not be created (mode: 0700; owner & group: $user).\n";
     }
 
     return;
@@ -86,7 +91,8 @@ C7
         chomp($c7_msg);
 
         # I wish there was a better way …
-        my $os = -f "/etc/os-release" ? `source /etc/os-release; echo \$ID\$VERSION_ID` : "??";
+        my $os = -f '/etc/os-release' ? `source /etc/os-release; echo \$ID\$VERSION_ID` : "??";
+
         chomp($os);
         $c7_msg = "" if $os ne "centos7";
 
@@ -103,11 +109,11 @@ END_NO_UNS
 }
 
 sub get_subuids {
-    return _parse_subid_file("/etc/subuid");
+    return _parse_subid_file($file_subuid);
 }
 
 sub get_subgids {
-    return _parse_subid_file("/etc/subgid");
+    return _parse_subid_file($file_subgid);
 }
 
 ###############
