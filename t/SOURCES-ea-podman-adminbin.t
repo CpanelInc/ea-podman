@@ -11,7 +11,7 @@ use Test::Spec;    # automatically turns on strict and warnings
 use FindBin;
 
 use Test::MockModule;
-use Test::MockFile;
+use Test::MockFile qw< nostrict >;
 
 my %conf = (
     require => "$FindBin::Bin/../SOURCES/ea-podman-adminbin",
@@ -25,8 +25,11 @@ our @system_cmds;
 BEGIN {
     use Test::Mock::Cmd 'system' => sub {
         my (@args) = @_;
-        my $str = join (":", @args);
-        push (@system_cmds, $str);
+        my $str = join( ":", @args );
+        push( @system_cmds, $str );
+        if ( @args > 0 ) {
+            print "{}\n" if ( $args[0] eq "/scripts/cpuser_port_authority" );
+        }
         return;
     };
 }
@@ -35,9 +38,9 @@ $| = 1;
 
 describe "ea-podman-adminbin" => sub {
     describe "_actions" => sub {
-        it "should LIST GIVE ENSURE_USER" => sub {
+        it "should LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS" => sub {
             my @ret = bin::admin::Cpanel::ea_podman::_actions();
-            is_deeply \@ret, [qw(LIST GIVE ENSURE_USER)];
+            is_deeply \@ret, [qw(LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS)];
         };
     };
 
@@ -79,7 +82,7 @@ describe "ea-podman-adminbin" => sub {
         it "should call port authority" => sub {
             $mi{mocks}->{object}->LIST();
 
-            is_deeply (\@system_cmds, [ '/scripts/cpuser_port_authority:list:cptest1' ]);
+            is_deeply( \@system_cmds, ['/scripts/cpuser_port_authority:list:cptest1'] );
         };
     };
 
@@ -123,7 +126,7 @@ describe "ea-podman-adminbin" => sub {
 
             no warnings qw(redefine once);
 
-            local *ea_podman::subids::ensure_user = sub {
+            local *ea_podman::subids::ensure_user_root = sub {
                 my ($user) = @_;
                 $ensure_user = $user;
                 return;
@@ -131,7 +134,7 @@ describe "ea-podman-adminbin" => sub {
 
             $mi{mocks}->{object}->ENSURE_USER();
 
-            is ($ensure_user, "cptest1");
+            is( $ensure_user, "cptest1" );
         };
     };
 
@@ -170,36 +173,36 @@ describe "ea-podman-adminbin" => sub {
         };
 
         it "should call port authority" => sub {
-            $mi{mocks}->{object}->GIVE(1, "my_container");
+            $mi{mocks}->{object}->GIVE( 1, "container.cptest1.01" );
 
-            is_deeply (\@system_cmds, [ '/scripts/cpuser_port_authority:give:cptest1:1:my_container' ]);
+            is_deeply(
+                \@system_cmds,
+                [
+                    '/scripts/cpuser_port_authority:list:cptest1',
+                    '/scripts/cpuser_port_authority:give:cptest1:1:--service=container.cptest1.01'
+                ]
+            );
         };
 
         it "should die if no ports are provided" => sub {
             local $@;
-            eval {
-                $mi{mocks}->{object}->GIVE();
-            };
+            eval { $mi{mocks}->{object}->GIVE(); };
 
-            ok ($@ =~ m/Must provide a number of ports/);
+            ok( $@ =~ m/Must provide a number of ports/ );
         };
 
         it "should die if more than 100 ports are provided" => sub {
             local $@;
-            eval {
-                $mi{mocks}->{object}->GIVE(102);
-            };
+            eval { $mi{mocks}->{object}->GIVE( 102, "container.cptest1.01" ); };
 
-            ok ($@ =~ m/Cannot create more than 100 ports/);
+            ok( $@ =~ m/ports must be numeric/ );
         };
 
         it "should die if no container name is provided" => sub {
             local $@;
-            eval {
-                $mi{mocks}->{object}->GIVE(1);
-            };
+            eval { $mi{mocks}->{object}->GIVE(1); };
 
-            ok ($@ =~ m/Must provide a container name/);
+            ok( $@ =~ m/Invalid container name/ );
         };
     };
 };
