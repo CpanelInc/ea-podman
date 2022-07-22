@@ -399,8 +399,10 @@ sub _ensure_latest_container {
         push @start_args, $docker_name;
     }
 
+    my $docker_name = $start_args[-1];    # so we can persist image
+
     uninstall_container($container_name) if $isupgrade || $isrestore;    # avoid spurious warnings on install
-    register_container( $container_name, $isupgrade || $isrestore );     # register before create just in case
+    register_container( $container_name, $isupgrade || $isrestore, $docker_name );     # register before create just in case
 
     if ( !create_user_container( $container_name, @start_args ) ) {
         if ( !$isupgrade ) {
@@ -640,7 +642,7 @@ sub load_known_containers_as_root {
 }
 
 sub register_container_as_root {
-    my ( $container_name, $user, $isupgrade ) = @_;
+    my ( $container_name, $user, $isupgrade, $image ) = @_;
 
     my $containers_hr = load_known_containers_as_root();
 
@@ -663,6 +665,7 @@ sub register_container_as_root {
         user           => $user,
         pkg            => $pkg,
         pkg_version    => $pkg_ver,
+        image          => $image,
     };
 
     Cpanel::JSON::DumpFile( $known_containers_file, $containers_hr ) or die "Cannot open known containers file";
@@ -745,16 +748,16 @@ sub upgrade_containers_for_a_user {
 }
 
 sub register_container {
-    my ( $container_name, $isupgrade ) = @_;
+    my ( $container_name, $isupgrade, $image ) = @_;
 
     if ( $> == 0 ) {
         local $@;
-        eval { register_container_as_root( $container_name, "root", $isupgrade ); };
+        eval { register_container_as_root( $container_name, "root", $isupgrade, $image ); };
 
         die "Unable to register “$container_name”: $@\n" if $@;
     }
     else {
-        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REGISTER', $container_name, $isupgrade );
+        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REGISTER', $container_name, $isupgrade, $image );
     }
 }
 

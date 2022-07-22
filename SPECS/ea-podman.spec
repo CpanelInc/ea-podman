@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 8
+%define release_prefix 9
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -95,6 +95,9 @@ rm -rf %{buildroot}
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
 
 %changelog
+* Fri Jul 22 2022 Brian Mendoza <brian.mendoza@cpanel.net> - 1.0-9
+- ZC-10113: Persist image name to registered-containers.json
+
 * Wed Jul 13 2022 Cory McIntire <cory@cpanel.net> - 1.0-8
 - EA-10834: Rolling “ea-podman” back to “547d2ef67731ef65145dd384c32ade79018f8180”: accidental merge to production
 
