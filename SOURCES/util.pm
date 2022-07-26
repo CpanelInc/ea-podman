@@ -399,10 +399,11 @@ sub _ensure_latest_container {
         push @start_args, $docker_name;
     }
 
-    my $docker_name = $start_args[-1];    # so we can persist image
+    my $image_arg = $start_args[-1];    # so we can persist image name
+    my ($image_name) = $image_arg =~ m|([^/]+)$|;
 
     uninstall_container($container_name) if $isupgrade || $isrestore;    # avoid spurious warnings on install
-    register_container( $container_name, $isupgrade || $isrestore, $docker_name );     # register before create just in case
+    register_container( $container_name, $isupgrade || $isrestore, $image_name );     # register before create just in case
 
     if ( !create_user_container( $container_name, @start_args ) ) {
         if ( !$isupgrade ) {
