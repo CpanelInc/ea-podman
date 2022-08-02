@@ -91,12 +91,12 @@ sub ENSURE_USER {
 }
 
 sub REGISTER {
-    my ( $self, $container_name, $isupgrade ) = @_;
+    my ( $self, $container_name, $isupgrade, $image ) = @_;
     my $cpuser = $self->_debug_and_user(0);
 
     _die_with_message("Must provide a container name") if !defined $container_name;
 
-    eval { ea_podman::util::register_container_as_root( $container_name, $cpuser, $isupgrade ); };
+    eval { ea_podman::util::register_container_as_root( $container_name, $cpuser, $isupgrade, $image ); };
 
     _die_with_message("Unable to add to known_containers: $@") if ($@);
 
