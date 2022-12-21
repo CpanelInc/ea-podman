@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 9
+%define release_prefix 10
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -30,8 +30,15 @@ Source8:       PodmanHooks.pm
 Source9:       pkg.preinst
 Source10:      _update-public-hub-to-internal-hub
 
-%if 0%{?rhel} >= 8
+%if 0%{?rhel} == 8
 Requires:       gcc-toolset-11
+%endif
+
+%if 0%{?rhel} == 9
+Requires:       gcc >= 11
+%endif
+
+%if 0%{?rhel} >= 8
 Requires:       libnsl2
 Requires:       libnsl2-devel
 %endif
@@ -95,6 +102,9 @@ rm -rf %{buildroot}
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
 
 %changelog
+* Tue Oct 04 2022 Dan Muey <dan@cpanel.net> - 1.0-10
+- ZC-10348: Updates for Alma 9 support
+
 * Fri Jul 22 2022 Brian Mendoza <brian.mendoza@cpanel.net> - 1.0-9
 - ZC-10113: Persist image name to registered-containers.json
 
