@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 10
+%define release_prefix 11
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -102,6 +102,9 @@ rm -rf %{buildroot}
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
 
 %changelog
+* Fri Feb 03 2023 Julian Brown <julian.brown@cpanel.net> - 1.0-11
+- ZC-10667: Change perms for nuewuidmap for Rocky 9
+
 * Tue Oct 04 2022 Dan Muey <dan@cpanel.net> - 1.0-10
 - ZC-10348: Updates for Alma 9 support
 
