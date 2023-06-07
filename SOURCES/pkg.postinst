@@ -35,16 +35,3 @@ echo "As root, run \`ea-podman subids\` and look for more information at the top
 echo "!!!! /ATTENTION !!"
 set -x
 
-# On Rocky 9 and ONLY Rocky 9, there is a need for use to change the permissions on these
-# programs
-
-. /etc/os-release
-
-if [ "$NAME" = "Rocky Linux" ]; then
-    VAL=`echo $VERSION | sed -n '/^9\./p'`
-    if [ "$VAL" != "" ]; then
-		chmod 4755 /usr/bin/newgidmap
-		chmod 4755 /usr/bin/newuidmap
-    fi
-fi
-
