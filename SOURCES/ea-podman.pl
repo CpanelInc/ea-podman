@@ -44,6 +44,8 @@ use Whostmgr::Accounts::Shell ();
 use Term::ReadLine   ();
 use App::CmdDispatch ();
 
+use Try::Tiny;
+
 run(@ARGV) unless caller;
 
 sub run {
@@ -307,7 +309,8 @@ This is intended to make it easier for a user to purge their ea-podman based con
                             ea_podman::util::remove_containers_for_a_user( @{ $user_breakdown{$c_user} } );
                         }
                         else {
-                            Cpanel::AccessIds::do_as_user_with_exception(
+                            try {
+                                Cpanel::AccessIds::do_as_user_with_exception(
                                 $c_user,
                                 sub {
                                     my $homedir = ( getpwuid($>) )[7];
@@ -315,11 +318,24 @@ This is intended to make it easier for a user to purge their ea-podman based con
                                     local $ENV{USER} = $c_user;
 
                                     chdir($homedir);
-
                                     ea_podman::util::init_user();
                                     ea_podman::util::remove_containers_for_a_user( @{ $user_breakdown{$c_user} } );
+                                });
+                            }
+                            catch {
+                                my $err = $_;
+
+                                # Handles cases where users are not removed cleanly (with the use of a cPanel script/API), therefore it tries to manage containers as the deleted user
+                                # which causes unistall of containerized packages to fail (see ZC-10958)
+                                if ($err->isa("Cpanel::Exception::UserNotFound")) {
+                                    ea_podman::util::remove_containers_for_a_deleted_user( @{ $user_breakdown{$c_user} } );
+
+                                    return;
                                 }
-                            );
+
+                                # Rethrow any other exception type
+                                die $err;
+                            };
                         }
                     }
                 }

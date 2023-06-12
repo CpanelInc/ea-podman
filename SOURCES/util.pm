@@ -726,6 +726,28 @@ sub remove_containers_for_a_user {
     return;
 }
 
+sub remove_containers_for_a_deleted_user {
+    my (@containers) = @_;
+
+    # They should be for all the same user
+    my $user;
+    foreach my $container (@containers) {
+        my $c_user = $container->{user};
+        if ( !$user ) {
+            $user = $c_user;
+            next;
+        }
+
+        die "remove_users_containers: Containers listed must be for all the same user" if ( $c_user ne $user );
+    }
+
+    foreach my $container (@containers) {
+        deregister_container_as_root( $container->{container_name} );
+    }
+
+    return;
+}
+
 sub upgrade_containers_for_a_user {
     my (@containers) = @_;
 
