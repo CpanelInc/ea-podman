@@ -336,7 +336,35 @@ sub _ensure_latest_container {
             }
         }
         else {
-            die "“$pkg” looks like an EA4 package but it is not a container based EA4 package. Please use the correct package name (or install it if it was uninstalled but its directory left behind) or use a name that does not start w/ `ea-`.\n";
+            # Let's see if we can drill down further on why this failed.
+
+            # first and foremost is this an official ea4 podman package?
+            my $metainfo = "/etc/cpanel/ea4/ea4-metainfo.json";
+            die "There appears to be a configuration issue with your EasyApache 4 installation\n" if ( !-f $metainfo );
+
+            my $ea4_metainfo = Cpanel::JSON::LoadFile($metainfo);
+            my $is_container;
+
+            foreach my $container_pkg ( @{ $ea4_metainfo->{container_based_packages} } ) {
+                if ( $pkg eq $container_pkg ) {
+                    $is_container = 1;
+                    last;
+                }
+            }
+
+            if ($is_container) {
+
+                # This covers the case where it is not installed, or has an orphaned directory present.
+                if ( !-e "/opt/cpanel/$pkg/ea-podman.json" ) {
+                    die "“$pkg” is an EasyApache 4 container based package, “$pkg” is not installed, please install “$pkg” with your package manager.\n";
+                }
+                else {
+                    die "“$pkg” failed to install\n";
+                }
+            }
+            else {
+                die "“$pkg” is not an EasyApache 4 container based package, remove the `ea-` from the name and try again.\n";
+            }
         }
     }
     else {
@@ -399,11 +427,11 @@ sub _ensure_latest_container {
         push @start_args, $docker_name;
     }
 
-    my $image_arg = $start_args[-1];    # so we can persist image name
+    my $image_arg = $start_args[-1];                # so we can persist image name
     my ($image_name) = $image_arg =~ m|([^/]+)$|;
 
-    uninstall_container($container_name) if $isupgrade || $isrestore;    # avoid spurious warnings on install
-    register_container( $container_name, $isupgrade || $isrestore, $image_name );     # register before create just in case
+    uninstall_container($container_name) if $isupgrade || $isrestore;                # avoid spurious warnings on install
+    register_container( $container_name, $isupgrade || $isrestore, $image_name );    # register before create just in case
 
     if ( !create_user_container( $container_name, @start_args ) ) {
         if ( !$isupgrade ) {
@@ -563,7 +591,9 @@ sub validate_start_args {
 
 sub install_container {
     my ( $name, @start_args ) = @_;
-    _ensure_latest_container( get_next_available_container_name($name), @start_args );
+    my $container_name = get_next_available_container_name($name);
+    _ensure_latest_container( $container_name, @start_args );
+    return $container_name;
 }
 
 sub upgrade_container {
