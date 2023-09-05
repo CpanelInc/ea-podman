@@ -103,7 +103,7 @@ rm -rf %{buildroot}
 
 %changelog
 * Fri Sep 01 2023 Julian Brown <julian.brown@cpanel.net> - 1.0-14
-- ZC-10612: Add container name to output, and add better messaging when ea podman package is not installed
+- ZC-10612: Add container name to output, and add better messaging when ea-podman package is not installed
 
 * Mon Jun 12 2023 Brian Mendoza <brian.mendoza@cpanel.net> - 1.0-13
 - ZC-10958: Fix issue when uninstalling container packages when user doesn't exist anymore

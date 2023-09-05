@@ -339,16 +339,8 @@ sub _ensure_latest_container {
             # Let's see if we can drill down further on why this failed.
 
             # first and foremost is this an official ea4 podman package?
-            my $metainfo = "/etc/cpanel/ea4/ea4-metainfo.json";
-            my $ea4_metainfo;
-            my $ret = eval {
-                $ea4_metainfo = Cpanel::JSON::LoadFile($metainfo);
-                1;
-            }
-
-              if ( !$ret ) {
-                die "$@\n";
-            }
+            my $metainfo     = "/etc/cpanel/ea4/ea4-metainfo.json";
+            my $ea4_metainfo = Cpanel::JSON::LoadFile($metainfo);
 
             my $is_container;
 
@@ -360,7 +352,9 @@ sub _ensure_latest_container {
             }
 
             if ($is_container) {
-                die "“$pkg” is an EasyApache 4 container based package, “$pkg” is not installed. …\n";
+                die qq{“$pkg” is an EasyApache 4 container based package, “$pkg” is not installed.
+In order to spin up an instance of it with ea-podman an admin will need to install “$pkg” via the system’s package manager.
+};
             }
             else {
                 die "“$pkg” is not an EasyApache 4 container based package. Use a name that does not start w/ `ea-`\n";
