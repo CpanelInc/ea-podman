@@ -357,7 +357,10 @@ In order to spin up an instance of it with ea-podman an admin will need to insta
 };
             }
             else {
-                die "“$pkg” is not an EasyApache 4 container based package. Use a name that does not start w/ `ea-`\n";
+                die qq{“$pkg” is not an EasyApache 4 container-based package.
+Check the package name and try again.
+To see a list of the available EasyApache 4 container-based packages, run the `/scripts/ea-podman available` command.
+};
             }
         }
     }
