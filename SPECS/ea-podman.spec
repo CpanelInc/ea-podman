@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 14
+%define release_prefix 15
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -102,6 +102,9 @@ rm -rf %{buildroot}
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
 
 %changelog
+* Mon Sep 25 2023 Julian Brown <julian.brown@cpanel.net> - 1.0-15
+- ZC-11189: Make changes to allow pkgacct to backup a users containers
+
 * Fri Sep 01 2023 Julian Brown <julian.brown@cpanel.net> - 1.0-14
 - ZC-10612: Add container name to output, and add better messaging when ea-podman package is not installed
 
