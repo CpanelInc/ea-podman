@@ -479,6 +479,32 @@ This is intended to make it easier for a user to purge their ea-podman based con
                 return 1;
             },
         },
+        rootbackupofuser => {
+            clue     => "rootbackupofuser - internal use only",
+            abstract => "internal use only",
+            help     => "internal use only",
+            code     => sub {
+                my ( $app, $user ) = @_;
+
+                require Cpanel::AccessIds;
+
+                Cpanel::AccessIds::do_as_user_with_exception(
+                    $user,
+                    sub {
+                        my $homedir = ( getpwuid($<) )[7];
+                        local $ENV{HOME} = $homedir;
+                        local $ENV{USER} = $user;
+
+                        chdir($homedir);
+
+                        ea_podman::util::init_user();
+                        ea_podman::util::perform_user_backup();
+                    }
+                );
+
+                return 1;
+            },
+        },
     );
 
     return ( \%cmds, \%opts );
