@@ -145,19 +145,12 @@ sub _do_backup {
 
     my $user = $event->{user};
     if ( $user ne "root" ) {
-        Cpanel::AccessIds::do_as_user_with_exception(
-            $user,
-            sub {
-                my $homedir = ( getpwuid($>) )[7];
-                local $ENV{HOME} = $homedir;
-                local $ENV{USER} = $user;
 
-                chdir($homedir);
-
-                ea_podman::util::init_user();
-                ea_podman::util::perform_user_backup();
-            }
-        );
+        # /scripts/pkgacct is a perl script on cPanel binaries, and cannot be used to execute
+        # admin bin scripts.
+        #
+        # Doing this allows admin bin to work correctly
+        system( "/scripts/ea-podman", "rootbackupofuser", $user );
     }
     else {
         ea_podman::util::init_user();
