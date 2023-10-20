@@ -72,6 +72,9 @@ sub ensure_user_root {
         die "The directory “$dir_run/$uid” is missing and could not be created (mode: 0700; owner & group: $user).\n";
     }
 
+    # Tell podman to ignore uid/gid issues
+    _ensure_storage_conf();
+
     return;
 }
 
@@ -132,6 +135,20 @@ sub _parse_subid_file {
     }
 
     return $hr;
+}
+
+sub _ensure_storage_conf {
+    my $conf = path('/etc/containers/storage.conf');
+
+    if ( !$conf->exists() ) {
+        $conf->spew(
+            qq{[storage]
+  driver = "overlay"
+  [storage.options]
+    ignore_chown_errors = "true"
+}
+        );
+    }
 }
 
 1;
