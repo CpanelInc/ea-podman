@@ -10,6 +10,7 @@ use warnings;
 package ea_podman::subids;
 
 use Path::Tiny 'path';
+use Cpanel::OS;
 
 our $good = "✅";
 our $bad  = "❌";
@@ -138,17 +139,23 @@ sub _parse_subid_file {
 }
 
 sub _ensure_storage_conf {
-    my $conf = path('/etc/containers/storage.conf');
 
-    if ( !$conf->exists() ) {
-        $conf->spew(
-            qq{[storage]
-  driver = "overlay"
-  [storage.options]
+    # This is only necessary on certain OS's.
+    if ( Cpanel::OS::distro() eq "ubuntu" && Cpanel::OS::major() eq "22" ) {
+        my $conf = path('/etc/containers/storage.conf');
+
+        if ( !$conf->exists() ) {
+            $conf->spew(
+                qq{[storage]
+driver = "overlay"
+[storage.options]
     ignore_chown_errors = "true"
 }
-        );
+            );
+        }
     }
+
+    return;
 }
 
 1;
