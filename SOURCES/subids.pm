@@ -152,7 +152,7 @@ sub _ensure_storage_conf {
                 qq{[storage]
 driver = "overlay"
 runroot = "/run/containers/storage"
-graphroot = "/run/containers/storage"
+graphroot = "/var/lib/containers/storage"
 [storage.options]
     ignore_chown_errors = "true"
 }
