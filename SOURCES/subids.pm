@@ -10,6 +10,7 @@ use warnings;
 package ea_podman::subids;
 
 use Path::Tiny 'path';
+use Cpanel::OS;
 
 our $good = "✅";
 our $bad  = "❌";
@@ -72,6 +73,9 @@ sub ensure_user_root {
         die "The directory “$dir_run/$uid” is missing and could not be created (mode: 0700; owner & group: $user).\n";
     }
 
+    # Tell podman to ignore uid/gid issues
+    _ensure_storage_conf();
+
     return;
 }
 
@@ -132,6 +136,31 @@ sub _parse_subid_file {
     }
 
     return $hr;
+}
+
+sub _ensure_storage_conf {
+
+    # This is only necessary on certain OS's.
+    # UGMO:
+    # Since we can only extend Cpanel::OS for new versions of ULC we can’t use a proper OS agnostic attribute like `if (Cpanel::OS::container_storage_overlay_ignore_chown_errors) { `
+    # That being the case we have to violate the point of Cpanel::OS and do an isolated one off here :/
+    if ( Cpanel::OS::distro() eq "ubuntu" && Cpanel::OS::major() eq "22" ) {
+        my $conf = path('/etc/containers/storage.conf');
+
+        if ( !$conf->exists() ) {
+            $conf->spew(
+                qq{[storage]
+driver = "overlay"
+runroot = "/run/containers/storage"
+graphroot = "/var/lib/containers/storage"
+[storage.options]
+    ignore_chown_errors = "true"
+}
+            );
+        }
+    }
+
+    return;
 }
 
 1;
