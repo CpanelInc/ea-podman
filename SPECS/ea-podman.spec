@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 16
+%define release_prefix 17
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -10,6 +10,7 @@ URL:            http://www.cpanel.net
 Vendor:         cPanel, Inc.
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-buildroot
 Requires:       podman-docker >= 3
+Requires:       systemd-container
 %if 0%{?rhel} >= 7
 Requires: ea-podman-repo
 %endif
@@ -102,6 +103,9 @@ rm -rf %{buildroot}
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
 
 %changelog
+* Wed Jun 19 2024 Brian Mendoza <brian.mendoza@cpanel.net> - 1.0-17
+- ZC-11748: Require systemd-container to allow management via WHM terminal
+
 * Fri Oct 20 2023 Julian Brown <julian.brown@cpanel.net> - 1.0-16
 - ZC-11296: Silence warning about insufficient UID/GID's.
 
