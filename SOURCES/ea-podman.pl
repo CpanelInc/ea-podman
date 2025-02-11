@@ -36,10 +36,12 @@ BEGIN {
     }
 }
 
-use Cpanel::Config::Users     ();
-use Cpanel::JSON              ();
-use Cpanel::AccessIds         ();
+use Cpanel::Config::Users ();
+use Cpanel::JSON          ();
+use Cpanel::AccessIds     ();
+
 use Whostmgr::Accounts::Shell ();
+use Cpanel::Shell             ();
 
 use Term::ReadLine   ();
 use App::CmdDispatch ();
@@ -53,7 +55,15 @@ sub run {
     local $Term::ReadLine::termcap_nowarn = 1;
 
     my $user = getpwuid($>);
-    die "Cannot run ea-podman from a restricted shell\n" if ( !Whostmgr::Accounts::Shell::has_unrestricted_shell($user) );
+    my $has_unrestricted_shell;
+    if ( defined &Whostmgr::Accounts::Shell::has_unrestricted_shell ) {
+        $has_unrestricted_shell = Whostmgr::Accounts::Shell::has_unrestricted_shell($user);
+    }
+    else {
+        $has_unrestricted_shell = Cpanel::Shell::has_unrestricted_shell($user);
+    }
+
+    die "Cannot run ea-podman from a restricted shell\n" if !$has_unrestricted_shell;
 
     if ( $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} && $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} == 1 ) {
 

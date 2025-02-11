@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 17
+%define release_prefix 18
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -103,6 +103,9 @@ rm -rf %{buildroot}
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
 
 %changelog
+* Tue Feb 11 2025 Dan Muey <daniel.muey@webpros.com> - 1.0-18
+- ZC-12610: Add compat layer for ULC function that was removed
+
 * Wed Jun 19 2024 Brian Mendoza <brian.mendoza@cpanel.net> - 1.0-17
 - ZC-11748: Require systemd-container to allow management via WHM terminal
 
