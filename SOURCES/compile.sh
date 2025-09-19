@@ -7,7 +7,7 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-echo "Compiling ea-podman"
+echo "Compiling ea-podman …"
 
 pushd /opt/cpanel/ea-podman/bin
 
@@ -18,5 +18,9 @@ PERLCC_OPTS="-v4 -UO -UB::Stash -UTie::Hash::NamedCapture -L /usr/lib64"
 PERLCC_DORMANT_OPTS="${PERLCC_OPTS} -UB"
 
 $CPANEL_PERLCC $CC_OPTIMIZATIONS $PERLCC_DORMANT_OPTS ea-podman.pl -o ea-podman
+
+echo " … done (Compiling ea-podman)"
+
+/opt/cpanel/ea-podman/bin/ea-podman testbin
 
 popd
