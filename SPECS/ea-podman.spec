@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 18
+%define release_prefix 19
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -30,7 +30,7 @@ Source7:       compile.sh
 Source8:       PodmanHooks.pm
 Source9:       pkg.preinst
 Source10:      _update-public-hub-to-internal-hub
-
+Source11:      EAPodman.pm
 %if 0%{?rhel} == 8
 Requires:       gcc-toolset-11
 %endif
@@ -61,6 +61,9 @@ echo "Nothing to build"
 %install
 mkdir -p %{buildroot}/usr/local/cpanel/scripts
 ln -s /opt/cpanel/ea-podman/bin/ea-podman %{buildroot}/usr/local/cpanel/scripts/ea-podman
+
+mkdir -p %{buildroot}/usr/local/cpanel/install
+install %{SOURCE11} %{buildroot}/usr/local/cpanel/install/EAPodman.pm
 
 mkdir -p %{buildroot}/opt/cpanel/ea-podman/bin
 install %{SOURCE0} %{buildroot}/opt/cpanel/ea-podman/bin/ea-podman.pl
@@ -101,8 +104,12 @@ rm -rf %{buildroot}
 %attr(0700,root,root) /opt/cpanel/ea-podman/bin/compile.sh
 %attr(0700,root,root) /opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
+%attr(0644, root, root) /usr/local/cpanel/install/EAPodman.pm
 
 %changelog
+* Fri Sep 19 2025 Dan Muey <daniel.muey@webpros.com> - 1.0-19
+- EA4-125: Add `testbin` subcommand and add re-compile check to UPCP install module
+
 * Tue Feb 11 2025 Dan Muey <daniel.muey@webpros.com> - 1.0-18
 - ZC-12610: Add compat layer for ULC function that was removed
 
