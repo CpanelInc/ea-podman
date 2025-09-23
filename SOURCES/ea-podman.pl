@@ -98,6 +98,14 @@ sub get_dispatch_args {
     }
 
     my %cmds = (
+        testbin => {
+            clue     => "testbin",
+            abstract => "Verify binary is stable",
+            help     => "If it exits clean the binary is ok. If it exits unclean it should be recompiled with `/opt/cpanel/ea-podman/bin/compile.sh`",
+            code     => sub {
+                printf "$0 is running under perl v%vd\n", $^V;
+            },
+        },
         subids => {
             clue     => "subids [--ensure]",
             abstract => "Check and report on sub id config",
