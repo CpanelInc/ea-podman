@@ -49,32 +49,40 @@ sub _ensure_subids {
     my $subuid = get_subuids();
     my $subgid = get_subgids();
 
-    return if exists $subuid->{$user} && exists $subgid->{$user};
+    if ( !( exists $subuid->{$user} && exists $subgid->{$user} ) ) {
 
-    # via the mechanics this means the uids/gids start at 190000
-    my $getuid_max = 190000 - $num_uids;
-    my $getgid_max = 190000 - $num_uids;
+        # via the mechanics this means the uids/gids start at 190000
+        my $getuid_max = 190000 - $num_uids;
+        my $getgid_max = 190000 - $num_uids;
 
-    foreach my $u ( keys %{$subuid} ) {
-        my ( $uid, $range ) = split( /:/, $subuid->{$u} );
-        $uid += $range;
-        $getuid_max = $uid if ( $uid > $getuid_max );
-    }
+        foreach my $u ( keys %{$subuid} ) {
+            my ( $uid, $range ) = split( /:/, $subuid->{$u} );
+            $uid += $range;
+            $getuid_max = $uid if ( $uid > $getuid_max );
+        }
 
-    foreach my $u ( keys %{$subgid} ) {
-        my ( $uid, $range ) = split( /:/, $subgid->{$u} );
-        $uid += $range;
-        $getgid_max = $uid if ( $uid > $getgid_max );
-    }
+        foreach my $u ( keys %{$subgid} ) {
+            my ( $uid, $range ) = split( /:/, $subgid->{$u} );
+            $uid += $range;
+            $getgid_max = $uid if ( $uid > $getgid_max );
+        }
 
-    $getuid_max++;
-    $getgid_max++;
+        $getuid_max++;
+        $getgid_max++;
 
-    my $num_uids_minus_one = $num_uids - 1;
-    if ( !exists $subuid->{$user} ) {
-        if ( open my $fh, ">>", $file_subuid ) {
-            print $fh "$user:$getuid_max:$num_uids_minus_one\n";
-            close $fh;
+        my $num_uids_minus_one = $num_uids - 1;
+        if ( !exists $subuid->{$user} ) {
+            if ( open my $fh, ">>", $file_subuid ) {
+                print $fh "$user:$getuid_max:$num_uids_minus_one\n";
+                close $fh;
+            }
+        }
+
+        if ( !exists $subgid->{$user} ) {
+            if ( open my $fh, ">>", $file_subgid ) {
+                print $fh "$user:$getgid_max:$num_uids_minus_one\n";
+                close $fh;
+            }
         }
     }
 
@@ -83,6 +91,60 @@ sub _ensure_subids {
             print $fh "$user:$getgid_max:$num_uids_minus_one\n";
             close $fh;
         }
+    }
+
+    return;
+}
+
+# Bootstrap the user’s rootless-podman session *as root*. Historically
+# ensure_user_root only did `mkdir /run/user/<uid>`, which left rootless
+# podman without a running user systemd manager or dbus socket — so
+# `podman generate systemd` + `systemctl --user` failed for any user without
+# an interactive login (cpsrvd/UAPI, account hooks, `su -`). See CPANEL-54037
+# (and UPS-504).
+#
+# `loginctl enable-linger <user>`, run as root, instead creates
+# /run/user/<uid> as a tmpfs *and* starts user@<uid>.service (the user systemd
+# manager), persisting both across logout/reboot — exactly what rootless
+# container persistence requires. Held in a package variable so tests can
+# stub the privileged call.
+our $linger_enabler = \&_enable_linger;
+
+sub _enable_linger {
+    my ($user) = @_;
+    system( "loginctl", "enable-linger", $user );
+    return $? == 0;
+}
+
+sub ensure_user_session {
+    my ($user) = @_;
+
+    my ( $uid, $gid ) = ( getpwnam($user) )[ 2, 3 ];
+    die "Could not look up the uid/gid for “$user”\n" if !defined $uid;
+
+    mkdir $dir_run;    # parent /run/user; harmless when it already exists
+
+    $linger_enabler->($user);
+
+    # enable-linger is asynchronous: it returns *before* logind has finished
+    # creating /run/user/<uid> AND starting user@<uid>.service. The readiness
+    # signal that `systemctl --user` + rootless podman actually need is the
+    # user manager’s dbus socket at /run/user/<uid>/bus — the directory itself
+    # appears well before the manager is up, so polling only for the dir races
+    # and leaves podman with “Failed to connect to user scope bus”. Poll for
+    # the bus socket.
+    my $rundir = "$dir_run/$uid";
+    my $bus    = "$rundir/bus";
+    for ( 1 .. 100 ) {
+        last if -d $rundir && -e $bus;
+        Time::HiRes::usleep(100_000);    # 0.1s × 100 ≈ 10s max
+    }
+
+    if ( !-d $rundir ) {
+        die "The directory “$rundir” is missing and could not be created by `loginctl enable-linger $user`.\n";
+    }
+    if ( !-e $bus ) {
+        die "The user session bus “$bus” did not appear after `loginctl enable-linger $user` (the user systemd manager did not start).\n";
     }
 
     return;
