@@ -190,7 +190,7 @@ sub delegate_to_uapi {
 }
 
 # Translate the CLI argv for a verb into UAPI key/value params. Mirrors the
-# reverse mapping in Cpanel::API::EAPodman (cpuser_port/env/risk-flag + image).
+# reverse mapping in Cpanel::API::EAPodman (container_port/env/risk-flag + image).
 sub _cli_args_to_uapi {
     my ( $verb, @args ) = @_;
 
@@ -201,7 +201,7 @@ sub _cli_args_to_uapi {
         my ( @ports, @envs, @positional );
         for ( my $i = 0; $i < @args; $i++ ) {
             my $a = $args[$i];
-            if ( $a =~ /^--cpuser-port=(.+)$/ ) {
+            if ( $a =~ /^--container-port=(.+)$/ ) {
                 push @ports, $1;
             }
             elsif ( $a =~ /^(?:-e|--env)=(.+)$/ ) {
@@ -218,10 +218,10 @@ sub _cli_args_to_uapi {
             }
         }
         die "install requires a package or container name\n" if !@positional;
-        $p{name}        = shift @positional;
-        $p{image}       = pop @positional if @positional;    # non-package form: trailing IMAGE
-        $p{cpuser_port} = \@ports         if @ports;
-        $p{env}         = \@envs          if @envs;
+        $p{name}           = shift @positional;
+        $p{image}          = pop @positional if @positional;    # non-package form: trailing IMAGE
+        $p{container_port} = \@ports         if @ports;
+        $p{env}            = \@envs          if @envs;
         return \%p;
     }
 
@@ -388,7 +388,7 @@ sub get_dispatch_args {
         },
 
         install => {
-            clue     => "install <PKG> [`run` flags]|install <NON-PKG-NAME> [--cpuser-port=<CONTAINER PORT|0> [--cpuser-port=<ANOTHER CONTAINER PORT|0> …]] [`run` flags] <IMAGE>",
+            clue     => "install <PKG> [`run` flags]|install <NON-PKG-NAME> [--container-port=<CONTAINER PORT|0> [--container-port=<ANOTHER CONTAINER PORT|0> …]] [`run` flags] <IMAGE>",
             abstract => "Install a container",
             help     => "Has two modes:\n\t<PKG> - An EA4 container based package.\n\t\tNeeds no other arguments or setup as that is all provided by the package. It can take some additional start up arguments.\n\t<NON-PKG-NAME> - manage an arbitrary image as if it where an EA4 container based package.\n\t\tSee https://github.com/CpanelInc/ea-podman/blob/master/README.md for details",
             code     => sub {

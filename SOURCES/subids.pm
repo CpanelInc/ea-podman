@@ -150,6 +150,54 @@ sub ensure_user_session {
     return;
 }
 
+# Allocate /etc/subuid + /etc/subgid ranges for the user, unless they already
+# have both. New ranges start at 190000 (or just past the highest existing
+# allocation, whichever is greater).
+sub _ensure_subids {
+    my ( $user, $num_uids ) = @_;
+
+    my $subuid = get_subuids();
+    my $subgid = get_subgids();
+
+    return if exists $subuid->{$user} && exists $subgid->{$user};
+
+    # via the mechanics this means the uids/gids start at 190000
+    my $getuid_max = 190000 - $num_uids;
+    my $getgid_max = 190000 - $num_uids;
+
+    foreach my $u ( keys %{$subuid} ) {
+        my ( $uid, $range ) = split( /:/, $subuid->{$u} );
+        $uid += $range;
+        $getuid_max = $uid if ( $uid > $getuid_max );
+    }
+
+    foreach my $u ( keys %{$subgid} ) {
+        my ( $uid, $range ) = split( /:/, $subgid->{$u} );
+        $uid += $range;
+        $getgid_max = $uid if ( $uid > $getgid_max );
+    }
+
+    $getuid_max++;
+    $getgid_max++;
+
+    my $num_uids_minus_one = $num_uids - 1;
+    if ( !exists $subuid->{$user} ) {
+        if ( open my $fh, ">>", $file_subuid ) {
+            print $fh "$user:$getuid_max:$num_uids_minus_one\n";
+            close $fh;
+        }
+    }
+
+    if ( !exists $subgid->{$user} ) {
+        if ( open my $fh, ">>", $file_subgid ) {
+            print $fh "$user:$getgid_max:$num_uids_minus_one\n";
+            close $fh;
+        }
+    }
+
+    return;
+}
+
 # Bootstrap the user’s rootless-podman session *as root*. Historically
 # ensure_user_root only did `mkdir /run/user/<uid>`, which left rootless
 # podman without a running user systemd manager or dbus socket — so

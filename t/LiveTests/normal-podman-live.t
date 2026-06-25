@@ -233,7 +233,7 @@ SKIP: {
 #--- install via UAPI ------------------------------------------------
 my $container;
 {
-    my @args = ( "name=$CBASE", "image=$IMAGE", "cpuser_port=$PORT", 'accept_arbitrary_image_risk=1' );
+    my @args = ( "name=$CBASE", "image=$IMAGE", "container_port=$PORT", 'accept_arbitrary_image_risk=1' );
     my $res  = uapi( $USER, 'install', @args );
     ok( $res->{status}, "uapi EAPodman install succeeded" )
       or diag( "errors: " . join( "; ", @{ $res->{errors} || [] } ) );
