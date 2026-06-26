@@ -653,7 +653,7 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
         _arbitrary_image_warning( \@start_args ) if !$isupgrade && !$isrestore;
 
         my @real_start_args;
-        my @container_ports;
+        my @cpuser_ports;
 
         if ( $isupgrade || $isrestore ) {
             die "Upgrade/Restore takes no start args\n"                     if @start_args;
@@ -662,7 +662,7 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             die "`start_args` is missing from $container_dir/ea-podman.json\n" if !exists $container_conf->{start_args};
             die "`start_args` is not a list\n"                                 if ref( $container_conf->{start_args} ) ne "ARRAY";
 
-            @container_ports = @{ $container_conf->{ports} || [] };
+            @cpuser_ports    = @{ $container_conf->{ports} || [] };
             @real_start_args = @{ $container_conf->{start_args} };
         }
         else {    # install
@@ -671,13 +671,13 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             # note the docker image name HAS to be the last argument
             my $docker_name = pop @start_args;
             for my $item (@start_args) {
-                if ( $item =~ m/^--container-port(?:=(.+))?/ ) {
+                if ( $item =~ m/^--cpuser-port(?:=(.+))?/ ) {
                     my $val = $1;
 
                     if ( !length($val) || $val !~ m/^(?:0|[1-9][0-9]+?)$/ ) {
-                        die "--container-port requires a port the container uses (or 0 to be the same as the corresponding host port). e.g. --container-port=8080\n";
+                        die "--cpuser-port requires a port the container uses (or 0 to be the same as the corresponding host port). e.g. --cpuser-port=8080\n";
                     }
-                    push @container_ports, $val;
+                    push @cpuser_ports, $val;
                 }
                 else {
                     push @real_start_args, $item;
@@ -692,16 +692,16 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
 
         if ( !$isupgrade && !$isrestore ) {
             File::Path::Tiny::mk( $container_dir, 0750 ) || die "Could not create “$container_dir”: $!\n";
-            my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@container_ports } );
+            my $json = Cpanel::JSON::pretty_canonical_dump( { start_args => \@real_start_args, ports => \@cpuser_ports } );
             _file_write_chmod( "$container_dir/ea-podman.json", $json, 0600 );
         }
 
         my $docker_name = pop @real_start_args;    # so we can put ports before the image
 
         # then add the ports if any
-        my @ports = $portsfunc->( $container_name => scalar(@container_ports) );
+        my @ports = $portsfunc->( $container_name => scalar(@cpuser_ports) );
         for my $idx ( 0 .. $#ports ) {
-            my $container_port = $container_ports[$idx] || $ports[$idx];
+            my $container_port = $cpuser_ports[$idx] || $ports[$idx];
             push @real_start_args, "-p", "$ports[$idx]:$container_port";
         }
 

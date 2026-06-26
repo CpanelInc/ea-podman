@@ -182,11 +182,11 @@ sub install ( $args, $result ) {
     my $name  = $args->get_length_required('name');
     my $image = $args->get('image');
 
-    my @container_ports = grep { length } $args->get_multiple('container_port');
-    my @envs            = grep { length } $args->get_multiple('env');
+    my @cpuser_ports = grep { length } $args->get_multiple('cpuser_port');
+    my @envs         = grep { length } $args->get_multiple('env');
 
     my @start_args;
-    push @start_args, map { "--container-port=$_" } @container_ports;
+    push @start_args, map { "--cpuser-port=$_" } @cpuser_ports;
     push @start_args, map { ( '-e' => $_ ) } @envs;
 
     if ( $args->get('accept_arbitrary_image_risk') ) {
