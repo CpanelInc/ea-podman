@@ -2,7 +2,7 @@
 # Bridge Failure Error
 
 ```
-⚛︎ # podman run -d --name nginx-hello -p 8080:8080 docker.io/nginxdemos/hello
+⚛︎ # podman run -d --name nginx-hello -p 8080:80 docker.io/nginxdemos/hello
 WARN[0000] Failed to load cached network config: network podman not found in CNI cache, falling back to loading network podman from disk 
 WARN[0000] 1 error occurred:
 	* plugin type="bridge" failed (delete): cni plugin bridge failed: running [/usr/sbin/iptables -t nat -D POSTROUTING -s 10.88.6.91 -j CNI-33acff44168dd765996a4596 -m comment --comment name: "podman" id: "50155cd765bb655842adb88e28c3f193c89c470e0cc5174966811239d96b3835" --wait]: exit status 2: iptables v1.8.4 (nf_tables): Chain 'CNI-33acff44168dd765996a4596' does not exist
@@ -85,7 +85,7 @@ podman system reset
 
 # 4. Verify and test
 podman info --format '{{.Host.NetworkBackend}}'   # -> netavark
-podman run -d --name nginx-hello -p 8080:8080 docker.io/nginxdemos/hello
+podman run -d --name nginx-hello -p 8080:80 docker.io/nginxdemos/hello
 ```
 
 After this, Podman's bridge network lives under its own `netavark` nft table,
