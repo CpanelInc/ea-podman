@@ -281,6 +281,18 @@ SKIP: {
     my $res = uapi( $USER, 'cmd', "container_name=$container", 'arg=date' );
     ok( $res->{status}, "uapi EAPodman cmd (date) succeeded" )
       or diag( "errors: " . join( "; ", @{ $res->{errors} || [] } ) );
+
+    # `podman exec` is broken on older podman (4.x) + runc under cgroup v1 /
+    # LVE (e.g. CloudLinux 8): "cannot exec in a stopped container" even while
+    # the container runs and serves (same root cause the sister jailshell test
+    # already works around for its in-container redis-cli ping check). The
+    # `cmd` verb itself round-tripped correctly (status above); treat this as
+    # unsupported-exec here, not a cmd-verb failure.
+    if ( ( $res->{data}{stderr} // '' ) =~ /cannot exec in a stopped container/ ) {
+        $exec_unsupported = 1;
+        skip "podman exec unsupported here (older podman/runc under cgroup v1); cmd verb round-tripped correctly", 2;
+    }
+
     is( $res->{data}{exit_code}, 0, "cmd date exited 0" );
     like( $res->{data}{stdout}, qr/\d{4}/, "cmd date produced date-like stdout" );
 
@@ -308,6 +320,7 @@ SKIP: {
 # on this hidepid host too.
 SKIP: {
     skip "ea-podman CLI not found", 1 if !$CLI;
+    skip "podman exec unsupported here (see UAPI cmd check above)", 1 if $exec_unsupported;
     my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " cmd " . _sh($container) . " -- date" );
     like( $out, qr/\d{4}/, "direct CLI 'ea-podman cmd ... -- date' produced date-like output" );
 }

@@ -413,6 +413,18 @@ SKIP: {
     my $res = op( 'cmd', container_name => $container, command => 'date' );
     ok( $res->{status}, "[$DRIVER] EAPodman cmd (date) succeeded" )
       or diag( "errors: " . join( "; ", @{ $res->{errors} || [] } ) );
+
+    # `podman exec` is broken on older podman (4.x) + runc under cgroup v1 /
+    # LVE (e.g. CloudLinux 8): "cannot exec in a stopped container" even while
+    # the container runs and serves — the same root cause the in-container
+    # redis-cli ping check above already works around. The `cmd` verb itself
+    # round-tripped correctly (status above); treat this as unsupported-exec
+    # here, not a cmd-verb failure. The CLI driver folds stderr into `stdout`
+    # (see _op_cli), so check both fields.
+    my $combined = ( $res->{data}{stdout} // '' ) . ( $res->{data}{stderr} // '' );
+    skip "podman exec unsupported here (older podman/runc under cgroup v1); cmd verb round-tripped correctly", 2
+      if $combined =~ /cannot exec in a stopped container/;
+
     is( $res->{data}{exit_code}, 0, "[$DRIVER] cmd date exited 0" );
     like( $res->{data}{stdout}, qr/\d{4}/, "[$DRIVER] cmd date produced date-like stdout" );
 
