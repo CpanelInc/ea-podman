@@ -426,16 +426,6 @@ SKIP: {
     my $res = op( 'cmd', container_name => $container, command => 'date' );
     ok( $res->{status}, "[$DRIVER] EAPodman cmd (date) succeeded" )
       or diag( "errors: " . join( "; ", @{ $res->{errors} || [] } ) );
-
-    # `podman exec` is broken on older podman (4.x) + runc under cgroup v1 /
-    # LVE (e.g. CloudLinux 8): "cannot exec in a stopped container" even while
-    # the container runs and serves (same root cause the sister jailshell test
-    # already works around for its in-container redis-cli ping check). The
-    # `cmd` verb itself round-tripped correctly (status above); treat this as
-    # unsupported-exec here, not a cmd-verb failure.
-    skip "podman exec unsupported here (older podman/runc under cgroup v1); cmd verb round-tripped correctly", 2
-      if ( $res->{data}{stderr} // '' ) =~ /cannot exec in a stopped container/;
-
     is( $res->{data}{exit_code}, 0, "cmd date exited 0" );
     like( $res->{data}{stdout}, qr/\d{4}/, "cmd date produced date-like stdout" );
 
