@@ -1,8 +1,9 @@
 {
     "fix_dh_usrlocal" : true,
     "dont_override_config" : true,
+    "dont_relativise_ontar" : 1,
     "remove_from_install" : [
-        "^./ea-podman$"
+        "^debian/tmp/usr/local/cpanel/scripts/ea-podman$"
     ],
     "remove_from_requires" : [
         "gcc",

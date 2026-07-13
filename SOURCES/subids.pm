@@ -11,6 +11,7 @@ package ea_podman::subids;
 
 use Path::Tiny 'path';
 use Cpanel::OS;
+use Time::HiRes ();
 
 our $good = "✅";
 our $bad  = "❌";
@@ -24,6 +25,26 @@ sub ensure_user_root {
     my ( $user, $num_uids ) = @_;
 
     $num_uids = 65537 if !$num_uids;
+
+    _ensure_subids( $user, $num_uids );
+
+    # Always (idempotently) ensure the user’s rootless session, not just on
+    # first subid setup: linger may have been torn down since (e.g. a stale
+    # state or an explicit `loginctl disable-linger`), which would leave a
+    # registered user with no runtime dir. (CPANEL-54037)
+    ensure_user_session($user);
+
+    # Tell podman to ignore uid/gid issues
+    _ensure_storage_conf();
+
+    return;
+}
+
+# Allocate /etc/subuid + /etc/subgid ranges for the user, unless they already
+# have both. New ranges start at 190000 (or just past the highest existing
+# allocation, whichever is greater).
+sub _ensure_subids {
+    my ( $user, $num_uids ) = @_;
 
     my $subuid = get_subuids();
     my $subgid = get_subgids();
@@ -64,17 +85,59 @@ sub ensure_user_root {
         }
     }
 
-    # best effort
-    mkdir $dir_run;
+    return;
+}
+
+# Bootstrap the user’s rootless-podman session *as root*. Historically
+# ensure_user_root only did `mkdir /run/user/<uid>`, which left rootless
+# podman without a running user systemd manager or dbus socket — so
+# `podman generate systemd` + `systemctl --user` failed for any user without
+# an interactive login (cpsrvd/UAPI, account hooks, `su -`). See CPANEL-54037
+# (and UPS-504).
+#
+# `loginctl enable-linger <user>`, run as root, instead creates
+# /run/user/<uid> as a tmpfs *and* starts user@<uid>.service (the user systemd
+# manager), persisting both across logout/reboot — exactly what rootless
+# container persistence requires. Held in a package variable so tests can
+# stub the privileged call.
+our $linger_enabler = \&_enable_linger;
+
+sub _enable_linger {
+    my ($user) = @_;
+    system( "loginctl", "enable-linger", $user );
+    return $? == 0;
+}
+
+sub ensure_user_session {
+    my ($user) = @_;
+
     my ( $uid, $gid ) = ( getpwnam($user) )[ 2, 3 ];
-    mkdir( "$dir_run/$uid", 0700 );
-    chown( $uid, $gid, "$dir_run/$uid" );
-    if ( !-d "$dir_run/$uid" ) {
-        die "The directory “$dir_run/$uid” is missing and could not be created (mode: 0700; owner & group: $user).\n";
+    die "Could not look up the uid/gid for “$user”\n" if !defined $uid;
+
+    mkdir $dir_run;    # parent /run/user; harmless when it already exists
+
+    $linger_enabler->($user);
+
+    # enable-linger is asynchronous: it returns *before* logind has finished
+    # creating /run/user/<uid> AND starting user@<uid>.service. The readiness
+    # signal that `systemctl --user` + rootless podman actually need is the
+    # user manager’s dbus socket at /run/user/<uid>/bus — the directory itself
+    # appears well before the manager is up, so polling only for the dir races
+    # and leaves podman with “Failed to connect to user scope bus”. Poll for
+    # the bus socket.
+    my $rundir = "$dir_run/$uid";
+    my $bus    = "$rundir/bus";
+    for ( 1 .. 100 ) {
+        last if -d $rundir && -e $bus;
+        Time::HiRes::usleep(100_000);    # 0.1s × 100 ≈ 10s max
     }
 
-    # Tell podman to ignore uid/gid issues
-    _ensure_storage_conf();
+    if ( !-d $rundir ) {
+        die "The directory “$rundir” is missing and could not be created by `loginctl enable-linger $user`.\n";
+    }
+    if ( !-e $bus ) {
+        die "The user session bus “$bus” did not appear after `loginctl enable-linger $user` (the user systemd manager did not start).\n";
+    }
 
     return;
 }
