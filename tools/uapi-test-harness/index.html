@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ea-podman UAPI test harness</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; margin-top: 2rem; border-bottom: 1px solid #8888; padding-bottom: .25rem; }
+  fieldset { border: 1px solid #8888; border-radius: 6px; margin-bottom: 1rem; }
+  legend { font-weight: 600; }
+  label { display: inline-block; min-width: 9rem; }
+  input[type=text], input[type=password], input[type=number] {
+    width: 22rem; max-width: 60vw; font-family: inherit;
+  }
+  .row { margin: .4rem 0; }
+  .multi-row { display: flex; gap: .5rem; margin: .25rem 0; align-items: center; }
+  .multi-row input { flex: 1; }
+  button { cursor: pointer; }
+  button.add { font-size: .8rem; }
+  button.remove { font-size: .8rem; }
+  button.send { font-weight: 600; margin-top: .5rem; }
+  #log { display: flex; flex-direction: column-reverse; gap: .5rem; }
+  .entry { border: 1px solid #8888; border-radius: 6px; padding: .5rem .75rem; }
+  .entry.ok { border-left: 5px solid #2a2; }
+  .entry.err { border-left: 5px solid #c33; }
+  .entry pre { white-space: pre-wrap; word-break: break-all; margin: .4rem 0 0; max-height: 16rem; overflow: auto; }
+  .entry .meta { font-size: .85rem; opacity: .75; }
+  #configStatus { font-size: .85rem; }
+  .hint { font-size: .8rem; opacity: .75; }
+</style>
+</head>
+<body>
+
+<h1>ea-podman UAPI test harness</h1>
+<p class="hint">
+  Manual browser QA tool for the <code>Cpanel::API::EAPodman</code> UAPI module (CPANEL-54037).
+  Calls go through the bundled local proxy (<code>proxy.py</code>) because cpsrvd does not send
+  <code>Access-Control-*</code> headers, so a browser cannot call it cross-origin directly.
+  Run <code>python3 proxy.py</code> in this directory first, then fill in the config below.
+</p>
+
+<fieldset>
+  <legend>Config</legend>
+  <div class="row"><label for="proxyBase">Proxy base URL</label>
+    <input type="text" id="proxyBase" value="http://localhost:8787"></div>
+  <div class="row"><label for="host">cPanel host</label>
+    <input type="text" id="host" placeholder="10.2.66.239 or host.example.com"></div>
+  <div class="row"><label for="user">cPanel username</label>
+    <input type="text" id="user" placeholder="eaptest"></div>
+  <div class="row"><label for="token">API token</label>
+    <input type="password" id="token" placeholder="paste an API token (WHM/cPanel &gt; Manage API Tokens)"></div>
+  <div class="row">
+    <button onclick="saveConfig(); setStatus('Saved to sessionStorage.');">Save</button>
+    <span id="configStatus"></span>
+  </div>
+  <p class="hint">Stored only in this tab's <code>sessionStorage</code> — never sent anywhere but the proxy on localhost.</p>
+</fieldset>
+
+<h2>list</h2>
+<fieldset>
+  <legend>list</legend>
+  <button class="send" onclick="callVerb('list', [])">Send</button>
+</fieldset>
+
+<h2>install</h2>
+<fieldset>
+  <legend>install</legend>
+  <div class="row"><label for="i_name">name *</label><input type="text" id="i_name" placeholder="myredis"></div>
+  <div class="row"><label for="i_image">image</label><input type="text" id="i_image" placeholder="docker.io/library/redis:alpine"></div>
+  <div id="i_ports"></div>
+  <button class="add" onclick="addMultiRow('i_ports', 'cpuser_port', 'container-side port, e.g. 6379')">+ cpuser_port</button>
+  <div id="i_envs"></div>
+  <button class="add" onclick="addMultiRow('i_envs', 'env', 'KEY=VALUE')">+ env</button>
+  <div class="row" style="margin-top:.5rem">
+    <label for="i_risk">accept_arbitrary_image_risk</label>
+    <input type="checkbox" id="i_risk">
+  </div>
+  <button class="send" onclick="sendInstall()">Send</button>
+</fieldset>
+
+<h2>upgrade / uninstall / start / stop / restart / status</h2>
+<fieldset>
+  <legend>container_name-only verbs</legend>
+  <div class="row"><label for="cn_name">container_name *</label><input type="text" id="cn_name" placeholder="myredis.eaptest.01"></div>
+  <button class="send" onclick="callVerb('upgrade', [['container_name', v('cn_name')]])">upgrade</button>
+  <button class="send" onclick="callVerb('uninstall', [['container_name', v('cn_name')]])">uninstall</button>
+  <button class="send" onclick="callVerb('start', [['container_name', v('cn_name')]])">start</button>
+  <button class="send" onclick="callVerb('stop', [['container_name', v('cn_name')]])">stop</button>
+  <button class="send" onclick="callVerb('restart', [['container_name', v('cn_name')]])">restart</button>
+  <button class="send" onclick="callVerb('status', [['container_name', v('cn_name')]])">status</button>
+</fieldset>
+
+<h2>cmd</h2>
+<fieldset>
+  <legend>cmd</legend>
+  <div class="row"><label for="c_name">container_name *</label><input type="text" id="c_name" placeholder="myredis.eaptest.01"></div>
+  <div class="row"><label for="c_cd">cd</label><input type="text" id="c_cd" placeholder="/etc (optional)"></div>
+  <div id="c_args"></div>
+  <button class="add" onclick="addMultiRow('c_args', 'arg', 'argv element, e.g. redis-cli then ping')">+ arg</button>
+  <button class="send" onclick="sendCmd()">Send</button>
+</fieldset>
+
+<h2>Log</h2>
+<div id="log"></div>
+
+<script>
+function v(id) { return document.getElementById(id).value.trim(); }
+
+function getConfig() {
+  return {
+    proxyBase: v('proxyBase').replace(/\/$/, ''),
+    host: v('host'),
+    user: v('user'),
+    token: v('token'),
+  };
+}
+
+function saveConfig() {
+  sessionStorage.setItem('eapodman_harness_config', JSON.stringify(getConfig()));
+}
+
+function loadConfig() {
+  const raw = sessionStorage.getItem('eapodman_harness_config');
+  if (!raw) return;
+  try {
+    const cfg = JSON.parse(raw);
+    document.getElementById('proxyBase').value = cfg.proxyBase || 'http://localhost:8787';
+    document.getElementById('host').value = cfg.host || '';
+    document.getElementById('user').value = cfg.user || '';
+    document.getElementById('token').value = cfg.token || '';
+  } catch (e) { /* ignore corrupt storage */ }
+}
+
+function setStatus(msg) {
+  document.getElementById('configStatus').textContent = msg;
+}
+
+// --- multi-value field rows (cpuser_port / env / arg) ---
+function addMultiRow(containerId, name, placeholder) {
+  const container = document.getElementById(containerId);
+  const row = document.createElement('div');
+  row.className = 'multi-row';
+  row.dataset.name = name;
+  row.innerHTML = `<input type="text" placeholder="${placeholder}">
+    <button class="remove" onclick="this.parentElement.remove()">remove</button>`;
+  container.appendChild(row);
+}
+
+function multiValues(containerId) {
+  const container = document.getElementById(containerId);
+  const out = [];
+  for (const row of container.children) {
+    const name = row.dataset.name;
+    const val = row.querySelector('input').value.trim();
+    if (val) out.push([name, val]);
+  }
+  return out;
+}
+
+// --- verb-specific senders that assemble multi-value params ---
+function sendInstall() {
+  const pairs = [
+    ['name', v('i_name')],
+    ['image', v('i_image')],
+    ...multiValues('i_ports'),
+    ...multiValues('i_envs'),
+  ];
+  if (document.getElementById('i_risk').checked) pairs.push(['accept_arbitrary_image_risk', '1']);
+  callVerb('install', pairs);
+}
+
+function sendCmd() {
+  const pairs = [
+    ['container_name', v('c_name')],
+    ['cd', v('c_cd')],
+    ...multiValues('c_args'),
+  ];
+  callVerb('cmd', pairs);
+}
+
+// --- the actual call, through the local proxy ---
+async function callVerb(verb, pairs) {
+  const cfg = getConfig();
+  if (!cfg.proxyBase || !cfg.host || !cfg.user || !cfg.token) {
+    logEntry(verb, pairs, false, 'Missing config: fill in proxy base URL, host, username and token first.');
+    return;
+  }
+  saveConfig();
+
+  const qs = new URLSearchParams();
+  for (const [k, val] of pairs) {
+    if (val === undefined || val === null || val === '') continue;
+    qs.append(k, val);
+  }
+
+  const url = `${cfg.proxyBase}/execute/EAPodman/${verb}?${qs.toString()}`;
+  const started = performance.now();
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        'Authorization': `cpanel ${cfg.user}:${cfg.token}`,
+        'X-Proxy-Target': cfg.host,
+      },
+    });
+    const text = await resp.text();
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
+    const ok = resp.ok && parsed && parsed.status !== 0;
+    logEntry(verb, pairs, ok, parsed, performance.now() - started, resp.status);
+  } catch (err) {
+    logEntry(verb, pairs, false, String(err));
+  }
+}
+
+function logEntry(verb, pairs, ok, payload, ms, httpStatus) {
+  const log = document.getElementById('log');
+  const div = document.createElement('div');
+  div.className = 'entry ' + (ok ? 'ok' : 'err');
+  const paramStr = pairs.filter(([, val]) => val).map(([k, val]) => `${k}=${val}`).join('&') || '(no params)';
+  const timing = ms !== undefined ? ` — ${Math.round(ms)}ms` : '';
+  const httpStr = httpStatus !== undefined ? ` — HTTP ${httpStatus}` : '';
+  const body = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+  div.innerHTML = `<div class="meta">${new Date().toLocaleTimeString()} — <strong>${verb}</strong>${httpStr}${timing} — ${paramStr}</div>
+    <pre></pre>`;
+  div.querySelector('pre').textContent = body;
+  log.appendChild(div);
+}
+
+loadConfig();
+</script>
+</body>
+</html>
