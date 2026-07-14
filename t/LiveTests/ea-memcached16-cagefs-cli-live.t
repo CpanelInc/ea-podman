@@ -33,8 +33,18 @@
 #     /bin/bash` session here still got a caged view of the filesystem, one
 #     lacking `systemctl` entirely). So the "is it actually running" proof
 #     here is entirely root-side/cage-independent: linger, the dbus socket,
-#     `user@<uid>.service`, and a raw TCP check of the published port —
-#     exactly as cagefs-podman-live.t already does.
+#     `user@<uid>.service`, and a unix-socket check (see below) — exactly as
+#     cagefs-podman-live.t already does with its TCP-port check.
+#
+# ea-memcached16's ea-podman.json declares an EMPTY `ports` list — it does not
+# publish a TCP port at all. Its `-v` startup arg mounts the container's own
+# directory at /socket_dir, and its entrypoint runs memcached listening on a
+# UNIX socket at /socket_dir/memcached.sock — i.e. on the host,
+# <homedir>/ea-podman.d/<container_name>/memcached.sock. So "is it serving"
+# here is checked over that unix socket (a plain root-side filesystem path,
+# unaffected by the cage either way), not a published host port (there isn't
+# one; `cpuser_port_authority` is never even called for a package whose ports
+# list is empty — see ea_podman::util::_get_new_ports).
 #
 # Run ON A LIVE CloudLinux cPanel VM, as root, with CageFS initialized,
 # podman and ea-memcached16 installed, and an ea-podman build carrying the
@@ -51,6 +61,10 @@
 #                        instead of creating a throwaway one.
 #   EAPODMAN_TEST_PKG    EA4 container-based package to install (default:
 #                        ea-memcached16). Must already be installed locally.
+#                        NOTE: the serving check is specific to
+#                        ea-memcached16's unix-socket convention (see below);
+#                        only override this with another package that serves
+#                        the same way.
 #   EAPODMAN_KEEP=1      skip teardown.
 #######################################################################
 
@@ -61,9 +75,10 @@ use Test::More;
 
 use IPC::Open3       ();
 use Symbol           ();
-use IO::Socket::INET ();
+use IO::Socket::UNIX ();
 use IO::Select       ();
 use Data::Dumper     ();
+use Socket qw(SOCK_STREAM);
 
 #---------------------------------------------------------------------
 # config
@@ -74,7 +89,6 @@ my $BASH = '/bin/bash';    # an unrestricted login shell
 
 my $WHMAPI    = '/usr/local/cpanel/bin/whmapi1';
 my $EAP_LIB   = '/opt/cpanel/ea-podman/lib/ea_podman';
-my $PORTAUTH  = '/usr/local/cpanel/scripts/cpuser_port_authority';
 my @CLI_PATHS = ( '/usr/local/cpanel/scripts/ea-podman', '/opt/cpanel/ea-podman/bin/ea-podman' );
 
 my $PKG_DIR = "/opt/cpanel/$PKG";
@@ -160,9 +174,8 @@ plan skip_all => "must run as root" if $> != 0;
 # CageFS is CloudLinux-only: require the OS first, then the CageFS tooling.
 plan skip_all => "not CloudLinux (CageFS is a CloudLinux feature)" if !_is_cloudlinux();
 plan skip_all => "CageFS is not installed (cagefsctl not found)"   if !$CAGEFSCTL;
-plan skip_all => "podman is not installed"                     if !_in_path('podman');
-plan skip_all => "cpuser_port_authority not found ($PORTAUTH)" if !-x $PORTAUTH;
-plan skip_all => "ea-podman library not installed"             if !-e "$EAP_LIB/subids.pm";
+plan skip_all => "podman is not installed"         if !_in_path('podman');
+plan skip_all => "ea-podman library not installed" if !-e "$EAP_LIB/subids.pm";
 
 # ea-podman must carry the CPANEL-54037 fix.
 {
@@ -339,13 +352,16 @@ my $list_data;
     $list_data = $decoded;
 }
 
-#--- the container actually serves (cage-independent: root-side TCP only) ---
-ok( wait_for( sub { _memcached_serving_via_port($USER) }, 45 ), "memcached answers `version` over the published host port (root-side)" )
-  or diag(
-    "assigned host port: " . ( _assigned_host_port($USER) // '(none found via cpuser_port_authority)' ) . "\n"
-      . "`ea-podman list` entry for $container: "
-      . ( $list_data && $list_data->{$container} ? Data::Dumper::Dumper( $list_data->{$container} ) : '(unavailable)' )
-  );
+#--- the container actually serves (cage-independent: root-side socket path only) ---
+ok( wait_for( sub { _memcached_serving_via_socket($USER) }, 45 ), "memcached answers `version` over its unix socket (root-side)" )
+  or do {
+    my $sock_path = _memcached_socket_path($USER);
+    diag(
+        "expected socket: $sock_path" . ( -S $sock_path ? " (exists)" : " (missing)" ) . "\n"
+          . "`ea-podman list` entry for $container: "
+          . ( $list_data && $list_data->{$container} ? Data::Dumper::Dumper( $list_data->{$container} ) : '(unavailable)' )
+    );
+  };
 
 #--- lifecycle: stop / start / restart, all via the CageFS login CLI --
 {
@@ -358,14 +374,14 @@ ok( wait_for( sub { _memcached_serving_via_port($USER) }, 45 ), "memcached answe
     ( $rc, $out ) = run_via_login( $USER, _sh($CLI) . " restart " . _sh($container) );
     is( $rc, 0, "ea-podman restart (CLI, via CageFS login) exited 0" ) or diag($out);
 
-    ok( wait_for( sub { _memcached_serving_via_port($USER) }, 45 ), "memcached is serving again over the published port after restart" );
+    ok( wait_for( sub { _memcached_serving_via_socket($USER) }, 45 ), "memcached is serving again over its unix socket after restart" );
 }
 
 #--- persistence proxy: restart the user manager (simulates reboot) --
 {
     run_cmd( 'systemctl', 'restart', "user\@$uid.service" );
     ok( wait_for( sub { -S "/run/user/$uid/bus" }, 15 ), "user manager came back after restart (linger)" );
-    ok( wait_for( sub { _memcached_serving_via_port($USER) }, 60 ), "memcached auto-started and serves after the user manager restart (survives reboot)" );
+    ok( wait_for( sub { _memcached_serving_via_socket($USER) }, 60 ), "memcached auto-started and serves after the user manager restart (survives reboot)" );
 }
 
 #--- uninstall via the CageFS login CLI cleans up ---------------------
@@ -409,30 +425,28 @@ sub _is_cloudlinux {
     return 0;
 }
 
-# The host port memcached was published to, discovered ROOT-SIDE from the port
-# authority (cage-independent). Returns the port or undef.
-sub _assigned_host_port {
+# ea-memcached16 mounts its own container directory at /socket_dir and runs
+# memcached listening on /socket_dir/memcached.sock — i.e., on the host,
+# <homedir>/ea-podman.d/<container_name>/memcached.sock. No TCP port is ever
+# published (its ea-podman.json declares an empty `ports` list). This is a
+# plain root-side filesystem path — cage-independent either way, since it's
+# read directly by this (root) process, not via `su`.
+sub _memcached_socket_path {
     my ($user) = @_;
-    my ( $rc, $out ) = run_cmd( $PORTAUTH, 'list', $user );
-    return if $rc != 0;
-    my $hr = eval { $json->($out) };
-    return if !$hr || ref $hr ne 'HASH';
-    for my $port ( keys %{$hr} ) {
-        my $svc = ref $hr->{$port} eq 'HASH' ? ( $hr->{$port}{service} // '' ) : '';
-        return $port if $svc eq $container;
-    }
-    return;
+    my $homedir = ( getpwnam($user) )[7];
+    return "$homedir/ea-podman.d/$container/memcached.sock";
 }
 
-sub _memcached_serving_via_port {
+sub _memcached_serving_via_socket {
     my ($user) = @_;
-    my $port = _assigned_host_port($user) or return 0;
-    return _memcached_version_over_tcp( '127.0.0.1', $port );
+    my $path = _memcached_socket_path($user);
+    return 0 if !-S $path;
+    return _memcached_version_over_unix($path);
 }
 
-sub _memcached_version_over_tcp {
-    my ( $ip, $port ) = @_;
-    my $sock = IO::Socket::INET->new( PeerHost => $ip, PeerPort => $port, Proto => 'tcp', Timeout => 5 ) or return 0;
+sub _memcached_version_over_unix {
+    my ($path) = @_;
+    my $sock = IO::Socket::UNIX->new( Peer => $path, Type => SOCK_STREAM, Timeout => 5 ) or return 0;
     syswrite( $sock, "version\r\n" );
     my $reply = '';
     my $sel   = IO::Select->new($sock);
