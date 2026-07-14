@@ -25,10 +25,16 @@
 # differences:
 #   - the account is CageFS-enabled (CloudLinux only);
 #   - the CLI is driven through a REAL login (`su -`), which is what
-#     actually enters the cage (see cagefs-podman-live.t); a non-login
-#     `su -s` does NOT enter the cage, so that's used (as in the jailshell
-#     test) for the "is it actually running" checks, to verify server-side
-#     state without depending on the cage at all.
+#     actually enters the cage (see cagefs-podman-live.t);
+#   - unlike the normal-account test, there is no non-login-`su`-based
+#     "is it actually running" check. CageFS is a PAM session hook, not a
+#     login-shell substitution like jailshell — it applies to ANY `su` into
+#     the account, login or not (confirmed live: a non-login `su -s
+#     /bin/bash` session here still got a caged view of the filesystem, one
+#     lacking `systemctl` entirely). So the "is it actually running" proof
+#     here is entirely root-side/cage-independent: linger, the dbus socket,
+#     `user@<uid>.service`, and a raw TCP check of the published port —
+#     exactly as cagefs-podman-live.t already does.
 #
 # Run ON A LIVE CloudLinux cPanel VM, as root, with CageFS initialized,
 # podman and ea-memcached16 installed, and an ea-podman build carrying the
@@ -57,6 +63,7 @@ use IPC::Open3       ();
 use Symbol           ();
 use IO::Socket::INET ();
 use IO::Select       ();
+use Data::Dumper     ();
 
 #---------------------------------------------------------------------
 # config
@@ -102,17 +109,6 @@ sub run_json {
     waitpid( $pid, 0 );
     my $decoded = eval { $json->($stdout) };
     return ( $? >> 8, $decoded, $stdout, $stderr );
-}
-
-# Run a command AS $user WITHOUT their login shell (bypasses CageFS, which is
-# entered only at the PAM/login layer), with the rootless podman environment
-# primed. Used for the cage-independent "is it actually running" checks.
-# Returns ($exit, $output).
-sub run_as_user {
-    my ( $user, $cmd ) = @_;
-    my $uid = ( getpwnam($user) )[2];
-    my $env = "export XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus HOME=\"\$(getent passwd $user | cut -d: -f6)\"; cd \"\$HOME\" 2>/dev/null;";
-    return run_cmd( 'su', '-s', '/bin/bash', $user, '-c', "$env $cmd" );
 }
 
 # Run a command through the account's REAL login (`su -`), i.e. exactly how
@@ -320,6 +316,17 @@ ok( -S "/run/user/$uid/bus", "user dbus socket /run/user/$uid/bus exists" );
 }
 
 #--- the container is registered (via the CLI, through the cage login) ---
+# NOTE: unlike the normal-account sister test, this does NOT also check
+# `podman ps`/`systemctl --user is-enabled` through a non-login `su -s`.
+# CageFS is a PAM session hook (see cagefsctl/pam_cagefs), not a login-shell
+# substitution like jailshell — it applies to ANY `su` into the account,
+# login or not (confirmed live: a non-login `su -s /bin/bash` session here
+# got a cage view of the filesystem that lacks `systemctl` entirely). So
+# there is no `su`-based way to observe this account "from outside the
+# cage"; only root-side/cage-independent checks (below) and the CLI's own
+# JSON output are trustworthy here. This mirrors cagefs-podman-live.t, which
+# for the same reason never runs a `podman ps`/`systemctl --user` check.
+my $list_data;
 {
     my ( $rc, $out ) = run_via_login( $USER, _sh($CLI) . " list" );
 
@@ -329,17 +336,16 @@ ok( -S "/run/user/$uid/bus", "user dbus socket /run/user/$uid/bus exists" );
     $jsontext =~ s/[^}]*\z//s;
     my $decoded = eval { $json->($jsontext) };
     ok( $decoded && exists $decoded->{$container}, "ea-podman list (CLI, via CageFS login) shows $container" ) or diag("output:\n$out");
+    $list_data = $decoded;
 }
 
-#--- the container actually runs and serves (cage-independent checks) ---
-my $unit = "container-$container.service";
-ok( _container_running($USER), "podman shows $container running (no login session)" );
-{
-    my ( $rc, $out ) = run_as_user( $USER, "systemctl --user is-enabled " . _sh($unit) );
-    like( $out, qr/\benabled\b/, "systemd --user unit $unit is enabled" );
-}
+#--- the container actually serves (cage-independent: root-side TCP only) ---
 ok( wait_for( sub { _memcached_serving_via_port($USER) }, 45 ), "memcached answers `version` over the published host port (root-side)" )
-  or diag( "assigned host port: " . ( _assigned_host_port($USER) // '(none found via cpuser_port_authority)' ) );
+  or diag(
+    "assigned host port: " . ( _assigned_host_port($USER) // '(none found via cpuser_port_authority)' ) . "\n"
+      . "`ea-podman list` entry for $container: "
+      . ( $list_data && $list_data->{$container} ? Data::Dumper::Dumper( $list_data->{$container} ) : '(unavailable)' )
+  );
 
 #--- lifecycle: stop / start / restart, all via the CageFS login CLI --
 {
@@ -401,13 +407,6 @@ sub _is_cloudlinux {
         return 1 if $c =~ /cloudlinux/i;
     }
     return 0;
-}
-
-sub _container_running {
-    my ($user) = @_;
-    my ( $rc, $out ) = run_as_user( $user, "podman ps --no-trunc --format '{{.Names}}'" );
-    return 0 if $rc != 0;
-    return scalar( grep { $_ eq $container } split /\n/, $out );
 }
 
 # The host port memcached was published to, discovered ROOT-SIDE from the port
