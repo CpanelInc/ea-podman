@@ -133,6 +133,19 @@ sub wait_for {
     return $predicate->();
 }
 
+# run_cmd()/run_as_user() return combined stdout+stderr (needed for diag on
+# failure), but podman itself writes warnings to stderr (e.g. the
+# cgroups-v1-is-deprecated notice) that can land right after the JSON object
+# `ea-podman list`/`containers` prints on stdout — breaking a strict decode
+# with trailing garbage. Isolate the outermost {...} object first.
+sub _decode_json_loose {
+    my ($text) = @_;
+    my $jsontext = $text;
+    $jsontext =~ s/\A[^{]*//s;
+    $jsontext =~ s/[^}]*\z//s;
+    return eval { $json->($jsontext) };
+}
+
 sub _sh {
     my ($s) = @_;
     $s =~ s/'/'\\''/g;
@@ -266,7 +279,7 @@ ok( -S "/run/user/$uid/bus", "user dbus socket /run/user/$uid/bus exists" );
 #--- the container is registered (via the CLI, not UAPI) --------------
 {
     my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " list" );
-    my $decoded = eval { $json->($out) };
+    my $decoded = _decode_json_loose($out);
     ok( $decoded && exists $decoded->{$container}, "ea-podman list (CLI) shows $container" ) or diag("output:\n$out");
 }
 
@@ -310,7 +323,7 @@ ok( wait_for( sub { _memcached_serving_via_socket($USER) }, 45 ), "memcached ans
     is( $rc, 0, "ea-podman uninstall --verify (CLI) exited 0" ) or diag($out);
 
     ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " list" );
-    my $decoded = eval { $json->($out) };
+    my $decoded = _decode_json_loose($out);
     ok( !( $decoded && exists $decoded->{$container} ), "uninstalled container no longer registered" );
 }
 

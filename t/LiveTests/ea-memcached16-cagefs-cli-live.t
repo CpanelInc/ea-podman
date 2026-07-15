@@ -151,6 +151,19 @@ sub _sh {
     return "'$s'";
 }
 
+# run_cmd()/run_via_login() return combined stdout+stderr (needed for diag on
+# failure), and a real login may prepend a banner/MOTD besides — either can
+# leave non-JSON text before or after the object `ea-podman list` prints on
+# stdout (a login banner before it, or a podman stderr warning after it),
+# breaking a strict decode. Isolate the outermost {...} object first.
+sub _decode_json_loose {
+    my ($text) = @_;
+    my $jsontext = $text;
+    $jsontext =~ s/\A[^{]*//s;
+    $jsontext =~ s/[^}]*\z//s;
+    return eval { $json->($jsontext) };
+}
+
 #---------------------------------------------------------------------
 # preconditions
 #---------------------------------------------------------------------
@@ -342,12 +355,7 @@ ok( -S "/run/user/$uid/bus", "user dbus socket /run/user/$uid/bus exists" );
 my $list_data;
 {
     my ( $rc, $out ) = run_via_login( $USER, _sh($CLI) . " list" );
-
-    # A real login may prepend a banner/MOTD; isolate the JSON object.
-    my $jsontext = $out;
-    $jsontext =~ s/\A[^{]*//s;
-    $jsontext =~ s/[^}]*\z//s;
-    my $decoded = eval { $json->($jsontext) };
+    my $decoded = _decode_json_loose($out);
     ok( $decoded && exists $decoded->{$container}, "ea-podman list (CLI, via CageFS login) shows $container" ) or diag("output:\n$out");
     $list_data = $decoded;
 }
@@ -390,10 +398,7 @@ ok( wait_for( sub { _memcached_serving_via_socket($USER) }, 45 ), "memcached ans
     is( $rc, 0, "ea-podman uninstall --verify (CLI, via CageFS login) exited 0" ) or diag($out);
 
     ( $rc, $out ) = run_via_login( $USER, _sh($CLI) . " list" );
-    my $jsontext = $out;
-    $jsontext =~ s/\A[^{]*//s;
-    $jsontext =~ s/[^}]*\z//s;
-    my $decoded = eval { $json->($jsontext) };
+    my $decoded = _decode_json_loose($out);
     ok( !( $decoded && exists $decoded->{$container} ), "uninstalled container no longer registered" );
 }
 
