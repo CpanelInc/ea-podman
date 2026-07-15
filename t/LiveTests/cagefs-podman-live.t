@@ -42,6 +42,18 @@
 # Environment variables (same as the jailshell test, except CageFS is
 # toggled instead of the login shell):
 #   EAPODMAN_LIVE=1      REQUIRED opt-in.
+#   EAPODMAN_DRIVER      how to issue each verb: "uapi" (default; via
+#                        `uapi --user`, cage-independent) or "cli" (the
+#                        account's own login shell running the ea-podman
+#                        CLI directly, i.e. a real CageFS login). The
+#                        account created for this test has an ordinary
+#                        (unrestricted) shell, so in "cli" mode this
+#                        exercises CPANEL-54672: a CageFS-caged account
+#                        with an unrestricted shell takes the direct CLI
+#                        path, can't see its own /run/user/<uid> from
+#                        inside the cage, and must transparently fall
+#                        back to the UAPI bridge. Run the file once per
+#                        value to cover both entry points.
 #   EAPODMAN_TEST_USER   reuse an existing account (CageFS is enabled for
 #                        it and its prior state restored afterward).
 #   EAPODMAN_TEST_IMAGE  image to install (default: redis:alpine).
@@ -62,16 +74,18 @@ use IO::Select       ();
 #---------------------------------------------------------------------
 # config
 #---------------------------------------------------------------------
-my $IMAGE = $ENV{EAPODMAN_TEST_IMAGE} || 'docker.io/library/redis:alpine';
-my $PORT  = $ENV{EAPODMAN_TEST_PORT}  || 6379;
-my $KEEP  = $ENV{EAPODMAN_KEEP};
-my $CBASE = 'eapod54037';
+my $IMAGE  = $ENV{EAPODMAN_TEST_IMAGE} || 'docker.io/library/redis:alpine';
+my $PORT   = $ENV{EAPODMAN_TEST_PORT}  || 6379;
+my $KEEP   = $ENV{EAPODMAN_KEEP};
+my $CBASE  = 'eapod54037';
+my $DRIVER = lc( $ENV{EAPODMAN_DRIVER} || 'uapi' );    # how to issue verbs: 'uapi' (uapi --user) or 'cli' (real login + direct CLI)
 
-my $UAPI     = '/usr/local/cpanel/bin/uapi';
-my $WHMAPI   = '/usr/local/cpanel/bin/whmapi1';
-my $EAP_LIB  = '/opt/cpanel/ea-podman/lib/ea_podman';
-my $UAPI_MOD = '/usr/local/cpanel/Cpanel/API/EAPodman.pm';
-my $PORTAUTH = '/usr/local/cpanel/scripts/cpuser_port_authority';
+my $UAPI      = '/usr/local/cpanel/bin/uapi';
+my $WHMAPI    = '/usr/local/cpanel/bin/whmapi1';
+my $EAP_LIB   = '/opt/cpanel/ea-podman/lib/ea_podman';
+my $UAPI_MOD  = '/usr/local/cpanel/Cpanel/API/EAPodman.pm';
+my $PORTAUTH  = '/usr/local/cpanel/scripts/cpuser_port_authority';
+my @CLI_PATHS = ( '/usr/local/cpanel/scripts/ea-podman', '/opt/cpanel/ea-podman/bin/ea-podman' );
 
 my ($CAGEFSCTL) = grep { -x $_ } ( '/usr/sbin/cagefsctl', '/sbin/cagefsctl', '/usr/bin/cagefsctl' );
 
@@ -111,6 +125,16 @@ sub uapi {
     my ( $rc, $decoded, $out, $err ) = run_json( $UAPI, "--user=$user", '--output=json', 'EAPodman', $func, @kv );
     die "uapi $func: could not parse JSON (exit $rc):\nSTDOUT:\n$out\nSTDERR:\n$err\n" if !$decoded;
     return $decoded->{result} // $decoded;
+}
+
+# Run a command through the account's real LOGIN shell (`su -`), i.e. exactly
+# how the user would invoke it. Unlike the jailshell test's `run_in_jail`
+# (which proves the jail is bypassed by not going through the shell), CageFS
+# is entered at the PAM/login layer regardless of shell — so this is what
+# actually puts the process inside the cage. Returns ($exit, $combined_output).
+sub run_via_login {
+    my ( $user, $cmd ) = @_;
+    return run_cmd( 'su', '-', $user, '-c', $cmd );
 }
 
 sub _cagefsctl { return run_cmd( $CAGEFSCTL, @_ ); }
@@ -153,6 +177,7 @@ plan skip_all => "uapi not found ($UAPI)"                     if !-x $UAPI;
 plan skip_all => "Cpanel::API::EAPodman not installed"        if !-e $UAPI_MOD;
 plan skip_all => "ea-podman library not installed"            if !-e "$EAP_LIB/subids.pm";
 plan skip_all => "cpuser_port_authority not found ($PORTAUTH)" if !-x $PORTAUTH;
+plan skip_all => "EAPODMAN_DRIVER must be 'uapi' or 'cli' (got '$DRIVER')" if $DRIVER ne 'uapi' && $DRIVER ne 'cli';
 
 # ea-podman must carry the CPANEL-54037 fix.
 {
@@ -162,6 +187,22 @@ plan skip_all => "cpuser_port_authority not found ($PORTAUTH)" if !-x $PORTAUTH;
     close $fh;
     plan skip_all => "installed ea-podman predates CPANEL-54037 (no enable-linger / ensure_user_session in subids.pm); rebuild/install it first"
       if $src !~ /enable[-_ ]?linger/ && $src !~ /ensure_user_session/;
+}
+
+my ($CLI) = grep { -x $_ } @CLI_PATHS;
+plan skip_all => "EAPODMAN_DRIVER=cli but no ea-podman CLI found (@CLI_PATHS)" if $DRIVER eq 'cli' && !$CLI;
+
+# In 'cli' mode, the installed CLI must carry the CPANEL-54672 CageFS fallback
+# (otherwise this test would just reproduce the bug it's meant to guard).
+if ( $DRIVER eq 'cli' ) {
+    my ($CLI_PL) = grep { -e $_ } ( '/opt/cpanel/ea-podman/bin/ea-podman.pl', "$EAP_LIB/../../bin/ea-podman.pl" );
+    plan skip_all => "cannot find installed ea-podman.pl to verify the CPANEL-54672 fallback is present" if !$CLI_PL;
+    open my $fh, '<', $CLI_PL or plan skip_all => "cannot read $CLI_PL";
+    local $/;
+    my $src = <$fh>;
+    close $fh;
+    plan skip_all => "installed ea-podman predates CPANEL-54672 (no CageFS direct-CLI fallback in ea-podman.pl); rebuild/install it first"
+      if $src !~ /rootless runtime directory .* does not exist/;
 }
 
 # CageFS must be initialized. `--check-cagefs-initialized` exits non-zero and
@@ -180,6 +221,7 @@ plan skip_all => "cpuser_port_authority not found ($PORTAUTH)" if !-x $PORTAUTH;
 our $USER;
 our $CREATED_USER = 0;
 our $CAGEFS_WAS_ENABLED;
+our $ORIG_SHELL;
 
 if ( $ENV{EAPODMAN_TEST_USER} ) {
     $USER = $ENV{EAPODMAN_TEST_USER};
@@ -200,9 +242,17 @@ else {
 
 my $uid = ( getpwnam($USER) )[2];
 
+# In 'cli' mode a real login (`su -`) is required, which needs the account's
+# shell/ACL to actually permit shell access (a throwaway createacct account
+# may default to a no-shell ACL). Force an ordinary unrestricted shell so the
+# scenario under test — CageFS + unrestricted shell — is deterministic rather
+# than incidental; restored afterward for a reused (not created) account.
+$ORIG_SHELL = ( getpwnam($USER) )[8];
+run_cmd( '/usr/sbin/usermod', '-s', '/bin/bash', $USER );
+
 # Record prior CageFS state (to restore), then enable CageFS for the user —
-# the scenario under test. Shell is left unchanged: CageFS is orthogonal to
-# the login shell, and this isolates the cage as the variable.
+# the scenario under test. CageFS is orthogonal to the login shell, and this
+# isolates the cage as the variable.
 {
     my ( $src, $sout ) = _cagefsctl( '--user-status', $USER );
     $CAGEFS_WAS_ENABLED = ( $sout =~ /enabled/i && $sout !~ /disabled/i ) ? 1 : 0;
@@ -216,7 +266,91 @@ run_cmd( 'systemctl', 'stop', "user\@$uid.service" );
 wait_for( sub { !-e "/run/user/$uid" }, 5 );
 
 my $CGROUP = -e '/sys/fs/cgroup/cgroup.controllers' ? 'v2' : 'v1';
-diag("Test user: $USER (uid=$uid), CageFS=enabled, cgroup=$CGROUP, image=$IMAGE, port=$PORT");
+diag("Test user: $USER (uid=$uid), CageFS=enabled, cgroup=$CGROUP, image=$IMAGE, port=$PORT, driver=$DRIVER");
+
+# The raw combined output of the most recent _op_cli call — exposed so a test
+# can assert on incidental output (e.g. the CageFS fallback warning) without
+# every op() caller having to plumb it through.
+our $LAST_CLI_OUTPUT;
+
+#---------------------------------------------------------------------
+# driver: issue an EAPodman verb either via UAPI (`uapi --user`, cage-
+# independent) or via the account's real login running the ea-podman CLI
+# directly (`cli` — a genuine CageFS login). Normalized to the UAPI envelope
+# { status, data, errors } so every lifecycle assertion below is identical for
+# both. Selected with EAPODMAN_DRIVER=uapi|cli.
+#---------------------------------------------------------------------
+sub op {
+    my ( $verb, %args ) = @_;
+    return $DRIVER eq 'cli' ? _op_cli( $verb, %args ) : _op_uapi( $verb, %args );
+}
+
+sub _op_uapi {
+    my ( $verb, %args ) = @_;
+    my @kv;
+    push @kv, "name=$args{name}"                     if defined $args{name};
+    push @kv, "image=$args{image}"                   if defined $args{image};
+    push @kv, "cpuser_port=$args{container_port}"    if defined $args{container_port};
+    push @kv, "accept_arbitrary_image_risk=1"        if $args{accept_arbitrary_image_risk};
+    push @kv, "container_name=$args{container_name}" if defined $args{container_name};
+    push @kv, "cd=$args{cd}"                         if defined $args{cd};
+    if ( defined $args{command} ) {
+        push @kv, map { "arg=$_" } ( ref $args{command} eq 'ARRAY' ? @{ $args{command} } : ( $args{command} ) );
+    }
+    return uapi( $USER, $verb, @kv );
+}
+
+# Drive the CLI through the account's real login (run_via_login), so it
+# exercises the real cage → (bootstrap succeeds, but the runtime dir is
+# invisible) → fallback → adminbin/cpsrvd delegation path, then map its
+# textual output back onto the UAPI envelope.
+sub _op_cli {
+    my ( $verb, %args ) = @_;
+
+    my $cmd = _sh($CLI) . " $verb";
+    if ( $verb eq 'install' ) {
+        $cmd .= " " . _sh( $args{name} );
+        $cmd .= " --cpuser-port=" . _sh( $args{container_port} ) if defined $args{container_port};
+        $cmd .= " --i-understand-the-risks-do-it-anyway"      if $args{accept_arbitrary_image_risk};
+        $cmd .= " " . _sh( $args{image} )                     if defined $args{image};
+    }
+    elsif ( $verb eq 'cmd' ) {
+        $cmd .= " " . _sh( $args{container_name} );
+        $cmd .= " --cd " . _sh( $args{cd} ) if defined $args{cd};
+        my @cargs = ref $args{command} eq 'ARRAY' ? @{ $args{command} } : ( $args{command} );
+        $cmd .= " -- " . join( " ", map { _sh($_) } @cargs );
+    }
+    elsif ( $verb eq 'uninstall' ) {
+        $cmd .= " " . _sh( $args{container_name} ) . " --verify";    # skip the "are you sure" prompt
+    }
+    elsif ( defined $args{container_name} ) {
+        $cmd .= " " . _sh( $args{container_name} );
+    }
+
+    my ( $exit, $out ) = run_via_login( $USER, $cmd );
+    $LAST_CLI_OUTPUT = $out;
+
+    if ( $verb eq 'install' ) {
+        my ($name) = $out =~ /Done,\s*installed:\s*(\S+)/;
+        return { status => ( $name ? 1 : 0 ), data => { container_name => $name }, errors => ( $name ? undef : [$out] ) };
+    }
+    if ( $verb eq 'list' ) {
+        # A login shell may prepend a banner/MOTD; isolate the JSON object.
+        my $jsontext = $out;
+        $jsontext =~ s/\A[^{]*//s;
+        $jsontext =~ s/[^}]*\z//s;
+        my $data = eval { $json->($jsontext) };
+        return { status => ( $data ? 1 : 0 ), data => ( $data || {} ), errors => ( $data ? undef : [$out] ) };
+    }
+    if ( $verb eq 'cmd' ) {
+        # The CLI `cmd` verb exits with the exec'd command's own exit code and
+        # prints its stdout/stderr directly (no JSON envelope).
+        return { status => 1, data => { stdout => $out, exit_code => $exit }, errors => undef };
+    }
+
+    # start / stop / restart / uninstall: success is a clean exit
+    return { status => ( $exit == 0 ? 1 : 0 ), data => {}, errors => ( $exit == 0 ? undef : [$out] ) };
+}
 
 #=====================================================================
 # the tests
@@ -233,15 +367,27 @@ ok( !-e "/run/user/$uid", "baseline: no /run/user/$uid before install" );
     unlike( $out, qr/Linger=yes/, "baseline: linger not enabled before install" );
 }
 
-#--- install via UAPI (the supported path; runs outside the cage) ----
+#--- install: via UAPI directly (cage-independent), or via the account's own
+#    real login running the CLI (driver=cli — a genuine CageFS login) -------
 my $container;
 {
-    my @args = ( "name=$CBASE", "image=$IMAGE", "cpuser_port=$PORT", 'accept_arbitrary_image_risk=1' );
-    my $res  = uapi( $USER, 'install', @args );
-    ok( $res->{status}, "uapi EAPodman install succeeded for a CageFS user" )
+    my $res = op( 'install', name => $CBASE, image => $IMAGE, container_port => $PORT, accept_arbitrary_image_risk => 1 );
+    ok( $res->{status}, "[$DRIVER] EAPodman install succeeded for a CageFS user" )
       or diag( "errors: " . join( "; ", @{ $res->{errors} || [] } ) );
     $container = $res->{data} && $res->{data}{container_name};
     like( $container // '', qr/^\Q$CBASE\E\.\Q$USER\E\.[0-9][0-9]$/, "install returned a container name ($container)" );
+
+    # The money assertion for CPANEL-54672: a real CageFS login with an
+    # unrestricted shell takes the direct CLI path, can't see its own
+    # /run/user/<uid> from inside the cage, and must transparently fall back
+    # to the UAPI bridge rather than failing outright.
+    if ( $DRIVER eq 'cli' ) {
+        like(
+            $LAST_CLI_OUTPUT // '',
+            qr/could not see this account.s rootless runtime directory directly.*retrying through the EAPodman UAPI/s,
+            "[cli] direct CLI hit the CageFS symptom and transparently fell back to the UAPI bridge"
+        );
+    }
 }
 
 BAIL_OUT("install did not return a container name; cannot continue") if !$container;
@@ -259,8 +405,8 @@ ok( -S "/run/user/$uid/bus", "user dbus socket /run/user/$uid/bus exists" );
 
 #--- the container is registered (authoritative: same context as install)
 {
-    my $res = uapi( $USER, 'list' );
-    ok( $res->{status} && $res->{data} && exists $res->{data}{$container}, "uapi EAPodman list shows $container" );
+    my $res = op('list');
+    ok( $res->{status} && $res->{data} && exists $res->{data}{$container}, "[$DRIVER] EAPodman list shows $container" );
 }
 
 #--- the service actually serves (cage-independent) ------------------
@@ -277,39 +423,39 @@ SKIP: {
 # adminbin (nsenter), so it works here even though /proc is hidepid=2 and
 # `podman exec` would fail.
 {
-    my $res = uapi( $USER, 'cmd', "container_name=$container", 'arg=date' );
-    ok( $res->{status}, "uapi EAPodman cmd (date) succeeded" )
+    my $res = op( 'cmd', container_name => $container, command => 'date' );
+    ok( $res->{status}, "[$DRIVER] EAPodman cmd (date) succeeded" )
       or diag( "errors: " . join( "; ", @{ $res->{errors} || [] } ) );
     is( $res->{data}{exit_code}, 0, "cmd date exited 0" );
     like( $res->{data}{stdout}, qr/\d{4}/, "cmd date produced date-like stdout" );
 
-    # Exit-code fidelity: non-zero command exit is data, not a UAPI failure.
-    my $f = uapi( $USER, 'cmd', "container_name=$container", 'arg=false' );
-    ok( $f->{status}, "uapi cmd (false) is still a successful UAPI call" );
+    # Exit-code fidelity: non-zero command exit is data, not a failure.
+    my $f = op( 'cmd', container_name => $container, command => 'false' );
+    ok( $f->{status}, "[$DRIVER] cmd (false) is still a successful call" );
     is( $f->{data}{exit_code}, 1, "cmd (false) surfaces exit_code 1" );
 
     # --cd runs from the given working directory.
-    my $cd = uapi( $USER, 'cmd', "container_name=$container", 'cd=/etc', 'arg=pwd' );
+    my $cd = op( 'cmd', container_name => $container, cd => '/etc', command => 'pwd' );
     is( $cd->{data}{exit_code}, 0, "cmd --cd=/etc pwd exited 0" );
     like( $cd->{data}{stdout}, qr{^/etc\b}, "cmd --cd=/etc ran from /etc" );
 
     # Sysadmin task: write into the container OS and read it back via a later cmd.
-    my $w = uapi( $USER, 'cmd', "container_name=$container", 'arg=touch', 'arg=/eapodman-cmd-marker' );
+    my $w = op( 'cmd', container_name => $container, command => [ 'touch', '/eapodman-cmd-marker' ] );
     is( $w->{data}{exit_code}, 0, "cmd touch created a file in the container" );
-    my $r = uapi( $USER, 'cmd', "container_name=$container", 'arg=ls', 'arg=/eapodman-cmd-marker' );
+    my $r = op( 'cmd', container_name => $container, command => [ 'ls', '/eapodman-cmd-marker' ] );
     like( $r->{data}{stdout}, qr{/eapodman-cmd-marker}, "the written file persists and is visible to a later cmd" );
 }
 
 #--- lifecycle: stop / start / restart -------------------------------
 {
-    my $res = uapi( $USER, 'stop', "container_name=$container" );
-    ok( $res->{status}, "uapi EAPodman stop succeeded" );
+    my $res = op( 'stop', container_name => $container );
+    ok( $res->{status}, "[$DRIVER] EAPodman stop succeeded" );
 
-    $res = uapi( $USER, 'start', "container_name=$container" );
-    ok( $res->{status}, "uapi EAPodman start succeeded" );
+    $res = op( 'start', container_name => $container );
+    ok( $res->{status}, "[$DRIVER] EAPodman start succeeded" );
 
-    $res = uapi( $USER, 'restart', "container_name=$container" );
-    ok( $res->{status}, "uapi EAPodman restart succeeded" );
+    $res = op( 'restart', container_name => $container );
+    ok( $res->{status}, "[$DRIVER] EAPodman restart succeeded" );
 
     SKIP: {
         skip "non-redis image ($IMAGE); skipping serving re-check", 1 if $IMAGE !~ /redis/i;
@@ -330,10 +476,10 @@ SKIP: {
 
 #--- uninstall cleans up ---------------------------------------------
 {
-    my $res = uapi( $USER, 'uninstall', "container_name=$container" );
-    ok( $res->{status}, "uapi EAPodman uninstall succeeded" );
+    my $res = op( 'uninstall', container_name => $container );
+    ok( $res->{status}, "[$DRIVER] EAPodman uninstall succeeded" );
 
-    my $list = uapi( $USER, 'list' );
+    my $list = op('list');
     ok( !( $list->{data} && exists $list->{data}{$container} ), "uninstalled container no longer registered" );
 }
 
@@ -421,7 +567,8 @@ END {
     if ($CREATED_USER) {
         run_cmd( $WHMAPI, 'removeacct', "username=$USER", 'keepdns=0', '--output=json' );
     }
-    elsif ( defined $CAGEFS_WAS_ENABLED && !$CAGEFS_WAS_ENABLED && $CAGEFSCTL ) {
-        run_cmd( $CAGEFSCTL, '--disable', $USER );    # restore prior (non-caged) state
+    else {
+        run_cmd( $CAGEFSCTL, '--disable', $USER ) if defined $CAGEFS_WAS_ENABLED && !$CAGEFS_WAS_ENABLED && $CAGEFSCTL;
+        run_cmd( '/usr/sbin/usermod', '-s', $ORIG_SHELL, $USER ) if $ORIG_SHELL && $ORIG_SHELL ne '/bin/bash';
     }
 }

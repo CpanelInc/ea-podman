@@ -6,10 +6,13 @@ command-line tool (`ea-podman`) directly. Accounts with a restricted
 (**jailshell**) login shell can run the **same CLI**, too: for the supported
 verbs it transparently routes through the **`EAPodman` UAPI module** described
 here (which cpsrvd executes outside the jail), so nothing special is required of
-the caller. The UAPI module is also the direct entry point for the cPanel UI,
-API tokens, and other integrations — and the way a **CloudLinux CageFS** account
-with an unrestricted shell should manage containers (the CLI's auto-routing keys
-off the *restricted shell*, so it does not kick in for a caged normal shell).
+the caller. A **CloudLinux CageFS** account with an ordinary (unrestricted)
+shell also runs the CLI directly — a real login there really is inside the
+cage, and CageFS does not expose `/run/user` into it, so a direct CLI call
+that hits that specific symptom (bootstrap already succeeded, but the runtime
+directory isn't visible from inside the cage) transparently falls back to the
+same UAPI route jailshell uses. The UAPI module is also the direct entry point
+for the cPanel UI, API tokens, and other integrations.
 
 This document covers what that UAPI surface is, **who** can use it, and **how**
 to call it. See `DESIGN.md` for the internals.
@@ -24,12 +27,11 @@ to call it. See `DESIGN.md` for the internals.
   **outside** any CageFS cage and never enters the jailshell chroot (it does not
   exec the login shell). So the same code path works for normal, jailshell, and
   CageFS accounts.
-- A jailshell CLI call reaches that UAPI even though a shell login has no
-  ambient web credential: the (root) ea-podman adminbin mints a short-lived
-  cPanel API token for the caller, the CLI makes one authenticated request over
-  localhost HTTPS (`Authorization: cpanel user:token`), and the token is revoked
-  right after. (CageFS accounts with an *unrestricted* shell are not auto-routed
-  — they should call the UAPI directly, e.g. via the UI or an API token.)
+- A jailshell (or CageFS-fallback) CLI call reaches that UAPI even though a
+  shell login has no ambient web credential: the (root) ea-podman adminbin
+  mints a short-lived cPanel API token for the caller, the CLI makes one
+  authenticated request over localhost HTTPS (`Authorization: cpanel
+  user:token`), and the token is revoked right after.
 - The first container operation transparently performs the one-time privileged
   bootstrap (allocate subuid/subgid and run `loginctl enable-linger`, as root
   via the ea-podman adminbin) so the account gets a persistent rootless user

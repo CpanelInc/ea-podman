@@ -87,6 +87,34 @@ sub run {
     # never runs through here and keeps the CloudLinux + cgroup v2 advisory.
     $ea_podman::util::EMIT_CGROUP_ADVISORY = 0;
 
+    # An account can also be unreachable directly for a reason the shell check
+    # above can't see: CageFS. A CageFS-caged account can have an unrestricted
+    # shell (so it isn't routed to delegate_to_uapi above), but a real login
+    # still runs inside the cage's own mount namespace, which does not expose
+    # /run/user. The root-privileged bootstrap (ensure_user(), just above
+    # ensure_su_login() in init_user()) still succeeds — it runs via the
+    # ENSURE_USER adminbin, outside the cage — so the account ends up fully
+    # bootstrapped on the host while this process still can't see the result.
+    # ensure_su_login() (util.pm) surfaces that as a specific, distinctive die.
+    # Rather than inventing cage-detection, catch that exact symptom and fall
+    # back to the same UAPI bridge jailshell already uses (cpsrvd also runs
+    # outside the cage, so it can see what we just bootstrapped). See CPANEL-54672.
+    if ( $> != 0 ) {
+        my $ok = eval {
+            App::CmdDispatch->new( get_dispatch_args() )->run(@args);
+            1;
+        };
+        if ( !$ok ) {
+            my $err = $@;
+            if ( $err =~ /rootless runtime directory .* does not exist/ ) {
+                warn "ea-podman: could not see this account's rootless runtime directory directly " . "(typical of a CageFS-enabled account) - retrying through the EAPodman UAPI...\n";
+                return delegate_to_uapi(@args);
+            }
+            die $err;
+        }
+        return;
+    }
+
     return App::CmdDispatch->new( get_dispatch_args() )->run(@args);
 }
 

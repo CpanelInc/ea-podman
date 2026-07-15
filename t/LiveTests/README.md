@@ -41,6 +41,8 @@ as well as v2 (AlmaLinux 9/10 and Ubuntu 24.04, which default to v2).
 | `normal-podman-live.t` | A **normal** account (unrestricted shell, not CageFS) manages containers via UAPI, and may also use the `ea-podman` CLI. | A live cPanel VM (cgroup v1 or v2). |
 | `jailshell-podman-live.t` | A cPanel account whose login shell is **jailshell** manages containers — via UAPI, and (with `EAPODMAN_DRIVER=cli`) via the `ea-podman` CLI, which delegates to the UAPI. | A live cPanel VM (cgroup v1 or v2). |
 | `cagefs-podman-live.t` | A **CloudLinux CageFS**-enabled account manages containers via UAPI. | CloudLinux (cgroup v1 or v2), with CageFS installed + initialized. |
+| `ea-memcached16-cli-live.t` | A **normal** account uses the `ea-podman` CLI directly (`install <PKG>` mode) to install a real EA4 container-based package, `ea-memcached16`. | A live cPanel VM (cgroup v1 or v2), with `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
+| `ea-memcached16-cagefs-cli-live.t` | Sister to the above, but the account is **CageFS**-enabled: the CLI is driven through a real CageFS login, exercising the CPANEL-54672 fallback to the UAPI bridge. | CloudLinux (cgroup v1 or v2), with CageFS installed + initialized, and `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
 
 ## Running
 
@@ -54,6 +56,11 @@ EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl jailshell-podman-live.t
 # jailshell, exercising the CLI->UAPI delegation instead of `uapi --user`:
 EAPODMAN_LIVE=1 EAPODMAN_DRIVER=cli /usr/local/cpanel/3rdparty/bin/perl jailshell-podman-live.t
 EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl cagefs-podman-live.t
+# install a real EA4 container-based package (ea-memcached16) via the CLI
+# (ea-memcached16 must already be installed locally, e.g. `yum install -y ea-memcached16`):
+EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea-memcached16-cli-live.t
+# same, but for a CageFS-enabled account (CloudLinux only):
+EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea-memcached16-cagefs-cli-live.t
 ```
 
 Useful environment variables (see each test's header for the full list):
@@ -66,6 +73,8 @@ Useful environment variables (see each test's header for the full list):
   afterward).
 - `EAPODMAN_TEST_IMAGE` / `EAPODMAN_TEST_PORT` — image / container port
   (defaults: `redis:alpine`, `6379`).
+- `EAPODMAN_TEST_PKG` (ea-memcached16 test) — EA4 container-based package to
+  install (default: `ea-memcached16`); must already be installed locally.
 - `EAPODMAN_KEEP=1` — skip teardown and leave the account/container for manual
   inspection.
 
