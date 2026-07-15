@@ -44,6 +44,10 @@ Source18:      EAPodman-stop.openapi.yaml
 Source19:      EAPodman-restart.openapi.yaml
 Source20:      EAPodman-status.openapi.yaml
 Source21:      EAPodman-cmd.openapi.yaml
+
+# Install-time hook for the cpanel-webapp-plugin: moves a staged web
+# application into its new container's directory (--webapp-dir, CPANEL-54441).
+Source22:      webapp-dir-setup
 %if 0%{?rhel} == 8
 Requires:       gcc-toolset-11
 %endif
@@ -110,6 +114,8 @@ install -p %{SOURCE4} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman.c
 
 install %{SOURCE7} %{buildroot}/opt/cpanel/ea-podman/bin
 
+install %{SOURCE22} %{buildroot}/opt/cpanel/ea-podman/webapp-dir-setup
+
 mkdir -p %{buildroot}/var/cpanel/perl5/lib
 install -p %{SOURCE8} %{buildroot}/var/cpanel/perl5/lib/PodmanHooks.pm
 
@@ -130,6 +136,7 @@ rm -rf %{buildroot}
 %attr(0600,root,root) /opt/cpanel/ea-podman/registered-containers.json
 %attr(0700,root,root) /opt/cpanel/ea-podman/bin/compile.sh
 %attr(0700,root,root) /opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub
+%attr(0755,root,root) /opt/cpanel/ea-podman/webapp-dir-setup
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
 %attr(0644, root, root) /usr/local/cpanel/install/EAPodman.pm
 %attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman.pm

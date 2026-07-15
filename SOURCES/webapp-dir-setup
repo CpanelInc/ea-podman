@@ -1,0 +1,42 @@
+#!/usr/local/cpanel/3rdparty/bin/perl
+
+# cpanel - webapp-dir-setup                       Copyright 2026 WebPros International, LLC
+#                                                           All rights reserved.
+# copyright@cpanel.net                                         http://cpanel.net
+# This code is subject to the cPanel license. Unauthorized copying is prohibited
+
+use strict;
+use warnings;
+
+# Move a web application's staged directory into its new container's directory
+# (as `webapp/`). Invoked by ea_podman::util::_ensure_latest_container() when
+# an arbitrary-image install passes --webapp-dir — the install-time analog of
+# an EA4 container package's ea-podman-local-dir-setup hook. The staged
+# directory itself becomes `webapp/`, so nothing is left behind at the staged
+# location.
+
+exit( run(@ARGV) ? 0 : 1 ) if !caller();
+
+sub run {
+    my ( $staged_dir, $container_dir ) = @_;
+
+    die "Usage: webapp-dir-setup <STAGED_DIR> <CONTAINER_DIR>\n"
+      if !length( $staged_dir // '' ) || !length( $container_dir // '' );
+
+    for my $dir ( $staged_dir, $container_dir ) {
+        die "“$dir” must be an absolute path\n" if $dir !~ m{^/};
+        die "“$dir” is not a directory\n"       if !-d $dir;
+    }
+
+    my $webapp_dir = "$container_dir/webapp";
+    die "“$webapp_dir” already exists\n" if -e $webapp_dir;
+
+    # rename(2) is atomic but cannot cross filesystems; the staged directory
+    # and the container directory normally both live under the user's home, so
+    # a failure here means nothing moved and the install can abort cleanly.
+    rename( $staged_dir, $webapp_dir ) or die "Could not move “$staged_dir” to “$webapp_dir”: $!\n";
+
+    return 1;
+}
+
+1;

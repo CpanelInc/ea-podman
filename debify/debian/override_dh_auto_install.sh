@@ -16,6 +16,7 @@ mkdir -p $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin
 install $SOURCE0  $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin/ea-podman.pl
 install $SOURCE10 $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub
 install $SOURCE7  $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin/compile.sh
+install $SOURCE22 $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/webapp-dir-setup
 
 mkdir -p $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/lib/ea_podman
 install $SOURCE1 $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/lib/ea_podman/subids.pm
