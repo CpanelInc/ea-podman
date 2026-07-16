@@ -172,6 +172,28 @@ Should have start up options specified in the CLI. Except the ones ea-podman man
 
 Those options will be recorded in `<CONTAINERS-HOST-PATH>/ea-podman.json` for later.
 
+#### `--webapp-dir` and `--no-start` (install only)
+
+These support the cpanel-webapp-plugin's deploy flow (CPANEL-54441) and are only
+valid when installing an arbitrary image (like `-v` itself, they are not
+expressible through the EAPodman UAPI):
+
+* `--webapp-dir=<STAGED-DIR>` — after the container is registered and before
+  `podman create`, run `/opt/cpanel/ea-podman/webapp-dir-setup <STAGED-DIR>
+  <CONTAINERS-HOST-PATH>`: the install-time analog of a package's
+  `ea-podman-local-dir-setup` hook. The script atomically renames the staged
+  directory to `<CONTAINERS-HOST-PATH>/webapp` (nothing is left behind at the
+  staged location, and nothing moves unless the whole rename succeeds). Any
+  `-v`/`--volume` host path under the staged directory is rewritten to the
+  moved location — both for the `podman create` and for the `start_args`
+  recorded in `<CONTAINERS-HOST-PATH>/ea-podman.json` that upgrades replay.
+  Unlike a package's hook, a failure here aborts the install; if the later
+  `podman create` fails, `webapp/` is moved back to the staged location before
+  the container directory is removed. `--mount` specs are not rewritten.
+* `--no-start` — generate and enable the container's service but skip the
+  final start, so the caller can finish preparing the container's directory
+  (e.g. build the moved application in place) and start it explicitly.
+
 ## Child Documents
 
 * None
