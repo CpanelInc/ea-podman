@@ -499,6 +499,10 @@ sub generate_container_service {
     return 1;
 }
 
+# Install-time hook for the cpanel-webapp-plugin (--webapp-dir). Package
+# variable so tests can point it at the repo copy.
+our $webapp_dir_setup_script = "/opt/cpanel/ea-podman/webapp-dir-setup";
+
 sub _ensure_latest_container {
     my ( $container_name, @start_args ) = @_;
 
@@ -534,10 +538,13 @@ sub _ensure_latest_container {
         die "“$container_dir” does not exist\n" if !-d $container_dir;
     }
 
+    my ( $webapp_source_dir, $no_start );
+
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
         my $pkg_dir = "/opt/cpanel/$pkg";
         if ( -f "$pkg_dir/ea-podman.json" ) {
             die "Upgrade takes no start args\n" if $isupgrade && @start_args;
+            die "--webapp-dir and --no-start are only supported when installing an arbitrary image\n" if grep { m/^--(?:webapp-dir|no-start)/ } @start_args;
             my @given_start_args = @start_args;
 
             # do needful based on /opt/cpanel/$pkg
@@ -679,12 +686,25 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
                     }
                     push @cpuser_ports, $val;
                 }
+                elsif ( $item =~ m/^--webapp-dir(?:=(.*))?$/ ) {
+                    die "--webapp-dir may only be given once\n" if defined $webapp_source_dir;
+                    $webapp_source_dir = _validate_webapp_dir( $1, $container_root );
+                }
+                elsif ( $item eq "--no-start" ) {
+                    $no_start = 1;
+                }
                 else {
                     push @real_start_args, $item;
                 }
             }
 
             push @real_start_args, $docker_name;
+
+            # The staged directory becomes $container_dir/webapp (see the
+            # webapp-dir-setup call below), so any mount that points into it
+            # must follow the move — both for the podman create below and for
+            # the persisted start_args that upgrades replay.
+            _rewrite_webapp_mounts( \@real_start_args, $webapp_source_dir, "$container_dir/webapp" ) if defined $webapp_source_dir;
         }
 
         # ensure the user isn’t specifying something they shouldn’t
@@ -715,9 +735,33 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     uninstall_container($container_name) if $isupgrade || $isrestore;                # avoid spurious warnings on install
     register_container( $container_name, $isupgrade || $isrestore, $image_name );    # register before create just in case
 
+    # Move the staged web application into the container dir (as webapp/).
+    # Unlike a package's local-dir-setup hook this one is load-bearing — the
+    # container's mounts point at the moved location — so a failure aborts the
+    # install instead of warning. The script moves nothing unless it succeeds
+    # entirely, so cleanup here never has to restore the staged directory.
+    if ( defined $webapp_source_dir ) {
+        system( $webapp_dir_setup_script, $webapp_source_dir, $container_dir );
+        if ( $? != 0 ) {
+            deregister_container($container_name);
+            chdir("/");
+            eval { File::Path::Tiny::rm($container_dir) };
+            die "$webapp_dir_setup_script did not exit cleanly; “$webapp_source_dir” was not moved\n";
+        }
+    }
+
     if ( !create_user_container( $container_name, @start_args ) ) {
         if ( !$isupgrade ) {
             deregister_container($container_name);
+
+            # The moved web application is the user's only copy of their
+            # source — put it back where it came from before the container
+            # dir is removed.
+            if ( defined $webapp_source_dir && -d "$container_dir/webapp" && !-e $webapp_source_dir ) {
+                local $@;
+                eval { path("$container_dir/webapp")->move($webapp_source_dir) };
+                warn "Could not restore “$container_dir/webapp” to “$webapp_source_dir”: $@" if $@;
+            }
 
             # File::Path::Tiny::rm() chdir()s internally and dies if it cannot
             # restore the original cwd (e.g. an inaccessible /root). Move to a
@@ -732,7 +776,54 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     generate_container_service($container_name);
 
     my $service_name = get_container_service_name($container_name);
-    sysctl( start => $service_name );
+    sysctl( start => $service_name ) if !$no_start;
+}
+
+# Validate a --webapp-dir value: the absolute path of the staged directory
+# webapp-dir-setup will move into the container dir. Returns the normalized
+# path. Kept argument-pure (value + container root in, path or die out) so it
+# is unit-testable.
+sub _validate_webapp_dir {
+    my ( $val, $container_root ) = @_;
+
+    die "--webapp-dir requires the absolute path of the staged directory to move into the container directory. e.g. --webapp-dir=/home/user/.cpanel/webapp-staging/my-app\n" if !length( $val // '' );
+
+    $val =~ s{/+$}{};
+    die "--webapp-dir must be an absolute path\n"                    if $val !~ m{^/};
+    die "--webapp-dir “$val” is not a directory\n"                   if !-d $val;
+    die "--webapp-dir cannot be inside “$container_root”\n"          if "$val/" =~ m{^\Q$container_root\E/};
+
+    return $val;
+}
+
+# Rewrite -v/--volume host paths that live under $from so the mounts follow
+# webapp-dir-setup's move of $from to $to. Only exact path-boundary prefix
+# matches are rewritten (/x/app matches /x/app and /x/app/sub, never
+# /x/app-other). --mount specs are not handled. Pure args-in/args-out so it is
+# unit-testable.
+sub _rewrite_webapp_mounts {
+    my ( $args, $from, $to ) = @_;
+
+    my $rewrite = sub {
+        my ($spec) = @_;
+        my ( $host, $rest ) = split( m/:/, $spec, 2 );
+        return $spec if !defined $rest;                                # no host part (anonymous volume)
+        return $spec if $host ne $from && $host !~ m{^\Q$from\E/};
+        substr( $host, 0, length($from) ) = $to;
+        return "$host:$rest";
+    };
+
+    for my $idx ( 0 .. $#{$args} ) {
+        my $item = $args->[$idx];
+        if ( $item eq "-v" || $item eq "--volume" ) {
+            $args->[ $idx + 1 ] = $rewrite->( $args->[ $idx + 1 ] ) if $idx < $#{$args};
+        }
+        elsif ( $item =~ m/^(-v=|--volume=)(.*)$/ ) {
+            $args->[$idx] = $1 . $rewrite->($2);
+        }
+    }
+
+    return;
 }
 
 sub _file_write_chmod {
