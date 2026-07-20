@@ -8,12 +8,14 @@
 use strict;
 use warnings;
 
-# Move a web application's staged directory into its new container's directory
-# (as `webapp/`). Invoked by ea_podman::util::_ensure_latest_container() when
-# an arbitrary-image install passes --webapp-dir — the install-time analog of
-# an EA4 container package's ea-podman-local-dir-setup hook. The staged
-# directory itself becomes `webapp/`, so nothing is left behind at the staged
-# location.
+# Move a web application's staged source directory into its new container's
+# directory (as `webapp/`). Invoked by
+# ea_podman::util::_ensure_latest_container() when an arbitrary-image install
+# passes --webapp-dir — the install-time analog of an EA4 container package's
+# ea-podman-local-dir-setup hook. The staged directory — the application's
+# source itself — becomes `webapp/`, so nothing is left behind at the staged
+# location and `webapp/` is the application's source root; everything beside
+# it in the container directory belongs to the system, not the application.
 
 exit( run(@ARGV) ? 0 : 1 ) if !caller();
 

@@ -703,9 +703,9 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             push @real_start_args, $docker_name;
 
             # The staged directory becomes $container_dir/webapp (see the
-            # webapp-dir-setup call below), so any mount that points into it
-            # must follow the move — both for the podman create below and for
-            # the persisted start_args that upgrades replay.
+            # webapp-dir-setup call below), so any mount that points at or
+            # into it must follow the move — both for the podman create below
+            # and for the persisted start_args that upgrades replay.
             _rewrite_webapp_mounts( \@real_start_args, $webapp_source_dir, "$container_dir/webapp" ) if defined $webapp_source_dir;
         }
 

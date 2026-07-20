@@ -181,12 +181,16 @@ expressible through the EAPodman UAPI):
 * `--webapp-dir=<STAGED-DIR>` — after the container is registered and before
   `podman create`, run `/opt/cpanel/ea-podman/webapp-dir-setup <STAGED-DIR>
   <CONTAINERS-HOST-PATH>`: the install-time analog of a package's
-  `ea-podman-local-dir-setup` hook. The script atomically renames the staged
-  directory to `<CONTAINERS-HOST-PATH>/webapp` (nothing is left behind at the
-  staged location, and nothing moves unless the whole rename succeeds). Any
-  `-v`/`--volume` host path under the staged directory is rewritten to the
-  moved location — both for the `podman create` and for the `start_args`
-  recorded in `<CONTAINERS-HOST-PATH>/ea-podman.json` that upgrades replay.
+  `ea-podman-local-dir-setup` hook. The staged directory is the web
+  application's source itself (the zip contents / git clone), and the script
+  atomically renames it to `<CONTAINERS-HOST-PATH>/webapp` (nothing is left
+  behind at the staged location, and nothing moves unless the whole rename
+  succeeds). `webapp/` is therefore the application's source root; everything
+  else in the container directory (`ea-podman.json`, etc.) is the system's,
+  never the application's. Any `-v`/`--volume` host path at or under the
+  staged directory is rewritten to the moved location — both for the `podman
+  create` and for the `start_args` recorded in
+  `<CONTAINERS-HOST-PATH>/ea-podman.json` that upgrades replay.
   Unlike a package's hook, a failure here aborts the install; if the later
   `podman create` fails, `webapp/` is moved back to the staged location before
   the container directory is removed. `--mount` specs are not rewritten.
