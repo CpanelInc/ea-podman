@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 24
+%define release_prefix 22
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -151,6 +151,9 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-cmd.openapi.yaml
 
 %changelog
+* Mon Jul 20 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-22
+- CPANEL-54441: move staged dir to container dir && add webapp to podman registry
+
 * Tue Jul 14 2026 Julian Brown <julian.brown@webpros.com> - 1.0-21
 - CPANEL-54672: Fall back to the EAPodman UAPI bridge when a direct CLI call
   can't see its own rootless runtime directory (CageFS + unrestricted shell)
