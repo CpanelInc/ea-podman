@@ -91,12 +91,12 @@ sub ENSURE_USER {
 }
 
 sub REGISTER {
-    my ( $self, $container_name, $isupgrade, $image ) = @_;
+    my ( $self, $container_name, $isupgrade, $image, $webapp ) = @_;
     my $cpuser = $self->_debug_and_user(0);
 
     _die_with_message("Must provide a container name") if !defined $container_name;
 
-    eval { ea_podman::util::register_container_as_root( $container_name, $cpuser, $isupgrade, $image ); };
+    eval { ea_podman::util::register_container_as_root( $container_name, $cpuser, $isupgrade, $image, $webapp ); };
 
     _die_with_message("Unable to add to known_containers: $@") if ($@);
 
@@ -281,6 +281,12 @@ This function ensures that the user has subuids and subgids for podman functiona
 This function adds the given container to ea-podman’s known containers list.
 
 Second argument is a boolean indicating if it is updating a registry (as opposed to creating a new one).
+
+Fourth argument is a boolean indicating the container belongs to the webapp
+plugin (i.e. the install carried a C<--webapp-dir> flag). It is stored on the
+entry as a strict JSON boolean C<webapp> attribute — truthiness only, never
+the raw value — and it is ignored on an update, where the value already
+recorded in the root-owned registry is preserved.
 
 =head2 DEREGISTER
 
