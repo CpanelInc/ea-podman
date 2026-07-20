@@ -190,6 +190,14 @@ expressible through the EAPodman UAPI):
   Unlike a package's hook, a failure here aborts the install; if the later
   `podman create` fails, `webapp/` is moved back to the staged location before
   the container directory is removed. `--mount` specs are not rewritten.
+
+  Giving `--webapp-dir` also records `webapp: true` on the container's entry
+  in the root-owned registry (`/opt/cpanel/ea-podman/registered-containers.json`);
+  every entry registered without it records `webapp: false`. The attribute is
+  established at install time only: the value is collapsed to a strict JSON
+  boolean before it is written, and an upgrade/restore (or a replayed
+  registration) preserves the value already recorded in the registry rather
+  than trusting the caller.
 * `--no-start` — generate and enable the container's service but skip the
   final start, so the caller can finish preparing the container's directory
   (e.g. build the moved application in place) and start it explicitly.

@@ -93,6 +93,9 @@ subtest '_validate_webapp_dir rejects bad values' => sub {
     eval { ea_podman::util::_validate_webapp_dir( "webapp-staging/my-app", "$tmp/ea-podman.d" ) };
     like( $@, qr/must be an absolute path/, "relative path" );
 
+    eval { ea_podman::util::_validate_webapp_dir( "0", "$tmp/ea-podman.d" ) };
+    like( $@, qr/must be an absolute path/, "a bogus boolean-looking value (--webapp-dir=0) dies before anything can be registered" );
+
     eval { ea_podman::util::_validate_webapp_dir( "$tmp/does-not-exist", "$tmp/ea-podman.d" ) };
     like( $@, qr/is not a directory/, "missing dir" );
 

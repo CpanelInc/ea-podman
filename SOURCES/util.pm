@@ -56,7 +56,9 @@ use Path::Tiny 'path';
 
 my $container_name_suffix_regexp      = qr/\.[^.]+\.[0-9][0-9]$/;
 my $container_name_sans_suffix_regexp = qr/^[a-z][a-z0-9-]+[a-z0-9]/;
-my $known_containers_file             = '/opt/cpanel/ea-podman/registered-containers.json';
+
+# Package variable so tests can point it at a scratch file.
+our $known_containers_file = '/opt/cpanel/ea-podman/registered-containers.json';
 
 # See
 #     1. https://docs.docker.com/engine/reference/commandline/tag/#extended-description
@@ -733,7 +735,7 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     my ($image_name) = $image_arg =~ m|([^/]+)$|;
 
     uninstall_container($container_name) if $isupgrade || $isrestore;                # avoid spurious warnings on install
-    register_container( $container_name, $isupgrade || $isrestore, $image_name );    # register before create just in case
+    register_container( $container_name, $isupgrade || $isrestore, $image_name, defined $webapp_source_dir ? 1 : 0 );    # register before create just in case
 
     # Move the staged web application into the container dir (as webapp/).
     # Unlike a package's local-dir-setup hook this one is load-bearing — the
@@ -1051,7 +1053,7 @@ sub load_known_containers_as_root {
 }
 
 sub register_container_as_root {
-    my ( $container_name, $user, $isupgrade, $image ) = @_;
+    my ( $container_name, $user, $isupgrade, $image, $webapp ) = @_;
 
     my $containers_hr = load_known_containers_as_root();
 
@@ -1069,12 +1071,17 @@ sub register_container_as_root {
         warn "$container_name is not registered, registering now …\n";
     }
 
+    # `webapp` is established at install time only (--webapp-dir given); an
+    # upgrade/restore keeps the value already recorded in this root-owned file.
+    $webapp = $containers_hr->{$container_name}{webapp} if $isupgrade && exists $containers_hr->{$container_name};
+
     $containers_hr->{$container_name} = {
         container_name => $container_name,
         user           => $user,
         pkg            => $pkg,
         pkg_version    => $pkg_ver,
         image          => $image,
+        webapp         => $webapp ? Cpanel::JSON::true() : Cpanel::JSON::false(),    # strict boolean — never the raw value
     };
 
     Cpanel::JSON::DumpFile( $known_containers_file, $containers_hr ) or die "Cannot open known containers file";
@@ -1179,16 +1186,16 @@ sub upgrade_containers_for_a_user {
 }
 
 sub register_container {
-    my ( $container_name, $isupgrade, $image ) = @_;
+    my ( $container_name, $isupgrade, $image, $webapp ) = @_;
 
     if ( $> == 0 ) {
         local $@;
-        eval { register_container_as_root( $container_name, "root", $isupgrade, $image ); };
+        eval { register_container_as_root( $container_name, "root", $isupgrade, $image, $webapp ); };
 
         die "Unable to register “$container_name”: $@\n" if $@;
     }
     else {
-        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REGISTER', $container_name, $isupgrade, $image );
+        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REGISTER', $container_name, $isupgrade, $image, $webapp ? 1 : 0 );
     }
 }
 
