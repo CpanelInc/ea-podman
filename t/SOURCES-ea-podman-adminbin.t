@@ -38,9 +38,9 @@ $| = 1;
 
 describe "ea-podman-adminbin" => sub {
     describe "_actions" => sub {
-        it "should LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS" => sub {
+        it "should LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS MINT_API_TOKEN REVOKE_API_TOKEN EXEC_IN_CONTAINER" => sub {
             my @ret = bin::admin::Cpanel::ea_podman::_actions();
-            is_deeply \@ret, [qw(LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS)];
+            is_deeply \@ret, [qw(LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS MINT_API_TOKEN REVOKE_API_TOKEN EXEC_IN_CONTAINER)];
         };
     };
 

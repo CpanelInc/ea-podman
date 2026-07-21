@@ -183,16 +183,29 @@ cptest1:165537:65536
 
             local $ea_podman::subids::dir_run = $conf{mock_rundir};
 
+            # Stub the privileged `loginctl enable-linger` call: simulate it
+            # creating the user’s runtime dir (getpwnam mock returns uid 11002)
+            # without invoking the real loginctl during the test.
+            no warnings qw/once/;
+            local $ea_podman::subids::linger_enabler = sub {
+                my $d = "$ea_podman::subids::dir_run/11002";
+                mkdir $d, 0700;
+                Path::Tiny::path("$d/bus")->touch;    # simulate the user-manager dbus socket
+                return 1;
+            };
+
             yield;
         };
 
-        it "should not call getpwnam when user exists in subids" => sub {
+        it "should still ensure the session (look up the uid) even when the user already exists in subids" => sub {
             my $user_name = "cptest1";
             local $getpwnam_called = 0;
 
             eval { ea_podman::subids::ensure_user_root( $user_name, 65537 ); };
 
-            is( $getpwnam_called, 0 );
+            # ensure_user_session() always runs now (CPANEL-54037), so the uid
+            # is looked up even when the subids are already present.
+            ok( $getpwnam_called >= 1 );
         };
 
         it "should call getpwnam when user does not exist in subids" => sub {
@@ -201,10 +214,10 @@ cptest1:165537:65536
 
             eval { ea_podman::subids::ensure_user_root( $user_name, 65537 ); };
 
-            is( $getpwnam_called, 1 );
+            ok( $getpwnam_called >= 1 );
         };
 
-        it "should create subdir in /run/user" => sub {
+        it "should create subdir in /run/user via the linger bootstrap" => sub {
             my $user_name = "cptest9";
 
             eval { ea_podman::subids::ensure_user_root( $user_name, 65537 ); };

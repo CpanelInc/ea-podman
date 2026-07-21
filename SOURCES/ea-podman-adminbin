@@ -30,7 +30,7 @@ if ($@) {                                                     # … if its not 
 __PACKAGE__->run( 'alarm' => 120 ) unless caller;
 
 sub _actions {
-    return qw(LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS);
+    return qw(LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS MINT_API_TOKEN REVOKE_API_TOKEN EXEC_IN_CONTAINER);
 }
 
 sub LIST {
@@ -91,12 +91,12 @@ sub ENSURE_USER {
 }
 
 sub REGISTER {
-    my ( $self, $container_name, $isupgrade, $image ) = @_;
+    my ( $self, $container_name, $isupgrade, $image, $webapp ) = @_;
     my $cpuser = $self->_debug_and_user(0);
 
     _die_with_message("Must provide a container name") if !defined $container_name;
 
-    eval { ea_podman::util::register_container_as_root( $container_name, $cpuser, $isupgrade, $image ); };
+    eval { ea_podman::util::register_container_as_root( $container_name, $cpuser, $isupgrade, $image, $webapp ); };
 
     _die_with_message("Unable to add to known_containers: $@") if ($@);
 
@@ -129,6 +129,78 @@ sub REGISTERED_CONTAINERS {
     }
 
     return $usr_containers;
+}
+
+sub MINT_API_TOKEN {
+    my ($self) = @_;
+    my $cpuser = $self->_debug_and_user();
+
+    # Mint a short-lived cPanel API token for THIS caller (peer-cred trusted,
+    # never an arbitrary user) so the restricted-shell / caged ea-podman CLI can
+    # call the EAPodman UAPI over localhost HTTPS with the documented
+    # `Authorization: cpanel user:token` header — one request, no browser login
+    # flow. cpsrvd runs that request as the cpuser OUTSIDE the cage. The CLI
+    # revokes the token right after the call (REVOKE_API_TOKEN). `uapi --user`
+    # is root-only; this adminbin runs as root via cpwrapd. See CPANEL-54037.
+    my $name = "ea_podman_cli_${$}_" . time;
+
+    require Cpanel::SafeRun::Object;
+    my $run = Cpanel::SafeRun::Object->new(
+        program => '/usr/local/cpanel/bin/uapi',
+        args    => [ "--user=$cpuser", '--output=json', 'Tokens', 'create_full_access', "name=$name" ],
+    );
+    _die_with_message("Could not create an API token") if $run->CHILD_ERROR;
+
+    my $resp = eval { Cpanel::JSON::Load( $run->stdout ) };
+    _die_with_message("Could not parse the API-token response") if !$resp;
+
+    my $r = $resp->{result} || {};
+    if ( !$r->{status} ) {
+        _die_with_message( "API token creation failed: " . join( "; ", @{ $r->{errors} || ['unknown error'] } ) );
+    }
+
+    return { name => $name, token => $r->{data}{token} };
+}
+
+sub REVOKE_API_TOKEN {
+    my ( $self, $name ) = @_;
+    my $cpuser = $self->_debug_and_user();
+
+    # Best-effort cleanup of the one-shot token; only ever our own.
+    return 0 if !defined $name || $name !~ /^ea_podman_cli_/;
+
+    require Cpanel::SafeRun::Object;
+    Cpanel::SafeRun::Object->new(
+        program => '/usr/local/cpanel/bin/uapi',
+        args    => [ "--user=$cpuser", '--output=json', 'Tokens', 'revoke', "name=$name" ],
+    );
+    return 1;
+}
+
+sub EXEC_IN_CONTAINER {
+    my ( $self, $container_name, $cd, @cmd_argv ) = @_;
+    my $cpuser = $self->_debug_and_user();
+
+    # Run one non-interactive command inside the caller's container as root
+    # (root can enter the subuid-owned, hidepid-hidden container that the cpuser
+    # cannot; the command itself is re-mapped to the container's own root = the
+    # cpuser, so it gains no host privilege). See ea_podman::util::exec_in_container.
+    _die_with_message("Must provide a container name") if !defined $container_name || $container_name eq '';
+    _die_with_message("Must provide a command to run")  if !@cmd_argv;
+
+    eval { ea_podman::util::validate_user_container_name($container_name); };
+    _die_with_message("Invalid container name") if $@;
+
+    # Ownership: only ever the caller's own registered container.
+    my $all = ea_podman::util::load_known_containers_as_root();
+    my $ent = $all->{$container_name};
+    _die_with_message("No such container for this account") if !$ent || ( $ent->{user} // '' ) ne $cpuser;
+
+    $cd = undef if defined $cd && $cd eq '';
+    my $result = eval { ea_podman::util::exec_in_container_as_root( $container_name, $cpuser, \@cmd_argv, $cd ); };
+    _die_with_message("Could not run the command in the container: $@") if $@;
+
+    return $result;
 }
 
 ###############
@@ -210,6 +282,12 @@ This function adds the given container to ea-podman’s known containers list.
 
 Second argument is a boolean indicating if it is updating a registry (as opposed to creating a new one).
 
+Fourth argument is a boolean indicating the container belongs to the webapp
+plugin (i.e. the install carried a C<--webapp-dir> flag). It is stored on the
+entry as a strict JSON boolean C<webapp> attribute — truthiness only, never
+the raw value — and it is ignored on an update, where the value already
+recorded in the root-owned registry is preserved.
+
 =head2 DEREGISTER
 
 This function removes the given container from ea-podman’s known containers list.
@@ -217,3 +295,18 @@ This function removes the given container from ea-podman’s known containers li
 =head2 REGISTERED_CONTAINERS
 
 This function returns a hashref of the user’s containers.
+
+=head2 MINT_API_TOKEN
+
+Mints a short-lived, full-access cPanel API token for the calling user (only
+ever the peer-cred-trusted caller, never an arbitrary user) via
+C<uapi --user=... Tokens create_full_access>. Returns a hashref with C<name>
+and C<token>. The ea-podman CLI uses this so a restricted-shell / caged account
+can reach the C<EAPodman> UAPI over localhost HTTPS with an
+C<Authorization: cpanel user:token> header (cpsrvd runs that request as the
+cpuser outside the cage), then revokes it. See CPANEL-54037.
+
+=head2 REVOKE_API_TOKEN
+
+Revokes a token previously minted by L</MINT_API_TOKEN> for the calling user.
+Only revokes tokens whose name carries the C<ea_podman_cli_> prefix.

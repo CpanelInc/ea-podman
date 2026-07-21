@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 19
+%define release_prefix 22
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -31,6 +31,23 @@ Source8:       PodmanHooks.pm
 Source9:       pkg.preinst
 Source10:      _update-public-hub-to-internal-hub
 Source11:      EAPodman.pm
+Source12:      Cpanel-API-EAPodman.pm
+
+# OpenAPI documents for the EAPodman UAPI verbs; shipped next to the module in
+# /usr/local/cpanel/Cpanel/API/ as <Module>-<method>.openapi.yaml (CPANEL-54143).
+Source13:      EAPodman-list.openapi.yaml
+Source14:      EAPodman-install.openapi.yaml
+Source15:      EAPodman-upgrade.openapi.yaml
+Source16:      EAPodman-uninstall.openapi.yaml
+Source17:      EAPodman-start.openapi.yaml
+Source18:      EAPodman-stop.openapi.yaml
+Source19:      EAPodman-restart.openapi.yaml
+Source20:      EAPodman-status.openapi.yaml
+Source21:      EAPodman-cmd.openapi.yaml
+
+# Install-time hook for the cpanel-webapp-plugin: moves a staged web
+# application into its new container's directory (--webapp-dir, CPANEL-54441).
+Source22:      webapp-dir-setup
 %if 0%{?rhel} == 8
 Requires:       gcc-toolset-11
 %endif
@@ -65,6 +82,20 @@ ln -s /opt/cpanel/ea-podman/bin/ea-podman %{buildroot}/usr/local/cpanel/scripts/
 mkdir -p %{buildroot}/usr/local/cpanel/install
 install %{SOURCE11} %{buildroot}/usr/local/cpanel/install/EAPodman.pm
 
+mkdir -p %{buildroot}/usr/local/cpanel/Cpanel/API
+install %{SOURCE12} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman.pm
+
+# OpenAPI documents for the EAPodman UAPI verbs, shipped alongside the module.
+install -p -m 0644 %{SOURCE13} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman-list.openapi.yaml
+install -p -m 0644 %{SOURCE14} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman-install.openapi.yaml
+install -p -m 0644 %{SOURCE15} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman-upgrade.openapi.yaml
+install -p -m 0644 %{SOURCE16} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman-uninstall.openapi.yaml
+install -p -m 0644 %{SOURCE17} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman-start.openapi.yaml
+install -p -m 0644 %{SOURCE18} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman-stop.openapi.yaml
+install -p -m 0644 %{SOURCE19} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman-restart.openapi.yaml
+install -p -m 0644 %{SOURCE20} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman-status.openapi.yaml
+install -p -m 0644 %{SOURCE21} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman-cmd.openapi.yaml
+
 mkdir -p %{buildroot}/opt/cpanel/ea-podman/bin
 install %{SOURCE0} %{buildroot}/opt/cpanel/ea-podman/bin/ea-podman.pl
 install %{SOURCE10} %{buildroot}/opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub
@@ -82,6 +113,8 @@ install -p %{SOURCE3} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman
 install -p %{SOURCE4} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
 
 install %{SOURCE7} %{buildroot}/opt/cpanel/ea-podman/bin
+
+install %{SOURCE22} %{buildroot}/opt/cpanel/ea-podman/webapp-dir-setup
 
 mkdir -p %{buildroot}/var/cpanel/perl5/lib
 install -p %{SOURCE8} %{buildroot}/var/cpanel/perl5/lib/PodmanHooks.pm
@@ -103,10 +136,33 @@ rm -rf %{buildroot}
 %attr(0600,root,root) /opt/cpanel/ea-podman/registered-containers.json
 %attr(0700,root,root) /opt/cpanel/ea-podman/bin/compile.sh
 %attr(0700,root,root) /opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub
+%attr(0755,root,root) /opt/cpanel/ea-podman/webapp-dir-setup
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
 %attr(0644, root, root) /usr/local/cpanel/install/EAPodman.pm
+%attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman.pm
+%attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-list.openapi.yaml
+%attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-install.openapi.yaml
+%attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-upgrade.openapi.yaml
+%attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-uninstall.openapi.yaml
+%attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-start.openapi.yaml
+%attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-stop.openapi.yaml
+%attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-restart.openapi.yaml
+%attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-status.openapi.yaml
+%attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-cmd.openapi.yaml
 
 %changelog
+* Mon Jul 20 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-22
+- CPANEL-54441: move staged dir to container dir && add webapp to podman registry
+
+* Tue Jul 14 2026 Julian Brown <julian.brown@webpros.com> - 1.0-21
+- CPANEL-54672: Fall back to the EAPodman UAPI bridge when a direct CLI call
+  can't see its own rootless runtime directory (CageFS + unrestricted shell)
+
+* Mon Jul 13 2026 Julian Brown <julian.brown@webpros.com> - 1.0-20
+- CPANEL-54037: Support jailshell and CageFS accounts through an EAPodman UAPI extension
+- CPANEL-54143: Ship EAPodman UAPI OpenAPI documents
+- CPANEL-54360: Add the EAPodman `cmd` verb — run a one-shot command in a container
+
 * Fri Sep 19 2025 Dan Muey <daniel.muey@webpros.com> - 1.0-19
 - EA4-125: Add `testbin` subcommand and add re-compile check to UPCP install module
 

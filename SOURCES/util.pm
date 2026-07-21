@@ -16,8 +16,14 @@ package ea_podman::util;
 #    is called prior to calling other functions (there are some exceptions in POD)
 sub init_user {
     check_proc();
-    ensure_su_login();
+
+    # Order matters (CPANEL-54037): ensure_user() bootstraps the rootless
+    # session *as root* (subuid/subgid + `loginctl enable-linger`, which
+    # creates /run/user/<uid> and starts the user systemd manager). It must
+    # run before ensure_su_login(), which points this (already unprivileged)
+    # process’s XDG_RUNTIME_DIR/DBUS at that now-existing runtime dir.
     ensure_user();
+    ensure_su_login();
 }
 
 sub check_proc {
@@ -50,40 +56,48 @@ use Path::Tiny 'path';
 
 my $container_name_suffix_regexp      = qr/\.[^.]+\.[0-9][0-9]$/;
 my $container_name_sans_suffix_regexp = qr/^[a-z][a-z0-9-]+[a-z0-9]/;
-my $known_containers_file             = '/opt/cpanel/ea-podman/registered-containers.json';
+
+# Package variable so tests can point it at a scratch file.
+our $known_containers_file = '/opt/cpanel/ea-podman/registered-containers.json';
 
 # See
 #     1. https://docs.docker.com/engine/reference/commandline/tag/#extended-description
 #     2. https://regex101.com/r/hP8bK1/1
 my $image_name_regexp = qr'^(?:(?=[^:\/]{4,253})(?!-)[a-zA-Z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-zA-Z0-9-]{1,63}(?<!-))*(?::[0-9]{1,5})?/)?((?![._-])(?:[a-z0-9._-]*)(?<![._-])(?:/(?![._-])[a-z0-9._-]*(?<![._-]))*)(?::(?![.-])[a-zA-Z0-9_.-]{1,128})?$';
 
-sub ensure_su_login {    # needed when $user is from root `su - $user` and not SSH
+sub ensure_su_login {    # needed when $user is from root `su - $user` / AccessIds (cpsrvd, hooks) and not SSH
     $ENV{DBUS_SESSION_BUS_ADDRESS} ||= "unix:path=/run/user/$>/bus";    # root can need this
 
     return if $> == 0;
 
     delete $ENV{XDG_RUNTIME_DIR} if $ENV{XDG_RUNTIME_DIR} && $ENV{XDG_RUNTIME_DIR} ne "/run/user/$>";
+    $ENV{XDG_RUNTIME_DIR} ||= "/run/user/$>";
 
-    if ( !$ENV{XDG_RUNTIME_DIR} ) {
+    # The runtime dir + user systemd manager are bootstrapped *as root* in
+    # ea_podman::subids::ensure_user_session() (`loginctl enable-linger`),
+    # reached via ensure_user()/the ENSURE_USER adminbin, which init_user()
+    # runs before us. We cannot create it here — privileges were already
+    # dropped, which is exactly why the previous unprivileged
+    # `loginctl enable-linger` attempt could never work. If it is still
+    # missing, the privileged bootstrap did not run (or linger was torn down):
+    # fail with a clear, actionable error rather than letting podman emit a
+    # cryptic “Failed to connect to user scope bus” downstream.
+    if ( !-d $ENV{XDG_RUNTIME_DIR} ) {
         my $user = getpwuid($>);
-
-        # I wish there was a better way …
-        if ( -f "/etc/os-release" ) {
-            my $os = `source /etc/os-release; echo -n \$ID\$VERSION_ID`;
-
-            if ( $os eq "centos7" ) {
-                my $logged_in_user = `logname`;
-                chomp($logged_in_user);
-                if ( $logged_in_user ne $user ) {
-                    die "On CentOS 7 you can only use podman when $user is connected directly via SSH (i.e. `su - $user` is not sufficient)\n";
-                }
-            }
-        }
-
-        # Error messages from loginctl are almost always benign, suppress them
-        system("loginctl enable-linger $user 2> /dev/null");
-        $ENV{XDG_RUNTIME_DIR} = "/run/user/$>";
+        die "ea-podman: the rootless runtime directory “$ENV{XDG_RUNTIME_DIR}” for “$user” does not exist.\n" . "The privileged setup must run first so `loginctl enable-linger $user` can create it (run `ea-podman subids --ensure` as root, or invoke via the ENSURE_USER adminbin / the cpsrvd path).\n";
     }
+
+    # Run from a working directory the cpuser can actually stat. cpsrvd, the
+    # `uapi --user=` CLI, and root `su`/AccessIds callers can leave us with a
+    # cwd inherited from root (e.g. /root, mode 0700) that the cpuser cannot
+    # enter — which breaks rootless podman and makes File::Path::Tiny::rm()
+    # die while restoring cwd during cleanup. (CPANEL-54037: this — not the
+    # cage — is what blocked cagefs users; the cpsrvd UAPI context runs
+    # OUTSIDE the cage, so no special cage handling is needed.)
+    my $home = ( getpwuid($>) )[7];
+    chdir($home) if $home && -d $home;
+
+    return;
 }
 
 sub podman {
@@ -92,7 +106,251 @@ sub podman {
     return $rv;
 }
 
+# Cap on captured stdout/stderr from exec_in_container(), so a chatty or
+# runaway command in the container can't blow up the UAPI JSON response.
+my $EXEC_OUTPUT_CAP = 262_144;    # 256 KiB
+
+# Run a one-shot, non-interactive command inside a container and capture its
+# stdout/stderr/exit code — the `ea-podman cmd` / EAPodman `cmd` UAPI verb.
+#
+# We enter the running container's namespaces with `nsenter`, NOT `podman exec`.
+# On a host that mounts /proc with hidepid=2 (a hardening ea-podman itself
+# recommends, see check_proc()), a container's init process is owned by one of
+# the user's *subuids*, so the cpuser cannot see /proc/<pid> and `podman exec`
+# fails with "cannot exec in a stopped container" even though the container is
+# running fine. Entering the namespaces as root sidesteps hidepid; `-U -S 0
+# -G 0` re-maps the command to the container's own root (which is the cpuser on
+# the host), so it runs with exactly the privileges `podman exec` would give it
+# and no host privilege leaks in. Because only root can reach a subuid-owned,
+# hidepid-hidden process, a non-root caller (the cpsrvd UAPI path, or an
+# unrestricted-shell CLI user) delegates to the root ea-podman adminbin
+# (EXEC_IN_CONTAINER), which validates ownership and calls
+# exec_in_container_as_root(). See docs/container-shell-access.md.
+sub exec_in_container {
+    my ( $container_name, $cmd_argv, %opts ) = @_;
+    validate_user_container_name($container_name);
+    die "No command given\n" if !$cmd_argv || !@{$cmd_argv};
+
+    if ( $> == 0 ) {
+        return exec_in_container_as_root( $container_name, scalar getpwuid($>), $cmd_argv, $opts{cd} );
+    }
+
+    require Cpanel::AdminBin::Call;
+    return Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'EXEC_IN_CONTAINER', $container_name, ( $opts{cd} // '' ), @{$cmd_argv} );
+}
+
+# Root-side worker for exec_in_container(). MUST run as root. Two cases:
+#
+#   * $owner is root's OWN container (root CLI path): root is not subject to
+#     hidepid and root's containers are not subuid-remapped, so plain
+#     `podman exec` works and is the simplest, correct mechanism.
+#
+#   * $owner is a DIFFERENT (cpuser) container — reached only from the ea-podman
+#     adminbin: root cannot drive the cpuser's rootless podman, and hidepid hides
+#     the container's init from the cpuser, so we resolve the init pid in the
+#     owner's own context, verify it really is the owner's, and enter the
+#     namespaces with nsenter (mapped to the container's own root = the cpuser).
+sub exec_in_container_as_root {
+    my ( $container_name, $owner, $cmd_argv, $cd ) = @_;
+    die "exec_in_container_as_root must run as root\n" if $> != 0;
+    validate_user_container_name($container_name);
+    die "No command given\n" if !$cmd_argv || !@{$cmd_argv};
+
+    if ( $owner eq scalar getpwuid($>) ) {
+        my @podman_args = ('exec');
+        push @podman_args, '--workdir',     $cd if length( $cd // '' );
+        push @podman_args, $container_name, @{$cmd_argv};
+        return _run_capture( 'podman', \@podman_args );
+    }
+
+    my $pid = resolve_container_init_pid( $container_name, $owner );
+    _assert_pid_belongs_to_user( $pid, $owner );
+    return _run_capture( 'nsenter', _nsenter_args( $pid, $cmd_argv, $cd ) );
+}
+
+# Run $program with @$args, capturing stdout/stderr (size-capped) and the real
+# exit code. A non-zero exit code is returned as data, not an exception.
+sub _run_capture {
+    my ( $program, $args ) = @_;
+
+    require Cpanel::SafeRun::Object;
+    local $ENV{PATH} = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+    my $run = Cpanel::SafeRun::Object->new( program => $program, args => $args );
+
+    my ( $stdout, $stdout_truncated ) = _cap_output( $run->stdout );
+    my ( $stderr, $stderr_truncated ) = _cap_output( $run->stderr );
+
+    return {
+        stdout           => $stdout,
+        stderr           => $stderr,
+        exit_code        => ( $run->CHILD_ERROR() // 0 ) >> 8,
+        stdout_truncated => $stdout_truncated,
+        stderr_truncated => $stderr_truncated,
+    };
+}
+
+# Build the nsenter argv: enter the container's mount/uts/ipc/net/pid + user
+# namespaces (-U) and become the container's own uid/gid 0 (-S 0 -G 0), which
+# maps to the cpuser on the host. With an optional working directory we wrap in
+# the container's /bin/sh (`cd DIR && exec …` — exactly the form CPANEL-54360
+# calls for), since nsenter's own --wd is unreliable across the mount-ns switch.
+# Without --cd the argv is exec'd directly, so NO shell is required (honoring
+# "containers may not have bash"). The command is always passed as a list.
+sub _nsenter_args {
+    my ( $pid, $cmd_argv, $cd ) = @_;
+
+    my @inside =
+      length( $cd // '' )
+      ? ( '/bin/sh', '-c', 'cd "$1" || exit 127; shift; exec "$@"', 'ea-podman-cmd', $cd, @{$cmd_argv} )
+      : @{$cmd_argv};
+
+    return [ '-t', $pid, '-U', '-m', '-u', '-i', '-n', '-p', '-S', '0', '-G', '0', '--', @inside ];
+}
+
+# Resolve the container's init process id by asking podman in $owner's OWN
+# rootless context. podman reads its own db (not /proc), so hidepid does not
+# block it, and podman only ever reports $owner's own containers. When $owner is
+# not the current user we fork and drop privileges first, so the pid we act on
+# is always derived from $owner's real view — never trusted from a caller.
+sub resolve_container_init_pid {
+    my ( $container_name, $owner ) = @_;
+
+    my $reader = sub {
+        local $ENV{XDG_RUNTIME_DIR} = "/run/user/$>";
+        my $home = ( getpwuid($>) )[7];
+        chdir($home) if $home && -d $home;
+        require Cpanel::SafeRun::Object;
+        my $r = Cpanel::SafeRun::Object->new(
+            program => 'podman',
+            args    => [ 'inspect', '--format', '{{.State.Pid}}', $container_name ],
+        );
+        my $out = $r->stdout // '';
+        $out =~ s/\s+//g;
+        return $out;
+    };
+
+    my $pid;
+    if ( $owner eq scalar getpwuid($>) ) {
+        $pid = $reader->();
+    }
+    else {
+        pipe( my $rd, my $wr ) or die "Could not create a pipe: $!\n";
+        my $kid = fork();
+        die "Could not fork: $!\n" if !defined $kid;
+        if ( $kid == 0 ) {
+            close $rd;
+            require Cpanel::AccessIds;
+            eval {
+                Cpanel::AccessIds::do_as_user_with_exception( $owner, sub { print {$wr} $reader->(); } );
+            };
+            close $wr;
+            require POSIX;
+            POSIX::_exit(0);
+        }
+        close $wr;
+        local $/;
+        $pid = <$rd> // '';
+        close $rd;
+        waitpid( $kid, 0 );
+        $pid =~ s/\s+//g;
+    }
+
+    die "Could not determine a running process for “$container_name”.\n" if $pid !~ /^[1-9][0-9]*$/;
+    return $pid;
+}
+
+# Refuse to nsenter into a pid that is not actually $owner's container process.
+# Root bypasses hidepid so we CAN stat it; require its real uid to be $owner's
+# own uid (container ran as root → maps to the cpuser) or one of $owner's
+# subuids (container dropped privileges). Closes a pid-reuse / wrong-target hole.
+sub _assert_pid_belongs_to_user {
+    my ( $pid, $owner ) = @_;
+
+    my $puid = ( stat("/proc/$pid") )[4];
+    die "The container process ($pid) is gone.\n" if !defined $puid;
+
+    my $ouid = ( getpwnam($owner) )[2];
+    die "Unknown user “$owner”.\n" if !defined $ouid;
+    return 1                       if $puid == $ouid;
+
+    if ( open my $fh, '<', '/etc/subuid' ) {
+        while ( my $line = <$fh> ) {
+            chomp $line;
+            my ( $who, $start, $count ) = split /:/, $line;
+            next if !defined $count;
+            next if $who ne $owner && $who ne $ouid;
+            if ( $puid >= $start && $puid < $start + $count ) {
+                close $fh;
+                return 1;
+            }
+        }
+        close $fh;
+    }
+
+    die "The process $pid is not owned by “$owner”; refusing to enter it.\n";
+}
+
+sub _cap_output {
+    my ($text) = @_;
+    $text = '' if !defined $text;
+    return ( $text, 0 ) if length($text) <= $EXEC_OUTPUT_CAP;
+    return ( substr( $text, 0, $EXEC_OUTPUT_CAP ), 1 );
+}
+
+# ea-podman manages containers through each user's systemd manager, and either
+# cgroup hierarchy works for bring-up and serving — the shipped units are plain
+# Type=forking (`podman generate systemd --name`, never `--new`/`--sdnotify`),
+# so they reach "active" and the container runs on cgroup v1 or v2. We therefore
+# never *block* on the cgroup version. The one genuinely problematic combination
+# is **CloudLinux + cgroup v2**: the LVE kernel relocates every non-root user's
+# processes into its own cgroup (`/lvub/lve<uid>`), and under cgroup v2's single
+# unified hierarchy a process can live in only one node, so LVE's placement and
+# systemd's per-user `user.slice` are mutually exclusive — `systemd --user` dies
+# and the restricted/CageFS path that depends on it fails. On CloudLinux the
+# supported configuration is cgroup v1; we advise (warn only, never die) when we
+# detect CloudLinux running on v2.
+sub _is_cgroup_v2 { return -e '/sys/fs/cgroup/cgroup.controllers' ? 1 : 0; }
+
+# True only on CloudLinux, whose LVE kernel is the source of the v2 conflict.
+sub _is_cloudlinux {
+    return 1 if -e '/etc/cloudlinux-release';
+    for my $f ( '/etc/redhat-release', '/etc/os-release' ) {
+        next if !-r $f;
+        open my $fh, '<', $f or next;
+        local $/;
+        my $c = <$fh> // '';
+        close $fh;
+        return 1 if $c =~ /cloudlinux/i;
+    }
+    return 0;
+}
+
+# Direct CLI (root / unrestricted-shell) sets this to 0 in ea-podman.pl::run()
+# to stay silent. The UAPI/restricted path loads this module directly and leaves
+# it at 1, so it keeps the advisory (non-fatal).
+our $EMIT_CGROUP_ADVISORY = 1;
+
+# Returns true when the host's cgroup configuration is fine for ea-podman (or
+# the advisory is suppressed). Returns false after a non-fatal warning on the
+# one problematic combination — CloudLinux + cgroup v2 — which breaks the
+# per-user systemd manager under LVE.
+sub warn_if_problematic_cgroup {
+    return 1 unless _is_cloudlinux() && _is_cgroup_v2();
+    return 1 unless $EMIT_CGROUP_ADVISORY;                 # direct CLI path: stay silent
+    warn "ea-podman: this CloudLinux host is using cgroup v2.\n"
+      . "CloudLinux's LVE kernel and cgroup v2 are mutually exclusive with the per-user systemd manager ea-podman relies on, so the user session can fail to start and containers may not come up.\n"
+      . "Switch back to cgroup v1 and reboot:  tuned-adm profile cloudlinux-default-cgv1 && reboot\n"
+      . "(verify afterward: `stat -fc %T /sys/fs/cgroup` reports tmpfs, not cgroup2fs).\n";
+    return 0;
+}
+
 sub sysctl {
+
+    # Advise about a problematic cgroup config only for bring-up actions;
+    # stop/disable/etc. never warn so an existing container can be torn down
+    # quietly on a CloudLinux + cgroup v2 host.
+    warn_if_problematic_cgroup() if grep { $_ eq 'start' || $_ eq 'restart' || $_ eq 'enable' } @_;
+
     system( systemctl => "--user", @_ );    # ¿ if $> == 0 do --root => "~/.config/systemd/user" instead of `--user` ?
     my $rv = $? == 0 ? 1 : 0;
     return $rv;
@@ -140,7 +398,34 @@ sub create_user_container {
     # start args should already have been validated and ports added
     # So we do not want this here: validate_start_args( \@start_args );
 
-    return podman( 'create', "--hostname" => $container_name, "--name" => $container_name, @start_args );
+    # Pin the container's nproc ulimit to what the user's systemd manager allows.
+    # podman bakes the *creating* process's RLIMIT_NPROC into the container, and
+    # when we are invoked through the EAPodman UAPI the creator is cpsrvd, which
+    # runs with nproc=unlimited. The container is later started by the user's
+    # (lingering) systemd --user manager, whose RLIMIT_NPROC is finite, so crun's
+    # setrlimit(RLIMIT_NPROC, unlimited) fails with EPERM and the container never
+    # starts. Pinning to the manager's own limit makes the bake always
+    # applicable. (Placed before @start_args so an arbitrary-image caller can
+    # still override it.) See CPANEL-54037.
+    my @ulimit;
+    if ( my $cap = _user_manager_nproc_cap() ) {
+        @ulimit = ( "--ulimit" => "nproc=$cap:$cap" );
+    }
+
+    return podman( 'create', "--hostname" => $container_name, "--name" => $container_name, @ulimit, @start_args );
+}
+
+# The RLIMIT_NPROC hard cap of the calling user's systemd --user manager (which
+# is what actually starts the container). Read from the system manager so it
+# works without the user bus. Returns undef when the limit is unlimited/unknown
+# (nothing to pin — an unlimited manager applies an unlimited bake just fine).
+sub _user_manager_nproc_cap {
+    my $uid = $>;
+
+    chomp( my $cap = `systemctl show user\@$uid.service -p LimitNPROC --value 2>/dev/null` );
+    chomp( $cap = `systemctl show -p DefaultLimitNPROC --value 2>/dev/null` ) if $cap !~ /^[0-9]+$/;
+
+    return $cap =~ /^[0-9]+$/ ? $cap : undef;
 }
 
 sub get_container_service_name {
@@ -216,8 +501,14 @@ sub generate_container_service {
     return 1;
 }
 
+# Install-time hook for the cpanel-webapp-plugin (--webapp-dir). Package
+# variable so tests can point it at the repo copy.
+our $webapp_dir_setup_script = "/opt/cpanel/ea-podman/webapp-dir-setup";
+
 sub _ensure_latest_container {
     my ( $container_name, @start_args ) = @_;
+
+    warn_if_problematic_cgroup();    # advise (non-fatal) on CloudLinux + cgroup v2
 
     validate_user_container_name($container_name);
 
@@ -249,10 +540,13 @@ sub _ensure_latest_container {
         die "“$container_dir” does not exist\n" if !-d $container_dir;
     }
 
+    my ( $webapp_source_dir, $no_start );
+
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
         my $pkg_dir = "/opt/cpanel/$pkg";
         if ( -f "$pkg_dir/ea-podman.json" ) {
             die "Upgrade takes no start args\n" if $isupgrade && @start_args;
+            die "--webapp-dir and --no-start are only supported when installing an arbitrary image\n" if grep { m/^--(?:webapp-dir|no-start)/ } @start_args;
             my @given_start_args = @start_args;
 
             # do needful based on /opt/cpanel/$pkg
@@ -394,12 +688,25 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
                     }
                     push @cpuser_ports, $val;
                 }
+                elsif ( $item =~ m/^--webapp-dir(?:=(.*))?$/ ) {
+                    die "--webapp-dir may only be given once\n" if defined $webapp_source_dir;
+                    $webapp_source_dir = _validate_webapp_dir( $1, $container_root );
+                }
+                elsif ( $item eq "--no-start" ) {
+                    $no_start = 1;
+                }
                 else {
                     push @real_start_args, $item;
                 }
             }
 
             push @real_start_args, $docker_name;
+
+            # The staged directory becomes $container_dir/webapp (see the
+            # webapp-dir-setup call below), so any mount that points at or
+            # into it must follow the move — both for the podman create below
+            # and for the persisted start_args that upgrades replay.
+            _rewrite_webapp_mounts( \@real_start_args, $webapp_source_dir, "$container_dir/webapp" ) if defined $webapp_source_dir;
         }
 
         # ensure the user isn’t specifying something they shouldn’t
@@ -428,12 +735,41 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     my ($image_name) = $image_arg =~ m|([^/]+)$|;
 
     uninstall_container($container_name) if $isupgrade || $isrestore;                # avoid spurious warnings on install
-    register_container( $container_name, $isupgrade || $isrestore, $image_name );    # register before create just in case
+    register_container( $container_name, $isupgrade || $isrestore, $image_name, defined $webapp_source_dir ? 1 : 0 );    # register before create just in case
+
+    # Move the staged web application into the container dir (as webapp/).
+    # Unlike a package's local-dir-setup hook this one is load-bearing — the
+    # container's mounts point at the moved location — so a failure aborts the
+    # install instead of warning. The script moves nothing unless it succeeds
+    # entirely, so cleanup here never has to restore the staged directory.
+    if ( defined $webapp_source_dir ) {
+        system( $webapp_dir_setup_script, $webapp_source_dir, $container_dir );
+        if ( $? != 0 ) {
+            deregister_container($container_name);
+            chdir("/");
+            eval { File::Path::Tiny::rm($container_dir) };
+            die "$webapp_dir_setup_script did not exit cleanly; “$webapp_source_dir” was not moved\n";
+        }
+    }
 
     if ( !create_user_container( $container_name, @start_args ) ) {
         if ( !$isupgrade ) {
             deregister_container($container_name);
-            File::Path::Tiny::rm($container_dir);
+
+            # The moved web application is the user's only copy of their
+            # source — put it back where it came from before the container
+            # dir is removed.
+            if ( defined $webapp_source_dir && -d "$container_dir/webapp" && !-e $webapp_source_dir ) {
+                local $@;
+                eval { path("$container_dir/webapp")->move($webapp_source_dir) };
+                warn "Could not restore “$container_dir/webapp” to “$webapp_source_dir”: $@" if $@;
+            }
+
+            # File::Path::Tiny::rm() chdir()s internally and dies if it cannot
+            # restore the original cwd (e.g. an inaccessible /root). Move to a
+            # safe cwd and don't let cleanup mask the real create failure.
+            chdir("/");
+            eval { File::Path::Tiny::rm($container_dir) };
         }
 
         die "Failed to create container\n";
@@ -442,7 +778,54 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     generate_container_service($container_name);
 
     my $service_name = get_container_service_name($container_name);
-    sysctl( start => $service_name );
+    sysctl( start => $service_name ) if !$no_start;
+}
+
+# Validate a --webapp-dir value: the absolute path of the staged directory
+# webapp-dir-setup will move into the container dir. Returns the normalized
+# path. Kept argument-pure (value + container root in, path or die out) so it
+# is unit-testable.
+sub _validate_webapp_dir {
+    my ( $val, $container_root ) = @_;
+
+    die "--webapp-dir requires the absolute path of the staged directory to move into the container directory. e.g. --webapp-dir=/home/user/.cpanel/webapp-staging/my-app\n" if !length( $val // '' );
+
+    $val =~ s{/+$}{};
+    die "--webapp-dir must be an absolute path\n"                    if $val !~ m{^/};
+    die "--webapp-dir “$val” is not a directory\n"                   if !-d $val;
+    die "--webapp-dir cannot be inside “$container_root”\n"          if "$val/" =~ m{^\Q$container_root\E/};
+
+    return $val;
+}
+
+# Rewrite -v/--volume host paths that live under $from so the mounts follow
+# webapp-dir-setup's move of $from to $to. Only exact path-boundary prefix
+# matches are rewritten (/x/app matches /x/app and /x/app/sub, never
+# /x/app-other). --mount specs are not handled. Pure args-in/args-out so it is
+# unit-testable.
+sub _rewrite_webapp_mounts {
+    my ( $args, $from, $to ) = @_;
+
+    my $rewrite = sub {
+        my ($spec) = @_;
+        my ( $host, $rest ) = split( m/:/, $spec, 2 );
+        return $spec if !defined $rest;                                # no host part (anonymous volume)
+        return $spec if $host ne $from && $host !~ m{^\Q$from\E/};
+        substr( $host, 0, length($from) ) = $to;
+        return "$host:$rest";
+    };
+
+    for my $idx ( 0 .. $#{$args} ) {
+        my $item = $args->[$idx];
+        if ( $item eq "-v" || $item eq "--volume" ) {
+            $args->[ $idx + 1 ] = $rewrite->( $args->[ $idx + 1 ] ) if $idx < $#{$args};
+        }
+        elsif ( $item =~ m/^(-v=|--volume=)(.*)$/ ) {
+            $args->[$idx] = $1 . $rewrite->($2);
+        }
+    }
+
+    return;
 }
 
 sub _file_write_chmod {
@@ -670,7 +1053,7 @@ sub load_known_containers_as_root {
 }
 
 sub register_container_as_root {
-    my ( $container_name, $user, $isupgrade, $image ) = @_;
+    my ( $container_name, $user, $isupgrade, $image, $webapp ) = @_;
 
     my $containers_hr = load_known_containers_as_root();
 
@@ -688,12 +1071,17 @@ sub register_container_as_root {
         warn "$container_name is not registered, registering now …\n";
     }
 
+    # `webapp` is established at install time only (--webapp-dir given); an
+    # upgrade/restore keeps the value already recorded in this root-owned file.
+    $webapp = $containers_hr->{$container_name}{webapp} if $isupgrade && exists $containers_hr->{$container_name};
+
     $containers_hr->{$container_name} = {
         container_name => $container_name,
         user           => $user,
         pkg            => $pkg,
         pkg_version    => $pkg_ver,
         image          => $image,
+        webapp         => $webapp ? Cpanel::JSON::true() : Cpanel::JSON::false(),    # strict boolean — never the raw value
     };
 
     Cpanel::JSON::DumpFile( $known_containers_file, $containers_hr ) or die "Cannot open known containers file";
@@ -798,16 +1186,16 @@ sub upgrade_containers_for_a_user {
 }
 
 sub register_container {
-    my ( $container_name, $isupgrade, $image ) = @_;
+    my ( $container_name, $isupgrade, $image, $webapp ) = @_;
 
     if ( $> == 0 ) {
         local $@;
-        eval { register_container_as_root( $container_name, "root", $isupgrade, $image ); };
+        eval { register_container_as_root( $container_name, "root", $isupgrade, $image, $webapp ); };
 
         die "Unable to register “$container_name”: $@\n" if $@;
     }
     else {
-        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REGISTER', $container_name, $isupgrade, $image );
+        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REGISTER', $container_name, $isupgrade, $image, $webapp ? 1 : 0 );
     }
 }
 
