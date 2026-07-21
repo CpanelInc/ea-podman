@@ -129,6 +129,26 @@ sub wait_for {
     return $predicate->();
 }
 
+# Restart the lingering user manager, tolerating a systemd-249 race where the
+# immediate restart of user@<uid>.service fails with status=219/CGROUP: the old
+# user-<uid>.slice cgroup is not fully torn down when the new instance tries to
+# create its own, and left alone the manager only recovers minutes later. Clear
+# the failed state and retry until it is active. A real reboot starts from a
+# clean cgroup tree and never hits this, so this only keeps the restart-based
+# "reboot" proxy reliable (Ubuntu 22.04 / systemd 249 races; 255 does not).
+sub restart_user_manager {
+    my ($uid)  = @_;
+    my $unit   = "user\@$uid.service";
+    my $active = sub { ( run_cmd( 'systemctl', 'is-active', '--quiet', $unit ) )[0] == 0 };
+    for my $try ( 1 .. 6 ) {
+        run_cmd( 'systemctl', ( $try == 1 ? 'restart' : 'start' ), $unit );
+        return 1 if wait_for( $active, 8 );
+        run_cmd( 'systemctl', 'reset-failed', $unit );    # drop the 219/CGROUP failure
+        sleep 2;                                          # let the old cgroup drain
+    }
+    return 0;
+}
+
 #---------------------------------------------------------------------
 # preconditions
 #---------------------------------------------------------------------
@@ -331,7 +351,7 @@ SKIP: {
 
 #--- persistence proxy: restart the user manager (simulates reboot) --
 {
-    run_cmd( 'systemctl', 'restart', "user\@$uid.service" );
+    ok( restart_user_manager($uid), "user manager restarts cleanly (works around the systemd-249 cgroup race)" );
     ok( wait_for( sub { -S "/run/user/$uid/bus" }, 15 ), "user manager came back after restart (linger)" );
 
     SKIP: {
