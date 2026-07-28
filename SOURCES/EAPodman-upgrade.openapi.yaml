@@ -26,7 +26,7 @@ paths:
     get:
       description: Pull the latest image for the named container and recreate it. Synchronous, so it can
         take a while like install.
-      operationId: upgrade
+      operationId: EAPodman-upgrade
       parameters:
       - description: The generated name of the container to act on.
         in: query
