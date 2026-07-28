@@ -25,7 +25,7 @@ paths:
   /EAPodman/restart:
     get:
       description: Restart the named container's systemd user service.
-      operationId: restart
+      operationId: EAPodman-restart
       parameters:
       - description: The generated name of the container to act on.
         in: query

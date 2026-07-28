@@ -25,7 +25,7 @@ paths:
   /EAPodman/uninstall:
     get:
       description: Stop, remove, and deregister the named container, and free its published ports.
-      operationId: uninstall
+      operationId: EAPodman-uninstall
       parameters:
       - description: The generated name of the container to act on.
         in: query

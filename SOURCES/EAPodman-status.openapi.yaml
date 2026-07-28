@@ -25,7 +25,7 @@ paths:
   /EAPodman/status:
     get:
       description: Report the named container's systemd user-service state (running/enabled). Read-only.
-      operationId: status
+      operationId: EAPodman-status
       parameters:
       - description: The generated name of the container to act on.
         in: query

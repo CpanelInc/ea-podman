@@ -26,7 +26,7 @@ paths:
     get:
       description: Install and start a rootless container for the caller. Synchronous, so installing an
         image that must be pulled can take a while.
-      operationId: install
+      operationId: EAPodman-install
       parameters:
       - description: An EA4 container-based package name, or an arbitrary container name.
         in: query
