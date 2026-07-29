@@ -25,7 +25,7 @@ paths:
   /EAPodman/list:
     get:
       description: Return the caller's registered ea-podman containers, keyed by container name. Read-only.
-      operationId: list
+      operationId: EAPodman-list
       parameters: []
       responses:
         '200':

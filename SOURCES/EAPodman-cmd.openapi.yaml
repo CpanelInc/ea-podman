@@ -27,7 +27,7 @@ paths:
       description: Run a non-interactive command inside the named container (no TTY, no shell assumed)
         and return its captured stdout, stderr, and exit code. An optional `cd` sets the working directory.
         Works on hardened (hidepid=2) hosts and for jailshell / CageFS accounts.
-      operationId: cmd
+      operationId: EAPodman-cmd
       parameters:
       - description: The generated name of the container to act on.
         in: query

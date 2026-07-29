@@ -25,7 +25,7 @@ paths:
   /EAPodman/stop:
     get:
       description: Stop the named container's systemd user service.
-      operationId: stop
+      operationId: EAPodman-stop
       parameters:
       - description: The generated name of the container to act on.
         in: query
