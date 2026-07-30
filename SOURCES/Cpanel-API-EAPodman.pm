@@ -100,6 +100,15 @@ sub _run_in_user_session ($code) {
     return wantarray ? @rv : $rv[0];
 }
 
+# Ownership: act only on a container that is registered to the caller. Mirrors
+# the EXEC_IN_CONTAINER adminbin's check so a well-formed but foreign (or
+# entirely made up) name cannot reach the destructive helpers (CPANEL-55336).
+sub _verify_own_container ($container_name) {
+    my $entry = ea_podman::util::load_known_containers()->{$container_name};
+    die "No such container for this account.\n" if !$entry || ( $entry->{user} // '' ) ne scalar getpwuid($>);
+    return 1;
+}
+
 # NOTE (gating): UAPI requires an authenticated cpsrvd session (or API token)
 # for the calling cPanel user, and every operation acts only on that user's
 # own containers — the same trust level as the existing ea-podman adminbin. A
@@ -243,6 +252,7 @@ sub uninstall ( $args, $result ) {
     _run_in_user_session(
         sub {
             ea_podman::util::validate_user_container_name($container_name);
+            _verify_own_container($container_name);
             ea_podman::util::remove_container_by_name($container_name);
             return 1;
         }

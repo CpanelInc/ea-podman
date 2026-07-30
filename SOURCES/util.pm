@@ -54,7 +54,11 @@ use Cwd                    ();
 
 use Path::Tiny 'path';
 
-my $container_name_suffix_regexp      = qr/\.[^.]+\.[0-9][0-9]$/;
+# The middle segment is the owning user’s name. It used to be `[^.]+`, which
+# accepted every shell metacharacter but a dot, so a hand-crafted name could
+# reach a shell sink and run as the user outside its cage (CPANEL-55336). User
+# names are alphanumeric, so allow only that — no metacharacters in any segment.
+my $container_name_suffix_regexp      = qr/\.[a-z0-9]+\.[0-9][0-9]$/;
 my $container_name_sans_suffix_regexp = qr/^[a-z][a-z0-9-]+[a-z0-9]/;
 
 # Package variable so tests can point it at a scratch file.
@@ -385,8 +389,10 @@ sub stop_user_container {
 
     # It is impossible to suppress the error messages emanating from this call
     # via system, however backticks suppresses them
+    # Since this is a shell string, the name must be escaped (CPANEL-55336).
 
-    `podman stop --ignore --time 30 $container_name 2> /dev/null > /dev/null`;
+    my $container_name_qx = quotemeta($container_name);
+    `podman stop --ignore --time 30 $container_name_qx 2> /dev/null > /dev/null`;
 
     return;
 }

@@ -154,6 +154,7 @@ rm -rf %{buildroot}
 * Thu Jul 30 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-24
 - CPANEL-55143: Misc improvements for wider usage and future plans
 - CPANEL-55350: Run tar via list-form system() and validate the restore tarball path
+- CPANEL-55336: Add additional container name sanity checks
 
 * Tue Jul 28 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-23
 - EA4-295: Make operationId on EA4Podman API more MCP friendly
