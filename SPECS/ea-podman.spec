@@ -155,6 +155,7 @@ rm -rf %{buildroot}
 - CPANEL-55143: Misc improvements for wider usage and future plans
 - CPANEL-55350: Run tar via list-form system() and validate the restore tarball path
 - CPANEL-55336: Add additional container name sanity checks
+- CPANEL-55342: Serialize container registry writes under one exclusive lock
 
 * Tue Jul 28 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-23
 - EA4-295: Make operationId on EA4Podman API more MCP friendly

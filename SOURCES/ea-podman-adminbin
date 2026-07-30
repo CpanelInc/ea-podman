@@ -288,9 +288,15 @@ entry as a strict JSON boolean C<webapp> attribute — truthiness only, never
 the raw value — and it is ignored on an update, where the value already
 recorded in the root-owned registry is preserved.
 
+The list is shared by every account, so the read-modify-write is done under an
+exclusive lock and saved atomically (CPANEL-55342).
+
 =head2 DEREGISTER
 
 This function removes the given container from ea-podman’s known containers list.
+
+As with L</REGISTER>, the read-modify-write is serialized against every other
+mutation of the shared list.
 
 =head2 REGISTERED_CONTAINERS
 

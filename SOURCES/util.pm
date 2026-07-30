@@ -1052,64 +1052,137 @@ sub load_known_containers {
 }
 
 sub load_known_containers_as_root {
-    my $containers_hr = {};
-    $containers_hr = Cpanel::JSON::LoadFile($known_containers_file) if ( -e $known_containers_file );
 
-    return $containers_hr;
+    # No lock is needed to read: every mutation goes through
+    # _mutate_known_containers_as_root(), which replaces the file atomically,
+    # so a reader either sees the whole previous registry or the whole new one.
+    #
+    # A missing file means nothing is registered yet. A zero-length one means a
+    # pre-CPANEL-55342 unlocked write truncated the file and then died — there
+    # is nothing left to lose, so treat it the same as missing (this also
+    # matches how the transaction object reads an empty file) rather than
+    # dying on “malformed JSON” forever after.
+    return {} if !-s $known_containers_file;
+
+    return Cpanel::JSON::LoadFile($known_containers_file);
+}
+
+# Take one exclusive lock spanning read → modify → write of the shared,
+# root-owned registry (CPANEL-55342).
+#
+# Every account’s installs and uninstalls mutate this one file as root (the
+# REGISTER/DEREGISTER adminbin actions), so the previous plain
+# LoadFile → modify → DumpFile let two accounts acting at the same time
+# interleave: the second writer dumped a hash built from a stale read, silently
+# dropping the first writer’s entry — an unregistered container is skipped by
+# the removal hooks and leaks its ports and container — and a dump that died
+# part way through left the file torn for everyone.
+#
+# Cpanel::Transaction::File::JSON takes the lock in its constructor, hands back
+# the data read under that lock, and replaces the file atomically on save, so
+# each mutation is all-or-nothing and serialized against every other mutation.
+#
+# $mutate_cr gets the registry hashref to modify in place; it returns true to
+# save the result and false to release the lock leaving the file untouched.
+sub _mutate_known_containers_as_root {
+    my ($mutate_cr) = @_;
+
+    die "The known containers registry can only be modified as root\n" if $> != 0;
+
+    require Cpanel::Transaction::File::JSON;
+
+    # 0600: the registry lists every account’s containers, so only root reads
+    # it (unprivileged callers get their own entries via the
+    # REGISTERED_CONTAINERS adminbin). Enforce that mode rather than preserving
+    # whatever the file happens to have.
+    my $trx = Cpanel::Transaction::File::JSON->new(
+        path        => $known_containers_file,
+        permissions => 0600,
+    );
+
+    # A missing or empty file reads back as a reference to undef; start it off
+    # as an empty registry. Anything else that is not an object is not a
+    # registry we should be silently replacing, so say so instead.
+    my $containers_hr = $trx->get_data();
+    $containers_hr = {} if ref($containers_hr) eq 'SCALAR' && !defined ${$containers_hr};
+
+    if ( ref($containers_hr) ne 'HASH' ) {
+        $trx->close_or_die();
+        die "“$known_containers_file” does not contain a JSON object of containers\n";
+    }
+
+    my $save = eval { $mutate_cr->($containers_hr) };
+    my $err  = $@;
+
+    if ( $err || !$save ) {
+        $trx->close_or_die();    # release the lock without writing
+        die $err if $err;
+        return;
+    }
+
+    $trx->set_data($containers_hr);
+    $trx->save_and_close_or_die();
+
+    return 1;
 }
 
 sub register_container_as_root {
     my ( $container_name, $user, $isupgrade, $image, $webapp ) = @_;
 
-    my $containers_hr = load_known_containers_as_root();
-
     my $pkg = get_pkg_from_container_name($container_name);
 
-    # We want the slurp to error out if a package looking thing is not a container based package
+    # We want the slurp to error out if a package looking thing is not a container based package.
+    # Done before the registry is locked so a failure here cannot hold the lock.
     my $pkg_ver = $pkg ? path("/opt/cpanel/$pkg/pkg-version")->slurp : undef;
     chomp($pkg_ver) if defined $pkg_ver;
 
-    if ( exists $containers_hr->{$container_name} && !$isupgrade ) {
-        warn "$container_name is already registered";
-        return;
-    }
-    elsif ( !exists $containers_hr->{$container_name} && $isupgrade ) {
-        warn "$container_name is not registered, registering now …\n";
-    }
+    return _mutate_known_containers_as_root(
+        sub {
+            my ($containers_hr) = @_;
 
-    # `webapp` is established at install time only (--webapp-dir given); an
-    # upgrade/restore keeps the value already recorded in this root-owned file.
-    $webapp = $containers_hr->{$container_name}{webapp} if $isupgrade && exists $containers_hr->{$container_name};
+            if ( exists $containers_hr->{$container_name} && !$isupgrade ) {
+                warn "$container_name is already registered";
+                return 0;
+            }
+            elsif ( !exists $containers_hr->{$container_name} && $isupgrade ) {
+                warn "$container_name is not registered, registering now …\n";
+            }
 
-    $containers_hr->{$container_name} = {
-        container_name => $container_name,
-        user           => $user,
-        pkg            => $pkg,
-        pkg_version    => $pkg_ver,
-        image          => $image,
-        webapp         => $webapp ? Cpanel::JSON::true() : Cpanel::JSON::false(),    # strict boolean — never the raw value
-    };
+            # `webapp` is established at install time only (--webapp-dir given); an
+            # upgrade/restore keeps the value already recorded in this root-owned file.
+            my $webapp_value = $isupgrade && exists $containers_hr->{$container_name} ? $containers_hr->{$container_name}{webapp} : $webapp;
 
-    Cpanel::JSON::DumpFile( $known_containers_file, $containers_hr ) or die "Cannot open known containers file";
+            $containers_hr->{$container_name} = {
+                container_name => $container_name,
+                user           => $user,
+                pkg            => $pkg,
+                pkg_version    => $pkg_ver,
+                image          => $image,
+                webapp         => $webapp_value ? Cpanel::JSON::true() : Cpanel::JSON::false(),    # strict boolean — never the raw value
+            };
 
-    return;
+            return 1;
+        }
+    );
 }
 
 sub deregister_container_as_root {
     my ($container_name) = @_;
 
-    my $containers_hr = load_known_containers_as_root();
+    return _mutate_known_containers_as_root(
+        sub {
+            my ($containers_hr) = @_;
 
-    if ( !exists $containers_hr->{$container_name} ) {
-        warn "$container_name is not registered";
-        return;
-    }
+            if ( !exists $containers_hr->{$container_name} ) {
+                warn "$container_name is not registered";
+                return 0;
+            }
 
-    delete $containers_hr->{$container_name} if ( exists $containers_hr->{$container_name} );
+            delete $containers_hr->{$container_name};
 
-    Cpanel::JSON::DumpFile( $known_containers_file, $containers_hr ) or die "Cannot open known containers file";
-
-    return;
+            return 1;
+        }
+    );
 }
 
 sub remove_container_by_name {
