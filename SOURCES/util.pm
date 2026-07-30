@@ -1367,7 +1367,8 @@ sub perform_user_backup {
 
         my $tarball_name = _get_tarball_name();
 
-        print `tar czf $tarball_name ea_podman_backup_$user.json ea-podman.d 2> /dev/null` . "\n";
+        system( 'tar', 'czf', $tarball_name, "ea_podman_backup_$user.json", 'ea-podman.d' ) == 0
+          or die "Could not create “$tarball_name”\n";
         unlink($backup_file);
 
         chdir 'ea-podman-backups';
@@ -1390,6 +1391,9 @@ sub perform_user_restore {
     my $homedir = ( getpwuid($>) )[7];
     my $user    = getpwuid($>);
 
+    $backup_tarball = Cwd::abs_path( $backup_tarball // '' ) || die "Please pass in the path to the backup file you want to restore.\n";
+    die "The backup file is not a readable file ($backup_tarball)\n" if !-f $backup_tarball || !-r _;
+
     # Remove any existing containers
 
     print "\nRemoving existing containers first\n\n";
@@ -1410,7 +1414,8 @@ sub perform_user_restore {
         my $pwd = Cwd::getcwd();
         chdir $homedir;
 
-        print `tar xf $backup_tarball 2> /dev/null` . "\n";
+        system( 'tar', 'xf', $backup_tarball ) == 0
+          or die "Could not extract “$backup_tarball”\n";
 
         chdir $pwd;
     }
