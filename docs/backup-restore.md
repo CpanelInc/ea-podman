@@ -10,9 +10,6 @@ deliberately **excludes** from cPanel backups.
 So ea-podman ships its own `backup`/`restore` pair (ZC-9877) and a
 `PkgAcct::Create` hook that runs the backup automatically (ZC-11180).
 
-See `DESIGN.md` for internals, `docs/uapi.md` for the UAPI surface, and
-`VIRTFS-BUSY.md` for the container-storage mount hazard noted below.
-
 ## TL;DR — what you actually have to do
 
 **To be backed up reliably:**
@@ -217,11 +214,3 @@ Two cPanel-side notes:
 * **Teardown doesn’t unmount.** Restore’s `remove_tree({ safe => 0 })` has no
   unmount/retry, so a lingering overlay or bind mount can surface `EBUSY`
   mid-restore. See “Related hardening in ea-podman” in `VIRTFS-BUSY.md`.
-
-## Related
-
-* `DESIGN.md` — container layout, `ea-podman.json`, package hooks, naming.
-* `README.md` — user-facing overview, subuid file-ownership FAQ.
-* `docs/uapi.md` — the `EAPodman` UAPI surface used by restricted accounts.
-* `docs/container-shell-access.md` — why restricted accounts are gated.
-* `VIRTFS-BUSY.md` — container-storage mounts pinned by virtfs jails.
