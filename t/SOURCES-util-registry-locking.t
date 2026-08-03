@@ -132,6 +132,29 @@ subtest 'a no-op or failed mutation still releases the lock' => sub {
     ok( exists ea_podman::util::load_known_containers_as_root()->{"after.bob.01"}, "and the next registration went through" );
 };
 
+# CPANEL-55337: a shared registry entry must only ever be removed by its
+# owner. deregister_container_as_root() takes an optional expected_user so
+# callers scoped to one account (the DEREGISTER adminbin action) can enforce
+# that atomically, under the same lock as the delete.
+subtest 'deregister_container_as_root enforces the optional owner check' => sub {
+    my $tmp = File::Temp->newdir();
+    local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";
+
+    ea_podman::util::register_container_as_root( "mine.alice.01", "alice", 0, "node:22", 0 );
+
+    {
+        my @warnings;
+        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+        ea_podman::util::deregister_container_as_root( "mine.alice.01", "mallory" );
+        is( scalar @warnings, 1, "a mismatched owner warns instead of dying" );
+    }
+
+    ok( exists ea_podman::util::load_known_containers_as_root()->{"mine.alice.01"}, "a mismatched owner leaves the entry in place" );
+
+    ea_podman::util::deregister_container_as_root( "mine.alice.01", "alice" );
+    ok( !exists ea_podman::util::load_known_containers_as_root()->{"mine.alice.01"}, "the real owner can still deregister it" );
+};
+
 subtest 'the registry stays root-only' => sub {
     my $tmp = File::Temp->newdir();
     local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";

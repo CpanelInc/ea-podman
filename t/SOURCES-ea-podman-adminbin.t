@@ -205,6 +205,89 @@ describe "ea-podman-adminbin" => sub {
             ok( $@ =~ m/Invalid container name/ );
         };
     };
+
+    describe "DEREGISTER" => sub {
+        share my %mi;
+        around {
+            %mi = %conf;
+
+            # Cannot use Test::MockModule for this one
+            local *bin::admin::Cpanel::ea_podman::new = sub {
+                my ($class) = @_;
+                return bless {}, $class;
+            };
+
+            local *bin::admin::Cpanel::ea_podman::get_caller_username = sub {
+                return 'cptest1';
+            };
+
+            $mi{mocks}->{object} = bin::admin::Cpanel::ea_podman->new();
+
+            yield;
+        };
+
+        it "should deregister the caller's own container" => sub {
+            no warnings qw(redefine once);
+
+            local *ea_podman::util::load_known_containers_as_root = sub {
+                return { 'container.cptest1.01' => { user => 'cptest1' } };
+            };
+
+            my @deregistered;
+            local *ea_podman::util::deregister_container_as_root = sub {
+                push @deregistered, [@_];
+                return 1;
+            };
+
+            my $ret = $mi{mocks}->{object}->DEREGISTER('container.cptest1.01');
+
+            is( $ret, 1 );
+            is_deeply( \@deregistered, [ [ 'container.cptest1.01', 'cptest1' ] ] );
+        };
+
+        # CPANEL-55337: DEREGISTER resolved the caller but never checked that
+        # the named container actually belonged to them, so any account could
+        # deregister any other account's (guessably-named) container.
+        it "should die on another account's container instead of deregistering it" => sub {
+            no warnings qw(redefine once);
+
+            local *ea_podman::util::load_known_containers_as_root = sub {
+                return { 'container.otheruser.01' => { user => 'otheruser' } };
+            };
+
+            my @deregistered;
+            local *ea_podman::util::deregister_container_as_root = sub {
+                push @deregistered, [@_];
+                return 1;
+            };
+
+            local $@;
+            eval { $mi{mocks}->{object}->DEREGISTER('container.otheruser.01'); };
+
+            ok( $@ =~ m/No such container for this account/ );
+            is_deeply( \@deregistered, [], "the other account's container was never touched" );
+        };
+
+        it "should die on an unregistered container name" => sub {
+            no warnings qw(redefine once);
+
+            local *ea_podman::util::load_known_containers_as_root = sub {
+                return {};
+            };
+
+            local $@;
+            eval { $mi{mocks}->{object}->DEREGISTER('never-registered.cptest1.01'); };
+
+            ok( $@ =~ m/No such container for this account/ );
+        };
+
+        it "should die if no container name is provided" => sub {
+            local $@;
+            eval { $mi{mocks}->{object}->DEREGISTER(); };
+
+            ok( $@ =~ m/Must provide a container name/ );
+        };
+    };
 };
 
 runtests unless caller;

@@ -1167,14 +1167,26 @@ sub register_container_as_root {
 }
 
 sub deregister_container_as_root {
-    my ($container_name) = @_;
+    my ( $container_name, $expected_user ) = @_;
 
     return _mutate_known_containers_as_root(
         sub {
             my ($containers_hr) = @_;
 
-            if ( !exists $containers_hr->{$container_name} ) {
+            my $entry = $containers_hr->{$container_name};
+
+            if ( !$entry ) {
                 warn "$container_name is not registered";
+                return 0;
+            }
+
+            # Multi-tenant guard (CPANEL-55337): callers scoped to one account
+            # (the DEREGISTER adminbin action) pass their own cpuser here, so a
+            # container registered to a different account is left untouched —
+            # same outward result as "not registered", so this can't be used to
+            # probe for other accounts' container names.
+            if ( defined $expected_user && ( $entry->{user} // '' ) ne $expected_user ) {
+                warn "$container_name does not belong to $expected_user";
                 return 0;
             }
 

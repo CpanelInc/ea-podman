@@ -109,7 +109,15 @@ sub DEREGISTER {
 
     _die_with_message("Must provide a container name") if !defined $container_name;
 
-    eval { ea_podman::util::deregister_container_as_root($container_name); };
+    # Ownership: only ever the caller's own registered container — mirror
+    # EXEC_IN_CONTAINER (CPANEL-55337). Without this, any account could
+    # deregister any other account's container by (guessable) name, dropping
+    # it from the removal hooks and leaking its ports and container.
+    my $all = ea_podman::util::load_known_containers_as_root();
+    my $ent = $all->{$container_name};
+    _die_with_message("No such container for this account") if !$ent || ( $ent->{user} // '' ) ne $cpuser;
+
+    eval { ea_podman::util::deregister_container_as_root( $container_name, $cpuser ); };
 
     _die_with_message("Unable to remove from known_containers: $@") if ($@);
 
