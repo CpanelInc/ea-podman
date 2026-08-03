@@ -836,22 +836,45 @@ sub subids {
     my $subuid_lu = ea_podman::subids::get_subuids();
     my $subgid_lu = ea_podman::subids::get_subgids();
 
+    # Having a range and having one nobody else has are different things, and
+    # only the second is isolation. Worked out once for the whole file.
+    my $subuid_problems = ea_podman::subids::get_subuid_problems();
+    my $subgid_problems = ea_podman::subids::get_subgid_problems();
+
     if ( $> == 0 ) {
         for my $user ( "root", Cpanel::Config::Users::getcpusers() ) {
-            _check_output_user( $user, $subuid_lu, $subgid_lu );
+            _check_output_user( $user, $subuid_lu, $subgid_lu, $subuid_problems, $subgid_problems );
         }
     }
     else {
         my $user = getpwuid($>);
-        _check_output_user( $user, $subuid_lu, $subgid_lu );
+        _check_output_user( $user, $subuid_lu, $subgid_lu, $subuid_problems, $subgid_problems );
     }
 }
 
 sub _check_output_user {
-    my ( $user, $subuid_lu, $subgid_lu ) = @_;
+    my ( $user, $subuid_lu, $subgid_lu, $subuid_problems, $subgid_problems ) = @_;
 
-    print( exists $subuid_lu->{$user} ? "$ea_podman::subids::good “$user” has subuids ($subuid_lu->{$user})\n" : "$ea_podman::subids::bad “$user” does not have subuids\n" );
-    print( exists $subgid_lu->{$user} ? "$ea_podman::subids::good “$user” has subgids ($subgid_lu->{$user})\n" : "$ea_podman::subids::bad “$user” does not have subgids\n" );
+    _output_user_range( $user, "subuids", $subuid_lu, $subuid_problems );
+    _output_user_range( $user, "subgids", $subgid_lu, $subgid_problems );
+}
+
+sub _output_user_range {
+    my ( $user, $label, $lu, $problems ) = @_;
+
+    if ( !exists $lu->{$user} ) {
+        print "$ea_podman::subids::bad “$user” does not have $label\n";
+        return;
+    }
+
+    # ea-podman refuses to run this account’s containers while its range is not
+    # exclusively its own, so that does not get a checkmark here either.
+    if ( my $problem = $problems->{$user} ) {
+        print "$ea_podman::subids::bad “$user” has $label ($lu->{$user}) but $problem\n";
+        return;
+    }
+
+    print "$ea_podman::subids::good “$user” has $label ($lu->{$user})\n";
 }
 
 1;

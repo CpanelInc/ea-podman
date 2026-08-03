@@ -11,6 +11,7 @@ package ea_podman::subids;
 
 use Path::Tiny 'path';
 use Cpanel::OS;
+use Fcntl       qw(:flock);
 use Time::HiRes ();
 
 our $good = "✅";
@@ -41,49 +42,77 @@ sub ensure_user_root {
 }
 
 # Allocate /etc/subuid + /etc/subgid ranges for the user, unless they already
-# have both. New ranges start at 190000 (or just past the highest existing
-# allocation, whichever is greater).
+# have both. A new range starts just past the highest existing allocation; on a
+# host with no allocations at all the first one is placed so that it ends just
+# below 190000.
+#
+# Read → compute → append has to happen under one lock, or two accounts
+# bootstrapping at once claim the same range and their containers end up on the
+# same host uids. One exclusive flock on $file_subuid covers both files: every
+# allocation comes through here and always does the two together.
+#
+# It does not serialize against shadow-utils, which allocates from the same
+# space under its own locking; the disjointness checks below cover that.
 sub _ensure_subids {
     my ( $user, $num_uids ) = @_;
 
-    my $subuid = get_subuids();
-    my $subgid = get_subgids();
+    # Opened first so the lock is held across everything below, and so a missing
+    # file exists by the time it is read.
+    open my $subuid_fh, ">>", $file_subuid or die "Could not open “$file_subuid”: $!\n";
+    open my $subgid_fh, ">>", $file_subgid or die "Could not open “$file_subgid”: $!\n";
 
-    return if exists $subuid->{$user} && exists $subgid->{$user};
+    flock( $subuid_fh, LOCK_EX ) or die "Could not lock “$file_subuid”: $!\n";
 
-    # via the mechanics this means the uids/gids start at 190000
+    my $subuid_ranges = _read_ranges($file_subuid);
+    my $subgid_ranges = _read_ranges($file_subgid);
+
+    my $has_subuid = @{ _user_ranges( $subuid_ranges, $user ) } ? 1 : 0;
+    my $has_subgid = @{ _user_ranges( $subgid_ranges, $user ) } ? 1 : 0;
+
+    # Already allocated is not the same as safely allocated: an older unlocked
+    # version or a concurrent `useradd` may have put this range on top of
+    # another account’s. Each half is checked on its own — a shared subuid range
+    # is no better for having the missing subgid range filled in.
+    _assert_range_is_exclusive( $user, $subuid_ranges, $file_subuid ) if $has_subuid;
+    _assert_range_is_exclusive( $user, $subgid_ranges, $file_subgid ) if $has_subgid;
+
+    return if $has_subuid && $has_subgid;
+
+    # via the mechanics this means the uids/gids end just below 190000
     my $getuid_max = 190000 - $num_uids;
     my $getgid_max = 190000 - $num_uids;
 
-    foreach my $u ( keys %{$subuid} ) {
-        my ( $uid, $range ) = split( /:/, $subuid->{$u} );
-        $uid += $range;
+    foreach my $range ( @{$subuid_ranges} ) {
+        my $uid = $range->{start} + $range->{count};
         $getuid_max = $uid if ( $uid > $getuid_max );
     }
 
-    foreach my $u ( keys %{$subgid} ) {
-        my ( $uid, $range ) = split( /:/, $subgid->{$u} );
-        $uid += $range;
-        $getgid_max = $uid if ( $uid > $getgid_max );
+    foreach my $range ( @{$subgid_ranges} ) {
+        my $gid = $range->{start} + $range->{count};
+        $getgid_max = $gid if ( $gid > $getgid_max );
     }
 
     $getuid_max++;
     $getgid_max++;
 
     my $num_uids_minus_one = $num_uids - 1;
-    if ( !exists $subuid->{$user} ) {
-        if ( open my $fh, ">>", $file_subuid ) {
-            print $fh "$user:$getuid_max:$num_uids_minus_one\n";
-            close $fh;
-        }
+
+    # Checked, not assumed: highest-end-plus-one is only free if every line was
+    # accounted for, and unparsable ones were not (see _read_ranges()).
+    if ( !$has_subuid ) {
+        _assert_allocation_is_free( $user, $getuid_max, $num_uids_minus_one, $subuid_ranges, $file_subuid );
+        print {$subuid_fh} "$user:$getuid_max:$num_uids_minus_one\n" or die "Could not write to “$file_subuid”: $!\n";
     }
 
-    if ( !exists $subgid->{$user} ) {
-        if ( open my $fh, ">>", $file_subgid ) {
-            print $fh "$user:$getgid_max:$num_uids_minus_one\n";
-            close $fh;
-        }
+    if ( !$has_subgid ) {
+        _assert_allocation_is_free( $user, $getgid_max, $num_uids_minus_one, $subgid_ranges, $file_subgid );
+        print {$subgid_fh} "$user:$getgid_max:$num_uids_minus_one\n" or die "Could not write to “$file_subgid”: $!\n";
     }
+
+    # A short write only surfaces on flush, and a truncated line here is worth
+    # dying over. $subuid_fh closes last because that drops the lock.
+    close $subgid_fh or die "Could not write to “$file_subgid”: $!\n";
+    close $subuid_fh or die "Could not write to “$file_subuid”: $!\n";
 
     return;
 }
@@ -183,9 +212,171 @@ sub get_subgids {
     return _parse_subid_file($file_subgid);
 }
 
+# Every account in the file whose range is not exclusively its own, as
+# user => why. These are the accounts _ensure_subids() refuses to act for, asked
+# of the whole file at once so a box can be audited up front.
+sub get_subuid_problems {
+    return _find_range_problems($file_subuid);
+}
+
+sub get_subgid_problems {
+    return _find_range_problems($file_subgid);
+}
+
 ###############
 #### helpers ##
 ###############
+
+# Every well-formed allocation in $file, in file order, as
+# { user => …, start => …, count => … }.
+#
+# _parse_subid_file() keeps one entry per account, which is all its callers want
+# to display; allocation needs every line, since a duplicate’s IDs are just as
+# taken as any other’s.
+#
+# Plain open rather than Path::Tiny: its readers take a shared flock, which
+# would block on the exclusive lock _ensure_subids() already holds on this file.
+sub _read_ranges {
+    my ($file) = @_;
+
+    # A file that does not exist has nothing allocated in it. Anything else has
+    # to be fatal: treating an unreadable file as empty would hand out IDs an
+    # account already holds.
+    open my $fh, "<", $file or do {
+        return [] if !-e $file;
+        die "Could not read “$file”: $!\n";
+    };
+
+    my @ranges;
+
+    while ( my $line = readline $fh ) {
+        chomp $line;
+        next if $line !~ m/\S/;
+
+        my ( $user,  $ranges ) = split( ":", $line, 2 );
+        my ( $start, $count )  = _parse_range($ranges);
+
+        # A line this cannot parse is one it cannot reason about. Skipping it
+        # keeps a hand-added comment from taking a working account offline; its
+        # IDs going uncounted is why allocations are overlap-checked.
+        next if !defined $count;
+
+        push @ranges, { user => $user, start => $start, count => $count };
+    }
+
+    return \@ranges;
+}
+
+# The “<start>:<count>” half of a subid line, and only when it is one: a
+# non-numeric, empty or zero-count range cannot take part in an overlap.
+sub _parse_range {
+    my ($ranges) = @_;
+
+    return if !defined $ranges;
+
+    my ( $start, $count ) = split( /:/, $ranges );
+
+    return if !defined $start         || !defined $count;
+    return if $start !~ m/\A[0-9]+\z/ || $count !~ m/\A[0-9]+\z/;
+    return if $count == 0;
+
+    return ( $start, $count );
+}
+
+sub _user_ranges {
+    my ( $ranges_ar, $user ) = @_;
+
+    return [ grep { $_->{user} eq $user } @{$ranges_ar} ];
+}
+
+# The first account holding IDs inside [$start, $start + $count - 1], ignoring
+# $skip_user’s own entries.
+sub _find_overlap {
+    my ( $ranges_ar, $start, $count, $skip_user ) = @_;
+
+    my $end = $start + $count - 1;
+
+    for my $range ( @{$ranges_ar} ) {
+        next if defined $skip_user && $range->{user} eq $skip_user;
+
+        my $other_end = $range->{start} + $range->{count} - 1;
+
+        return $range->{user} if $start <= $other_end && $range->{start} <= $end;
+    }
+
+    return;
+}
+
+# Two accounts sharing host IDs is the breach these ranges exist to prevent, so
+# both of these are hard errors. Reallocating automatically is not an option —
+# the container files on disk are owned by the old range’s IDs — so it takes an
+# administrator, which is what the messages say.
+sub _assert_allocation_is_free {
+    my ( $user, $start, $count, $ranges_ar, $file ) = @_;
+
+    my $overlaps = _find_overlap( $ranges_ar, $start, $count, $user );
+    return if !defined $overlaps;
+
+    my $end = $start + $count - 1;
+    die "Refusing to give “$user” the host IDs $start-$end in “$file”: they overlap the IDs “$overlaps” already holds. An administrator needs to sort out “$file” before “$user” can run containers.\n";
+}
+
+sub _assert_range_is_exclusive {
+    my ( $user, $ranges_ar, $file ) = @_;
+
+    my $mine = _user_ranges( $ranges_ar, $user );
+
+    if ( @{$mine} > 1 ) {
+        die "“$user” has more than one range in “$file”, so which host IDs are theirs is ambiguous. An administrator needs to leave them exactly one.\n";
+    }
+
+    my ( $start, $count ) = ( $mine->[0]{start}, $mine->[0]{count} );
+
+    my $overlaps = _find_overlap( $ranges_ar, $start, $count, $user );
+    return if !defined $overlaps;
+
+    my $end = $start + $count - 1;
+    die "“$user” shares the host IDs $start-$end with “$overlaps” in “$file”, so their containers are not isolated from each other’s. An administrator needs to give one of them a range of its own — `ea-podman subids` lists every account this affects.\n";
+}
+
+sub _find_range_problems {
+    my ($file) = @_;
+
+    my $ranges_ar = _read_ranges($file);
+
+    my %problem;
+
+    # More than one line: which host IDs are actually theirs is ambiguous, so it
+    # needs fixing whether or not the lines overlap anything.
+    my %lines;
+    $lines{ $_->{user} }++ for @{$ranges_ar};
+    $problem{$_} = "is listed with more than one range" for grep { $lines{$_} > 1 } keys %lines;
+
+    # Overlaps, by sweeping in start order and keeping the range that reaches
+    # furthest: anything starting at or before its end overlaps it.
+    my %shared_with;
+    my $furthest;
+    for my $range ( sort { $a->{start} <=> $b->{start} || $a->{user} cmp $b->{user} } @{$ranges_ar} ) {
+        if ( defined $furthest && $range->{start} <= $furthest->{start} + $furthest->{count} - 1 ) {
+            $shared_with{ $range->{user} }{ $furthest->{user} } = 1;
+            $shared_with{ $furthest->{user} }{ $range->{user} } = 1;
+        }
+
+        $furthest = $range if !defined $furthest || $range->{start} + $range->{count} > $furthest->{start} + $furthest->{count};
+    }
+
+    # Sharing IDs with another account is the more urgent of the two, so it is
+    # what gets reported for an account with both problems. Overlapping only
+    # itself means two lines, which the ambiguity message above already covers.
+    for my $user ( keys %shared_with ) {
+        my @others = grep { $_ ne $user } sort keys %{ $shared_with{$user} };
+        next if !@others;
+
+        $problem{$user} = "shares host IDs with " . join( ", ", map { "“$_”" } @others );
+    }
+
+    return \%problem;
+}
 
 sub _parse_subid_file {
     my ($file) = @_;

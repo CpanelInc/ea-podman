@@ -1312,7 +1312,10 @@ sub ensure_user {
         local $@;
         eval { ea_podman::subids::ensure_user_root("root"); };
 
-        die "Unable to ensure the root has subuids and subgids\n" if $@;
+        # Root is already looking at root-side state, so it gets the reason
+        # itself: a subid refusal names the file and the other account, which is
+        # the point of it.
+        die "Unable to ensure the root has subuids and subgids: $@" if $@;
     }
     else {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );

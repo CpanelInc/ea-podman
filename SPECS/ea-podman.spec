@@ -157,6 +157,8 @@ rm -rf %{buildroot}
 - CPANEL-55336: Add additional container name sanity checks
 - CPANEL-55342: Serialize container registry writes under one exclusive lock
 - CPANEL-55337: Verify the target container belongs to the user for deregistration
+- CPANEL-55335: Allocate subuid/subgid ranges under one exclusive lock and
+  refuse to run an account whose range is not exclusively its own
 
 * Tue Jul 28 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-23
 - EA4-295: Make operationId on EA4Podman API more MCP friendly

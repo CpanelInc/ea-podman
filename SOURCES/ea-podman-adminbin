@@ -84,6 +84,11 @@ sub ENSURE_USER {
     eval { ea_podman::subids::ensure_user_root($cpuser); };
 
     if ($@) {
+
+        # The caller only gets the generic message: the real reason is root-side
+        # detail and can name another account. Log it so a refusal leaves an
+        # administrator something to diagnose.
+        Cpanel::Debug::log_warn("Could not ensure subids for “$cpuser”: $@");
         _die_with_message("Unable to ensure the user has subuids and subgids");
     }
 
@@ -283,6 +288,12 @@ This function removes all ports assigned the given container name.
 =head2 ENSURE_USER
 
 This function ensures that the user has subuids and subgids for podman functionality.
+
+The ranges are drawn from a space shared by every account, so allocation happens
+under an exclusive lock. It also fails closed: an account whose range is not
+exclusively its own is refused rather than run with containers that are not
+isolated. The caller gets a generic failure; the reason is logged, and
+C<ea-podman subids> lists every affected account.
 
 =head2 REGISTER
 
