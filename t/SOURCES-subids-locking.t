@@ -144,6 +144,49 @@ subtest 'a shared range is refused even when only one file has it' => sub {
     is_deeply( [ _ranges($subgid) ], [ { user => "bob", start => 230000, count => 65536 } ], "and no subgid range was handed out to paper over it" );
 };
 
+# The overlap test is all that stands between two accounts and a shared set of
+# host uids, so it is checked against every way two ranges can be arranged rather
+# than only the partial overlap the reporter happened to hit. Below, { } is the
+# account bootstrapping and [ ] the account that already holds IDs.
+subtest 'every shape of overlap is caught' => sub {
+    my @shapes = (
+        { name => "{[}] alice starts first and bob runs past her",  alice => "200000:65536",  bob => "230000:65536",  shared => 1 },
+        { name => "{[]} alice's range swallows bob's",              alice => "200000:200000", bob => "250000:65536",  shared => 1 },
+        { name => "[{]} bob starts first and alice runs past him",  alice => "230000:65536",  bob => "200000:65536",  shared => 1 },
+        { name => "[{}] bob's range swallows alice's",              alice => "250000:65536",  bob => "200000:200000", shared => 1 },
+        { name => "{}=[] the two ranges are identical",             alice => "200000:65536",  bob => "200000:65536",  shared => 1 },
+        { name => "the ranges share a single host ID",              alice => "200000:65536",  bob => "265535:65536",  shared => 1 },
+        { name => "the ranges abut without touching",              alice => "200000:65536",  bob => "265536:65536",  shared => 0 },
+        { name => "the ranges are nowhere near each other",        alice => "200000:65536",  bob => "400000:65536",  shared => 0 },
+    );
+
+    for my $shape (@shapes) {
+        _mock_files("alice:$shape->{alice}\nbob:$shape->{bob}\n");
+
+        my $ok  = eval { ea_podman::subids::_ensure_subids( "alice", $NUM_UIDS ); 1 };
+        my $err = $@;
+
+        # The per-account refusal and the whole-file audit have to agree on every
+        # shape, or `ea-podman subids` gives an account a checkmark it is then
+        # refused on (or names a problem nothing acts upon).
+        my $audit = ea_podman::subids::get_subuid_problems();
+
+        if ( $shape->{shared} ) {
+            ok( !$ok, "$shape->{name}: “alice” is refused" );
+            like( $err, qr/shares the host IDs/, "$shape->{name}: and is told she shares them" );
+            is_deeply(
+                $audit,
+                { alice => "shares host IDs with “bob”", bob => "shares host IDs with “alice”" },
+                "$shape->{name}: and the audit names both accounts"
+            );
+        }
+        else {
+            ok( $ok, "$shape->{name}: “alice” is left alone" ) or diag($err);
+            is_deeply( $audit, {}, "$shape->{name}: and the audit is clean" );
+        }
+    }
+};
+
 subtest 'an account with two ranges is refused' => sub {
     my ( $subuid, $subgid ) = _mock_files("alice:200000:65536\nalice:400000:65536\n");
 
@@ -193,8 +236,8 @@ subtest 'unsafe ranges can be audited across the whole file' => sub {
     _mock_files("alice:200000:65536\nbob:265536:65536\n");
     is_deeply( ea_podman::subids::get_subuid_problems(), {}, "ranges that merely abut do not overlap" );
 
-    # A range that swallows several later ones is still caught: the sweep keeps
-    # the range reaching furthest, not just the previous one.
+    # A range that swallows several later ones is still caught: the sweep compares
+    # against every range still open at each start, not just the previous one.
     _mock_files("alice:200000:500000\nbob:250000:65536\ncarol:400000:65536\n");
     is_deeply(
         ea_podman::subids::get_subuid_problems(),
@@ -204,6 +247,26 @@ subtest 'unsafe ranges can be audited across the whole file' => sub {
             carol => "shares host IDs with “alice”",
         },
         "a range spanning several others is reported against all of them"
+    );
+
+    # Every partner, not just the one reaching furthest: bob and carol overlap
+    # each other as well as alice, and an administrator told only about alice
+    # would fix half the problem and think it done.
+    #
+    # “dave” is the control on the other side: he sits inside alice's span but
+    # clear of bob and carol, so naming every partner must not turn into naming
+    # everyone in the pile-up. “erin” starts the ID right after alice's last and
+    # overlaps nobody, so she should not be in the report at all.
+    _mock_files("alice:200000:500000\nbob:250000:65536\ncarol:300000:65536\ndave:600000:65536\nerin:700000:65536\n");
+    is_deeply(
+        ea_podman::subids::get_subuid_problems(),
+        {
+            alice => "shares host IDs with “bob”, “carol”, “dave”",
+            bob   => "shares host IDs with “alice”, “carol”",
+            carol => "shares host IDs with “alice”, “bob”",
+            dave  => "shares host IDs with “alice”",
+        },
+        "an account is named against each of the accounts it actually shares IDs with, and only those"
     );
 
     # Sharing IDs is the more urgent of the two, so it is what gets reported.

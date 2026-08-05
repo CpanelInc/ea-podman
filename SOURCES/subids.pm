@@ -352,17 +352,30 @@ sub _find_range_problems {
     $lines{ $_->{user} }++ for @{$ranges_ar};
     $problem{$_} = "is listed with more than one range" for grep { $lines{$_} > 1 } keys %lines;
 
-    # Overlaps, by sweeping in start order and keeping the range that reaches
-    # furthest: anything starting at or before its end overlaps it.
+    # Overlaps, by sweeping in start order against the ranges still open at each
+    # start. Every partner is named, not just the one reaching furthest: an
+    # administrator handed a partial list has no way to tell it is partial, and
+    # would have to re-audit after each edit to find the next name.
+    #
+    # @open is pruned to the ranges that reach the current start, so on a healthy
+    # file it holds at most the previous range and the sweep stays linear; it
+    # only grows where ranges genuinely pile up, which is the broken case worth
+    # spending the comparisons on.
     my %shared_with;
-    my $furthest;
+    my @open;
     for my $range ( sort { $a->{start} <=> $b->{start} || $a->{user} cmp $b->{user} } @{$ranges_ar} ) {
-        if ( defined $furthest && $range->{start} <= $furthest->{start} + $furthest->{count} - 1 ) {
-            $shared_with{ $range->{user} }{ $furthest->{user} } = 1;
-            $shared_with{ $furthest->{user} }{ $range->{user} } = 1;
+
+        # Ending before this one starts means ending before every later one
+        # starts too, so it is done being compared.
+        @open = grep { $_->{start} + $_->{count} - 1 >= $range->{start} } @open;
+
+        # Everything left starts at or before this range and reaches into it.
+        for my $other (@open) {
+            $shared_with{ $range->{user} }{ $other->{user} } = 1;
+            $shared_with{ $other->{user} }{ $range->{user} } = 1;
         }
 
-        $furthest = $range if !defined $furthest || $range->{start} + $range->{count} > $furthest->{start} + $furthest->{count};
+        push @open, $range;
     }
 
     # Sharing IDs with another account is the more urgent of the two, so it is
