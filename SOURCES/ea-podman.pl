@@ -393,7 +393,10 @@ sub get_dispatch_args {
             help     => "Has two modes:\n\t<PKG> - An EA4 container based package.\n\t\tNeeds no other arguments or setup as that is all provided by the package. It can take some additional start up arguments.\n\t<NON-PKG-NAME> - manage an arbitrary image as if it where an EA4 container based package.\n\t\tSee https://github.com/CpanelInc/ea-podman/blob/master/README.md for details",
             code     => sub {
                 my ( $app, $name, @start_args ) = @_;
-                ea_podman::util::init_user();
+
+                # The one verb that legitimately needs a rootless session for an
+                # account with no containers yet.
+                ea_podman::util::init_user( creating => 1 );
                 my $container_name = ea_podman::util::install_container( $name, @start_args );
                 print "Done, installed: $container_name\n";
             },
@@ -791,6 +794,14 @@ This is intended to make it easier for a user to purge their ea-podman based con
             help     => "internal use only",
             code     => sub {
                 my ( $app, $user ) = @_;
+
+                die "rootbackupofuser can only be run by root\n" if $> != 0;
+
+                # The same guard as the PkgAcct hook that calls us, since this
+                # is a reachable entry point in its own right: do not stand up a
+                # rootless session (subids + linger) for an account that has no
+                # containers to back up. (CPANEL-55309)
+                return 1 if !ea_podman::util::user_has_containers_as_root($user);
 
                 require Cpanel::AccessIds;
 

@@ -22,18 +22,35 @@ our $file_subuid = "/etc/subuid";
 our $file_subgid = "/etc/subgid";
 our $dir_run     = "/run/user";
 
-sub ensure_user_root {
-    my ( $user, $num_uids ) = @_;
+# systemd records a lingering user as an empty marker file in here:
+# `loginctl enable-linger` creates one, `disable-linger` removes it. Reading
+# the marker is cheaper — and far easier to test — than shelling out to
+# `loginctl show-user <user> -p Linger`.
+our $dir_linger = "/var/lib/systemd/linger";
 
-    $num_uids = 65537 if !$num_uids;
+# Same shape, ea-podman’s own bookkeeping: a marker per account meaning “this
+# linger is one we turned on”. $dir_linger says an account lingers, never who
+# asked for it. Root owned, and not packaged so an upgrade leaves it be.
+our $dir_granted_linger = "/opt/cpanel/ea-podman/granted-linger";
+
+sub ensure_user_root {
+    my ( $user, $num_uids, $ensure_session ) = @_;
+
+    $num_uids       = 65537 if !$num_uids;
+    $ensure_session = 1     if !defined $ensure_session;
 
     _ensure_subids( $user, $num_uids );
 
-    # Always (idempotently) ensure the user’s rootless session, not just on
+    # Only an account that has containers — or is about to get its first one —
+    # is given a lingering user session. Lingering every account that merely ran
+    # a command (or got backed up) was CPANEL-55309; the caller that can see the
+    # container registry makes that call, see ea_podman::util::ensure_user().
+    #
+    # When it does apply it is (idempotently) redone every time, not just on
     # first subid setup: linger may have been torn down since (e.g. a stale
     # state or an explicit `loginctl disable-linger`), which would leave a
     # registered user with no runtime dir. (CPANEL-54037)
-    ensure_user_session($user);
+    ensure_user_session($user) if $ensure_session;
 
     # Tell podman to ignore uid/gid issues
     _ensure_storage_conf();
@@ -143,9 +160,27 @@ sub ensure_user_session {
     my ( $uid, $gid ) = ( getpwnam($user) )[ 2, 3 ];
     die "Could not look up the uid/gid for “$user”\n" if !defined $uid;
 
+    # Nothing to do when the account already lingers and its manager is up — and
+    # running enable-linger anyway is not free. systemd re-touches
+    # $dir_linger/<user> every time, and that file’s timestamp is how we tell our
+    # own linger from somebody else’s (see grant_covers_current_linger()). Since
+    # this runs for every ea-podman command an account with containers makes, a
+    # blind re-enable would age our own grant out of covering the linger it
+    # granted, and the release on the last container would never happen.
+    # (CPANEL-55309)
+    return if user_has_linger($user) && -d "$dir_run/$uid" && -e "$dir_run/$uid/bus";
+
     mkdir $dir_run;    # parent /run/user; harmless when it already exists
 
+    # Re-enabling for an account we already hold a grant on moves systemd’s
+    # marker ahead of that grant, so the grant has to move with it or it stops
+    # covering the very linger it is for. Recorded around the enable, not after
+    # the readiness poll below, which can die.
+    my $regrant = user_has_granted_linger($user);
+
     $linger_enabler->($user);
+
+    record_linger_grant($user) if $regrant;
 
     # enable-linger is asynchronous: it returns *before* logind has finished
     # creating /run/user/<uid> AND starting user@<uid>.service. The readiness
@@ -169,6 +204,115 @@ sub ensure_user_session {
     }
 
     return;
+}
+
+# The counterpart to $linger_enabler: `loginctl disable-linger <user>`, run as
+# root, stops the user’s systemd manager and lets logind tear down
+# /run/user/<uid> once the account has no session left. Held in a package
+# variable so tests can stub the privileged call. (CPANEL-55309)
+our $linger_disabler = \&_disable_linger;
+
+sub _disable_linger {
+    my ($user) = @_;
+    system( "loginctl", "disable-linger", $user );
+    return $? == 0;
+}
+
+# The marker paths below interpolate an account name and two are unlink()ed as
+# root. Anything implausible reads as “no such user”, safe everywhere here.
+sub _is_valid_linger_user {
+    my ($user) = @_;
+
+    return 0 if !defined $user;
+    return $user =~ m{\A[a-z0-9][a-z0-9._-]*\z}i ? 1 : 0;
+}
+
+sub user_has_linger {
+    my ($user) = @_;
+
+    return 0 if !_is_valid_linger_user($user);
+    return -e "$dir_linger/$user" ? 1 : 0;
+}
+
+# The grant record (see $dir_granted_linger): idempotent, root only, and “no
+# record” is always the safe answer — without one nothing takes an account’s
+# linger away. See ea_podman::util::_user_session_is_releasable().
+sub user_has_granted_linger {
+    my ($user) = @_;
+
+    return 0 if !_is_valid_linger_user($user);
+    return -e "$dir_granted_linger/$user" ? 1 : 0;
+}
+
+# Always re-touched, never skipped: the mtime has to track the enable-linger
+# this call is recording. See grant_covers_current_linger().
+sub record_linger_grant {
+    my ($user) = @_;
+
+    return 0 if !_is_valid_linger_user($user) || $user eq "root";
+
+    mkdir( $dir_granted_linger, 0700 );    # the parent is packaged; harmless when it already exists
+    chmod( 0700, $dir_granted_linger );
+
+    local $@;
+    eval { path("$dir_granted_linger/$user")->touch; 1 } or do {
+        warn "Could not record the linger grant for “$user”: $@";
+        return 0;
+    };
+
+    return 1;
+}
+
+sub revoke_linger_grant {
+    my ($user) = @_;
+
+    return 1 if !user_has_granted_linger($user);
+    return unlink("$dir_granted_linger/$user") ? 1 : 0;
+}
+
+# A record says we granted *a* linger; this says whether it is the current one.
+# We record just after enable-linger, so ours is never the older of the two — a
+# newer systemd marker means somebody else enabled this linger after ours went
+# away. Unreadable either way ➜ no, same as a missing record. (CPANEL-55309)
+sub grant_covers_current_linger {
+    my ($user) = @_;
+
+    return 0 if !user_has_granted_linger($user) || !user_has_linger($user);
+
+    my $granted_at      = ( stat("$dir_granted_linger/$user") )[9];
+    my $lingering_since = ( stat("$dir_linger/$user") )[9];
+
+    return 0 if !defined $granted_at || !defined $lingering_since;
+
+    return $lingering_since <= $granted_at ? 1 : 0;
+}
+
+# Undo what ensure_user_session() set up. Idempotent: a no-op (and a “success”)
+# when the user is not lingering in the first place. Deciding that a user no
+# longer needs a rootless session is the caller’s job — see
+# ea_podman::util::release_user_session(). (CPANEL-55309)
+sub remove_user_session {
+    my ($user) = @_;
+
+    return 1 if !user_has_linger($user);
+
+    $linger_disabler->($user);
+
+    # `loginctl disable-linger` can exit non-zero for reasons that leave the
+    # linger correctly off (a stopped manager, for instance), so trust the
+    # marker over the exit code.
+    return user_has_linger($user) ? 0 : 1;
+}
+
+# `loginctl disable-linger` has no user to look up once an account has been
+# deleted, but logind’s marker file outlives the account — and would silently
+# linger any future account that reuses the name. Dropping the marker is
+# precisely what disable-linger itself does. (CPANEL-55309)
+sub remove_stale_linger_marker {
+    my ($user) = @_;
+
+    return 1 if !user_has_linger($user);
+    return unlink("$dir_linger/$user") ? 1 : 0;
 }
 
 sub assert_has_user_namespaces {

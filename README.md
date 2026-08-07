@@ -95,6 +95,61 @@ If you are `root` you can additionally:
    * e.g. `podman network create skynet` for a bridged network named `skynet`
 2. pass `--network` to `ea-podman install` of 2 or more images that need it
 
+### Why does an account with containers have systemd lingering enabled?
+
+Rootless containers run under the account’s own `systemd --user` manager. Without
+lingering that manager only exists while the user is logged in, so their
+containers would stop at logout and never come back after a reboot.
+`ea-podman` therefore runs `loginctl enable-linger <user>` (as root) when it sets
+an account up for containers.
+
+An account with no containers is never lingered:
+
+* no `ea-podman` command lingers an account that has no containers. Running
+  `list`, `status`, `containers`, and so on gets the account its subuid/subgid
+  ranges and nothing else. `install` is the exception, since it is about to
+  create the first container.
+* the backup hook runs for *every* account on the server, so it checks the
+  container registry before it does anything at all — an account with nothing
+  to back up is left completely alone
+
+Creating a container always establishes the session, whichever code path gets
+there, so an account never ends up with containers and no manager to keep them
+running.
+
+### Does `ea-podman` ever turn lingering back off?
+
+Only for a linger it turned on itself, and only once that account has no
+containers left at all.
+
+An account can be lingering for all sorts of reasons — an administrator enabled
+it, or some other software did — and the systemd marker in
+`/var/lib/systemd/linger` does not record who asked for it. So whenever
+`ea-podman` is the one that enables lingering, it notes that down for itself, as
+a marker file per account under `/opt/cpanel/ea-podman/granted-linger`. Removing
+the account’s last container (or removing the account) then releases the linger
+and drops the note.
+
+Everything else is left strictly alone:
+
+* an account that was *already* lingering when `ea-podman` arrived keeps its
+  lingering — that linger belongs to whoever enabled it
+* if the account stops lingering and then starts again for some unrelated
+  reason, the new linger is not `ea-podman`'s either. The note records *when*
+  the grant happened, so a later linger is not released on the strength of it
+* an account with containers keeps its lingering, because taking it away would
+  stop them at the next logout or reboot
+* `root` is never released
+* nothing sweeps the server looking for lingering accounts to tidy up
+
+A WebApp deployment gets its lingering from the cPanel WebApp plugin, which
+enables it before `ea-podman` is involved. The plugin writes the same note when it
+is the one that turns lingering on, so removing the WebApp gives that lingering
+back like any other — and a WebApp deployed onto an account that was already
+lingering still leaves that lingering alone. On a host whose plugin predates this,
+the deployment's lingering is nobody's to release: use
+`loginctl disable-linger <user>` if that is not wanted.
+
 ### There are files in my home directory that I don’t own/have access to!!!
 
 This happens when podman creates files in the user namespace (e.g. creating storage) using user’s sub ids.

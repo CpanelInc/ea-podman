@@ -132,9 +132,9 @@ The `backup` command in `SOURCES/ea-podman.pl` → `perform_user_backup()`
 3. Write the manifest to `~/ea_podman_backup_<user>.json`.
 4. `tar czf ~/ea-podman-backups/backup-<YYYYMMDDHHMMSS>.tar.gz` over the manifest
    plus all of `ea-podman.d` (timestamp is UTC), then **unlink the loose JSON** —
-   the manifest only ever persists inside a tarball. The `tar` goes through the
-   shell with stderr discarded and its exit status unchecked, so a failed or
-   partial archive is silent (see Limitations).
+   the manifest only ever persists inside a tarball. The `tar` runs through
+   list-form `system()` — no shell, so nothing in the path is interpreted — and a
+   non-zero exit dies rather than leaving a partial archive behind (CPANEL-55350).
 5. Keep the newest 3 tarballs (`$num_backups_to_retain`); the UTC names sort
    chronologically, so the oldest are the ones dropped.
 
@@ -168,10 +168,16 @@ The `restore` command in `SOURCES/ea-podman.pl` → `perform_user_restore()`
    directory it names, or die. Note the order: this check runs *after* the
    teardown, so a tarball missing either one leaves the account with no
    containers and no `~/ea-podman.d`.
-3. **Re-establish the rootless plumbing** — `init_user()` allocates
-   subuid/subgid if missing and runs `loginctl enable-linger`, creating
+3. **Re-establish the rootless plumbing** — `init_user( creating => 1 )`
+   allocates subuid/subgid if missing and runs `loginctl enable-linger`, creating
    `/run/user/<uid>` and starting the user systemd manager. This is exactly the
-   state a file backup can’t carry, rebuilt from scratch.
+   state a file backup can’t carry, rebuilt from scratch. The `creating => 1`
+   matters: since CPANEL-55309 `init_user()` only lingers an account that has
+   registered containers or says it is about to make its first, and step 1 just
+   deregistered every one of them, so restore has to say so outright. The
+   teardown in step 1 runs with `EA_PODMAN_KEEP_USER_SESSION=1` for the same
+   reason — without it, removing the last container would release the linger
+   that this step immediately turns back on.
 4. **Rebuild each container** — `restore_containers_for_user()` runs the
    install/upgrade code path in `_ensure_latest_container()`, which keys off its
    caller to set `$isrestore`: replay `start_args` from the restored
@@ -266,12 +272,12 @@ Two cPanel-side notes:
   container names still say `bob`, and re-registering them records them as
   `bob2`’s — overwriting `bob`’s own registry entries if that account still has
   them.
-* **A failed backup is silent.** Both `tar` calls run through the shell with
-  stderr sent to `/dev/null` and the exit status ignored, so a truncated or
-  empty archive looks exactly like a successful one; on restore only the
-  manifest/container-directory checks catch a bad unpack. Tarball paths are
-  interpolated into that shell command, so spaces or shell metacharacters in the
-  path break the operation.
+* **`tar`'s own diagnostics reach the caller unfiltered.** Both `tar` calls run
+  through list-form `system()` and die on a non-zero exit (CPANEL-55350), so a
+  truncated archive is no longer mistaken for a good one and paths with spaces or
+  shell metacharacters are safe. What they do not do is inspect the archive: a
+  `tar` that exits 0 having written something unusable is still caught only by the
+  restore's manifest and container-directory checks.
 * **The exclude-file writer mangles a pre-existing exclude file.**
   `_ensure_backup_conf_excludes_files()` reads the file *chomped*
   (`lines({ chomp => 1 })`) and `spew()`s the list back with newlines only on the

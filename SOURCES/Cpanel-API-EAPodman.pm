@@ -63,7 +63,7 @@ sub _require_ea_podman_or_die {
 # interleaved into — and corrupt — the JSON response, so capture it. On
 # failure the captured text is appended to the exception so the real error is
 # debuggable instead of a bare "Failed to create container".
-sub _run_in_user_session ($code) {
+sub _run_in_user_session ( $code, %opts ) {
     _require_ea_podman_or_die();
 
     local $ENV{XDG_RUNTIME_DIR} = "/run/user/$>";
@@ -85,7 +85,7 @@ sub _run_in_user_session ($code) {
         sub {
             local $@;
             eval {
-                ea_podman::util::init_user();
+                ea_podman::util::init_user( creating => $opts{creating} );
                 @rv = $code->();
                 1;
             } or $err = $@ || "ea-podman: unknown error";
@@ -205,10 +205,13 @@ sub install ( $args, $result ) {
     # The image, when given, must be the last start arg.
     push @start_args, $image if length($image);
 
+    # The one verb that needs a rootless session for an account that may not
+    # have a container yet, so it is the one that asks for it. (CPANEL-55309)
     my $container_name = _run_in_user_session(
         sub {
             return ea_podman::util::install_container( $name, @start_args );
-        }
+        },
+        creating => 1,
     );
 
     $result->data( { container_name => $container_name } );
