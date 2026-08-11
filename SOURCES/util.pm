@@ -15,6 +15,8 @@ package ea_podman::util;
 # All consumers of this module must ensure ea_podman::util::init_user()
 #    is called prior to calling other functions (there are some exceptions in POD)
 sub init_user {
+    my (%opts) = @_;    # creating => 1 when about to make a container
+
     check_proc();
 
     # Order matters (CPANEL-54037): ensure_user() bootstraps the rootless
@@ -22,8 +24,20 @@ sub init_user {
     # creates /run/user/<uid> and starts the user systemd manager). It must
     # run before ensure_su_login(), which points this (already unprivileged)
     # process’s XDG_RUNTIME_DIR/DBUS at that now-existing runtime dir.
-    ensure_user();
-    ensure_su_login();
+    #
+    # An account only gets that session if it has containers, or is making its
+    # first one (`creating`). A user systemd manager exists to keep an
+    # account’s containers running; an account without any needs nothing kept
+    # running, and lingering every account that ran any ea-podman command was
+    # CPANEL-55309. ensure_user() returns whether there is a session, so
+    # ensure_su_login() knows whether to insist on the runtime dir.
+    #
+    # Nothing for a caller to pass about the grant: whether this is the call that
+    # turns the linger on is decided root-side, from what is on disk.
+    my $has_session = ensure_user( $opts{creating} );
+    ensure_su_login($has_session);
+
+    return $has_session;
 }
 
 sub check_proc {
@@ -54,7 +68,22 @@ use Cwd                    ();
 
 use Path::Tiny 'path';
 
-my $container_name_suffix_regexp      = qr/\.[^.]+\.[0-9][0-9]$/;
+# We call ea_podman::subids::* and consumers outside this repo require util.pm
+# on its own, so load it here rather than rely on them. Sibling path because
+# lib/ea_podman is not in @INC; guard because re-requiring under a different
+# %INC key would reset subids.pm's package vars.
+if ( !defined &ea_podman::subids::user_has_linger ) {
+    my $subids_pm = __FILE__;
+    $subids_pm =~ s{[^/]+\z}{subids.pm};
+    $subids_pm = "./$subids_pm" if $subids_pm !~ m{\A[/.]};    # else require() searches @INC
+    require $subids_pm;
+}
+
+# The middle segment is the owning user’s name. It used to be `[^.]+`, which
+# accepted every shell metacharacter but a dot, so a hand-crafted name could
+# reach a shell sink and run as the user outside its cage (CPANEL-55336). User
+# names are alphanumeric, so allow only that — no metacharacters in any segment.
+my $container_name_suffix_regexp      = qr/\.[a-z0-9]+\.[0-9][0-9]$/;
 my $container_name_sans_suffix_regexp = qr/^[a-z][a-z0-9-]+[a-z0-9]/;
 
 # Package variable so tests can point it at a scratch file.
@@ -66,26 +95,14 @@ our $known_containers_file = '/opt/cpanel/ea-podman/registered-containers.json';
 my $image_name_regexp = qr'^(?:(?=[^:\/]{4,253})(?!-)[a-zA-Z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-zA-Z0-9-]{1,63}(?<!-))*(?::[0-9]{1,5})?/)?((?![._-])(?:[a-z0-9._-]*)(?<![._-])(?:/(?![._-])[a-z0-9._-]*(?<![._-]))*)(?::(?![.-])[a-zA-Z0-9_.-]{1,128})?$';
 
 sub ensure_su_login {    # needed when $user is from root `su - $user` / AccessIds (cpsrvd, hooks) and not SSH
+    my ($has_session) = @_;
+
     $ENV{DBUS_SESSION_BUS_ADDRESS} ||= "unix:path=/run/user/$>/bus";    # root can need this
 
     return if $> == 0;
 
     delete $ENV{XDG_RUNTIME_DIR} if $ENV{XDG_RUNTIME_DIR} && $ENV{XDG_RUNTIME_DIR} ne "/run/user/$>";
     $ENV{XDG_RUNTIME_DIR} ||= "/run/user/$>";
-
-    # The runtime dir + user systemd manager are bootstrapped *as root* in
-    # ea_podman::subids::ensure_user_session() (`loginctl enable-linger`),
-    # reached via ensure_user()/the ENSURE_USER adminbin, which init_user()
-    # runs before us. We cannot create it here — privileges were already
-    # dropped, which is exactly why the previous unprivileged
-    # `loginctl enable-linger` attempt could never work. If it is still
-    # missing, the privileged bootstrap did not run (or linger was torn down):
-    # fail with a clear, actionable error rather than letting podman emit a
-    # cryptic “Failed to connect to user scope bus” downstream.
-    if ( !-d $ENV{XDG_RUNTIME_DIR} ) {
-        my $user = getpwuid($>);
-        die "ea-podman: the rootless runtime directory “$ENV{XDG_RUNTIME_DIR}” for “$user” does not exist.\n" . "The privileged setup must run first so `loginctl enable-linger $user` can create it (run `ea-podman subids --ensure` as root, or invoke via the ENSURE_USER adminbin / the cpsrvd path).\n";
-    }
 
     # Run from a working directory the cpuser can actually stat. cpsrvd, the
     # `uapi --user=` CLI, and root `su`/AccessIds callers can leave us with a
@@ -97,7 +114,33 @@ sub ensure_su_login {    # needed when $user is from root `su - $user` / AccessI
     my $home = ( getpwuid($>) )[7];
     chdir($home) if $home && -d $home;
 
-    return;
+    return if -d $ENV{XDG_RUNTIME_DIR};
+
+    # No runtime dir. If this account was never given a session — it has no
+    # containers and is not making one — that is expected, not an error: there
+    # is nothing for a user systemd manager to keep alive (CPANEL-55309). Leave
+    # the environment clean rather than pointing podman and systemctl at a
+    # directory that does not exist; whatever we were asked to do either works
+    # from the registry alone or has no container to act on, and will say so in
+    # its own terms. An account that is simply logged in still has a runtime
+    # dir, so this only concerns the no-session, no-login case.
+    if ( !$has_session ) {
+        delete $ENV{XDG_RUNTIME_DIR};
+        delete $ENV{DBUS_SESSION_BUS_ADDRESS};
+        return;
+    }
+
+    # The runtime dir + user systemd manager are bootstrapped *as root* in
+    # ea_podman::subids::ensure_user_session() (`loginctl enable-linger`),
+    # reached via ensure_user()/the ENSURE_USER adminbin, which init_user()
+    # runs before us. We cannot create it here — privileges were already
+    # dropped, which is exactly why the previous unprivileged
+    # `loginctl enable-linger` attempt could never work. If it is still
+    # missing, the privileged bootstrap did not run (or linger was torn down):
+    # fail with a clear, actionable error rather than letting podman emit a
+    # cryptic “Failed to connect to user scope bus” downstream.
+    my $user = getpwuid($>) // $>;
+    die "ea-podman: the rootless runtime directory “$ENV{XDG_RUNTIME_DIR}” for “$user” does not exist.\n" . "The privileged setup must run first so `loginctl enable-linger $user` can create it (run `ea-podman subids --ensure` as root, or invoke via the ENSURE_USER adminbin / the cpsrvd path).\n";
 }
 
 sub podman {
@@ -385,8 +428,10 @@ sub stop_user_container {
 
     # It is impossible to suppress the error messages emanating from this call
     # via system, however backticks suppresses them
+    # Since this is a shell string, the name must be escaped (CPANEL-55336).
 
-    `podman stop --ignore --time 30 $container_name 2> /dev/null > /dev/null`;
+    my $container_name_qx = quotemeta($container_name);
+    `podman stop --ignore --time 30 $container_name_qx 2> /dev/null > /dev/null`;
 
     return;
 }
@@ -436,6 +481,12 @@ sub get_container_service_name {
 
 sub get_containers {
     my %containers;
+
+    # Rootless podman cannot have anything running for this account without a
+    # runtime dir, so there is nothing to ask it about — and asking would only
+    # get a “XDG_RUNTIME_DIR not set”-flavoured complaint. An account with no
+    # containers is no longer given one (CPANEL-55309).
+    return \%containers if $> != 0 && !-d "/run/user/$>";
 
     for my $line (`podman ps --no-trunc --format "{{.Names}} {{.Image}}"`) {
         my ( $name, $image ) = split( " ", $line, 2 );
@@ -506,31 +557,45 @@ sub generate_container_service {
 our $webapp_dir_setup_script = "/opt/cpanel/ea-podman/webapp-dir-setup";
 
 sub _ensure_latest_container {
-    my ( $container_name, @start_args ) = @_;
+    my ( $container_name, $opts, @start_args ) = @_;
+
+    $opts ||= {};
 
     warn_if_problematic_cgroup();    # advise (non-fatal) on CloudLinux + cgroup v2
 
     validate_user_container_name($container_name);
 
+    # Every path that brings a container into existence comes through here
+    # (install, restore, upgrade), so this is where the account is guaranteed
+    # the lingering session its containers need — whichever caller got us here,
+    # in this repo or another, and whether or not it thought to tell
+    # init_user() what it was about to do. (CPANEL-55309)
+    ensure_container_session();
+
     _ensure_backup_conf_excludes_files();
 
-    my $caller_func = ( caller(1) )[3];
-    my $isupgrade   = 0;
-    my $isrestore   = 0;
+    # Which of the three creation paths we are on. The caller says so outright
+    # instead of us inferring it from caller(1): a stack frame is not a contract,
+    # and the inference silently stopped matching as soon as a call site was
+    # wrapped in an eval, which reports “(eval)” rather than the enclosing sub.
+    # (CPANEL-55309)
+    my $op        = $opts->{op} // "";
+    my $isupgrade = 0;
+    my $isrestore = 0;
     my $portsfunc;
-    if ( $caller_func eq "ea_podman::util::install_container" ) {
+    if ( $op eq "install" ) {
         $portsfunc = \&_get_new_ports;
     }
-    elsif ( $caller_func eq "ea_podman::util::upgrade_container" ) {
+    elsif ( $op eq "upgrade" ) {
         $portsfunc = \&_get_current_ports;
         $isupgrade = 1;
     }
-    elsif ( $caller_func eq "ea_podman::util::restore_containers_for_user" ) {
+    elsif ( $op eq "restore" ) {
         $isrestore = 1;
         $portsfunc = \&_get_new_ports;
     }
     else {
-        die "_ensure_latest_container() should only be called by install_container() or upgrade_container() (i.e. not $caller_func())\n";
+        die "_ensure_latest_container() must be told which operation it is performing — install, upgrade, or restore (not “$op”)\n";
     }
 
     my $container_root = _get_container_root();
@@ -734,8 +799,13 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     my $image_arg = $start_args[-1];                # so we can persist image name
     my ($image_name) = $image_arg =~ m|([^/]+)$|;
 
-    uninstall_container($container_name) if $isupgrade || $isrestore;                # avoid spurious warnings on install
-    register_container( $container_name, $isupgrade || $isrestore, $image_name, defined $webapp_source_dir ? 1 : 0 );    # register before create just in case
+    # A restore has no registry entry to carry `webapp` over from the way an
+    # upgrade does (perform_user_restore() deleted them all, and a restore to
+    # another server never had one), so it comes from the backup file instead.
+    my $webapp = defined $webapp_source_dir ? 1 : $isrestore ? ( $opts->{webapp} ? 1 : 0 ) : 0;
+
+    uninstall_container($container_name) if $isupgrade || $isrestore;    # avoid spurious warnings on install
+    register_container( $container_name, $isupgrade || $isrestore, $image_name, $webapp );    # register before create just in case
 
     # Move the staged web application into the container dir (as webapp/).
     # Unlike a package's local-dir-setup hook this one is load-bearing — the
@@ -972,14 +1042,28 @@ sub validate_start_args {
 sub install_container {
     my ( $name, @start_args ) = @_;
     my $container_name = get_next_available_container_name($name);
-    _ensure_latest_container( $container_name, @start_args );
+
+    # The session is granted up front, before there is any container to keep
+    # running, so a failed install has to hand it back or it leaves exactly the
+    # state this case exists to prevent. Guarded as ever: a registry entry or a
+    # container dir still on disk keeps the session. (CPANEL-55309)
+    local $@;
+    eval { _ensure_latest_container( $container_name, { op => "install" }, @start_args ); 1 } or do {
+        my $err = $@ || "unknown error\n";
+
+        local $@;
+        eval { release_user_session(); 1 } or warn "Could not release the rootless session after the failed install: $@";
+
+        die $err;
+    };
+
     return $container_name;
 }
 
 sub upgrade_container {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
-    _ensure_latest_container($container_name);
+    _ensure_latest_container( $container_name, { op => "upgrade" } );
 }
 
 sub restore_containers_for_user {
@@ -991,7 +1075,9 @@ sub restore_containers_for_user {
         print "Restoring $container_name\n";
 
         validate_user_container_name($container_name);
-        _ensure_latest_container($container_name);
+
+        # The backup file is the only surviving record that this was a WebApp.
+        _ensure_latest_container( $container_name, { op => "restore", webapp => $container->{webapp} ? 1 : 0 } );
     }
 }
 
@@ -1046,64 +1132,149 @@ sub load_known_containers {
 }
 
 sub load_known_containers_as_root {
-    my $containers_hr = {};
-    $containers_hr = Cpanel::JSON::LoadFile($known_containers_file) if ( -e $known_containers_file );
 
-    return $containers_hr;
+    # No lock is needed to read: every mutation goes through
+    # _mutate_known_containers_as_root(), which replaces the file atomically,
+    # so a reader either sees the whole previous registry or the whole new one.
+    #
+    # A missing file means nothing is registered yet. A zero-length one means a
+    # pre-CPANEL-55342 unlocked write truncated the file and then died — there
+    # is nothing left to lose, so treat it the same as missing (this also
+    # matches how the transaction object reads an empty file) rather than
+    # dying on “malformed JSON” forever after.
+    return {} if !-s $known_containers_file;
+
+    return Cpanel::JSON::LoadFile($known_containers_file);
+}
+
+# Take one exclusive lock spanning read → modify → write of the shared,
+# root-owned registry (CPANEL-55342).
+#
+# Every account’s installs and uninstalls mutate this one file as root (the
+# REGISTER/DEREGISTER adminbin actions), so the previous plain
+# LoadFile → modify → DumpFile let two accounts acting at the same time
+# interleave: the second writer dumped a hash built from a stale read, silently
+# dropping the first writer’s entry — an unregistered container is skipped by
+# the removal hooks and leaks its ports and container — and a dump that died
+# part way through left the file torn for everyone.
+#
+# Cpanel::Transaction::File::JSON takes the lock in its constructor, hands back
+# the data read under that lock, and replaces the file atomically on save, so
+# each mutation is all-or-nothing and serialized against every other mutation.
+#
+# $mutate_cr gets the registry hashref to modify in place; it returns true to
+# save the result and false to release the lock leaving the file untouched.
+sub _mutate_known_containers_as_root {
+    my ($mutate_cr) = @_;
+
+    die "The known containers registry can only be modified as root\n" if $> != 0;
+
+    require Cpanel::Transaction::File::JSON;
+
+    # 0600: the registry lists every account’s containers, so only root reads
+    # it (unprivileged callers get their own entries via the
+    # REGISTERED_CONTAINERS adminbin). Enforce that mode rather than preserving
+    # whatever the file happens to have.
+    my $trx = Cpanel::Transaction::File::JSON->new(
+        path        => $known_containers_file,
+        permissions => 0600,
+    );
+
+    # A missing or empty file reads back as a reference to undef; start it off
+    # as an empty registry. Anything else that is not an object is not a
+    # registry we should be silently replacing, so say so instead.
+    my $containers_hr = $trx->get_data();
+    $containers_hr = {} if ref($containers_hr) eq 'SCALAR' && !defined ${$containers_hr};
+
+    if ( ref($containers_hr) ne 'HASH' ) {
+        $trx->close_or_die();
+        die "“$known_containers_file” does not contain a JSON object of containers\n";
+    }
+
+    my $save = eval { $mutate_cr->($containers_hr) };
+    my $err  = $@;
+
+    if ( $err || !$save ) {
+        $trx->close_or_die();    # release the lock without writing
+        die $err if $err;
+        return;
+    }
+
+    $trx->set_data($containers_hr);
+    $trx->save_and_close_or_die();
+
+    return 1;
 }
 
 sub register_container_as_root {
     my ( $container_name, $user, $isupgrade, $image, $webapp ) = @_;
 
-    my $containers_hr = load_known_containers_as_root();
-
     my $pkg = get_pkg_from_container_name($container_name);
 
-    # We want the slurp to error out if a package looking thing is not a container based package
+    # We want the slurp to error out if a package looking thing is not a container based package.
+    # Done before the registry is locked so a failure here cannot hold the lock.
     my $pkg_ver = $pkg ? path("/opt/cpanel/$pkg/pkg-version")->slurp : undef;
     chomp($pkg_ver) if defined $pkg_ver;
 
-    if ( exists $containers_hr->{$container_name} && !$isupgrade ) {
-        warn "$container_name is already registered";
-        return;
-    }
-    elsif ( !exists $containers_hr->{$container_name} && $isupgrade ) {
-        warn "$container_name is not registered, registering now …\n";
-    }
+    return _mutate_known_containers_as_root(
+        sub {
+            my ($containers_hr) = @_;
 
-    # `webapp` is established at install time only (--webapp-dir given); an
-    # upgrade/restore keeps the value already recorded in this root-owned file.
-    $webapp = $containers_hr->{$container_name}{webapp} if $isupgrade && exists $containers_hr->{$container_name};
+            if ( exists $containers_hr->{$container_name} && !$isupgrade ) {
+                warn "$container_name is already registered";
+                return 0;
+            }
+            elsif ( !exists $containers_hr->{$container_name} && $isupgrade ) {
+                warn "$container_name is not registered, registering now …\n";
+            }
 
-    $containers_hr->{$container_name} = {
-        container_name => $container_name,
-        user           => $user,
-        pkg            => $pkg,
-        pkg_version    => $pkg_ver,
-        image          => $image,
-        webapp         => $webapp ? Cpanel::JSON::true() : Cpanel::JSON::false(),    # strict boolean — never the raw value
-    };
+            # `webapp` is established at install time only (--webapp-dir given); an
+            # upgrade/restore keeps the value already recorded in this root-owned file.
+            my $webapp_value = $isupgrade && exists $containers_hr->{$container_name} ? $containers_hr->{$container_name}{webapp} : $webapp;
 
-    Cpanel::JSON::DumpFile( $known_containers_file, $containers_hr ) or die "Cannot open known containers file";
+            $containers_hr->{$container_name} = {
+                container_name => $container_name,
+                user           => $user,
+                pkg            => $pkg,
+                pkg_version    => $pkg_ver,
+                image          => $image,
+                webapp         => $webapp_value ? Cpanel::JSON::true() : Cpanel::JSON::false(),    # strict boolean — never the raw value
+            };
 
-    return;
+            return 1;
+        }
+    );
 }
 
 sub deregister_container_as_root {
-    my ($container_name) = @_;
+    my ( $container_name, $expected_user ) = @_;
 
-    my $containers_hr = load_known_containers_as_root();
+    return _mutate_known_containers_as_root(
+        sub {
+            my ($containers_hr) = @_;
 
-    if ( !exists $containers_hr->{$container_name} ) {
-        warn "$container_name is not registered";
-        return;
-    }
+            my $entry = $containers_hr->{$container_name};
 
-    delete $containers_hr->{$container_name} if ( exists $containers_hr->{$container_name} );
+            if ( !$entry ) {
+                warn "$container_name is not registered";
+                return 0;
+            }
 
-    Cpanel::JSON::DumpFile( $known_containers_file, $containers_hr ) or die "Cannot open known containers file";
+            # Multi-tenant guard (CPANEL-55337): callers scoped to one account
+            # (the DEREGISTER adminbin action) pass their own cpuser here, so a
+            # container registered to a different account is left untouched —
+            # same outward result as "not registered", so this can't be used to
+            # probe for other accounts' container names.
+            if ( defined $expected_user && ( $entry->{user} // '' ) ne $expected_user ) {
+                warn "$container_name does not belong to $expected_user";
+                return 0;
+            }
 
-    return;
+            delete $containers_hr->{$container_name};
+
+            return 1;
+        }
+    );
 }
 
 sub remove_container_by_name {
@@ -1115,6 +1286,14 @@ sub remove_container_by_name {
     ea_podman::util::uninstall_container($container_name);
     ea_podman::util::deregister_container($container_name);
     ea_podman::util::move_container_dir($container_name);
+
+    # Hand back a linger we granted for a WebApp once the account’s last
+    # container is gone; a no-op otherwise. Has to come after the podman and
+    # `systemctl --user` work above, which needs the manager still running, and
+    # must never fail an otherwise successful removal.
+    local $@;
+    eval { ea_podman::util::release_user_session(); };
+    warn "Could not release the rootless session: $@" if $@;
 
     return;
 }
@@ -1160,7 +1339,37 @@ sub remove_containers_for_a_deleted_user {
         deregister_container_as_root( $container->{container_name} );
     }
 
+    _release_deleted_user_session($user);
+
     return;
+}
+
+sub _release_deleted_user_session {
+    my ($user) = @_;
+
+    return 0 if !defined $user || $user eq "root";
+
+    # Only a linger we recorded granting is ours to disable, even for an account
+    # that is gone.
+    return 0 if !ea_podman::subids::user_has_granted_linger($user);
+
+    # The account may still exist (it is only ever *assumed* gone here, see
+    # ZC-10958), in which case this is an ordinary release.
+    return release_user_session_as_root($user) if defined getpwnam($user);
+
+    # It really is gone, so `loginctl disable-linger` has no user to look up —
+    # but logind’s marker file outlives the account, and would silently linger
+    # any future account that reuses the name. Remove it ourselves.
+    # No grant_covers_current_linger() check here: a marker for an account that
+    # does not exist keeps nothing running, and leaving it is the ZC-10958 bug.
+    if ( ea_podman::subids::user_has_linger($user) && !ea_podman::subids::remove_stale_linger_marker($user) ) {
+        warn "Could not remove the stale linger marker for the deleted user “$user”: $!\n";
+        return 0;
+    }
+
+    ea_podman::subids::revoke_linger_grant($user);    # the account is gone, so the grant goes too
+
+    return 1;
 }
 
 sub upgrade_containers_for_a_user {
@@ -1214,20 +1423,140 @@ sub deregister_container {
 }
 
 sub ensure_user {
+    my ($creating) = @_;
 
     # The very first command has to be ensure_user which establishes this user
-    # in the /etc/subuid and /etc/subgid files, critical to podman
+    # in the /etc/subuid and /etc/subgid files, critical to podman.
+    #
+    # The lingering user session is a separate question: only an account with
+    # containers, or one making its first (`creating`), gets one. Returns
+    # whether it has one.
     if ( $> == 0 ) {
+        my $session = ( $creating || user_has_containers_as_root("root") ) ? 1 : 0;
+
         local $@;
-        eval { ea_podman::subids::ensure_user_root("root"); };
+        eval { ea_podman::subids::ensure_user_root( "root", undef, $session ); };
 
-        die "Unable to ensure the root has subuids and subgids\n" if $@;
-    }
-    else {
-        Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER' );
+        # Root is already looking at root-side state, so it gets the reason
+        # itself: a subid refusal names the file and the other account, which is
+        # the point of it.
+        die "Unable to ensure the root has subuids and subgids: $@" if $@;
+
+        # No grant for root: /run/user/0 is not ours to take away.
+        return $session;
     }
 
-    return;
+    # The adminbin decides the same thing root-side, from the container
+    # registry only it can read, and reports back what it did.
+    return Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER', $creating ? 1 : 0 ) ? 1 : 0;
+}
+
+sub user_has_containers_as_root {
+    my ($user) = @_;
+
+    return 0 if !defined $user;
+
+    my $containers_hr = load_known_containers_as_root();
+    return ( grep { $_->{user} eq $user } values %{$containers_hr} ) ? 1 : 0;
+}
+
+# Independent of the registry: a live container directory under the account’s
+# home means it still has containers even if the root-owned registry says
+# otherwise (it was reset by a botched upgrade, say). Removal renames these to
+# “<container name>.bak” (see move_container_dir()), so only the others count.
+# Belt and braces before taking somebody’s user session away.
+sub _user_has_container_dirs {
+    my ($user) = @_;
+
+    my $homedir = ( getpwnam($user) )[7];
+    return 0 if !defined $homedir;
+
+    my $container_root = "$homedir/ea-podman.d";
+    return 0 if !-d $container_root;
+
+    for my $child ( path($container_root)->children ) {
+        next if !$child->is_dir;
+        next if $child->basename =~ m/\.bak$/;
+        return 1;
+    }
+
+    return 0;
+}
+
+# Linger — and the user systemd manager it keeps alive — exists for exactly one
+# reason here: so the account’s rootless containers survive logout and reboot.
+# With no containers left there is nothing to keep running, and on a server with
+# hundreds of accounts those idle managers add up (CPANEL-55309).
+#
+# An argument for giving *ours* back, and none for touching anybody else’s: an
+# account may linger because an admin or other software said so, and the systemd
+# marker does not say which. Hence:
+#
+# * no grant record, no release, however little the account seems to need one
+# * a record that no longer covers the linger actually in place is not a licence
+#   to disable that one — see ea_podman::subids::grant_covers_current_linger()
+# * root is never released: /run/user/0 is not ours to take away
+# * any remaining container keeps the linger, or it would stop at the next
+#   logout/reboot — a live container dir counts even if the registry disagrees
+sub _user_session_is_releasable {
+    my ($user) = @_;
+
+    return 0 if !defined $user || $user eq "root";
+    return 0 if !ea_podman::subids::user_has_granted_linger($user);
+    return 0 if !ea_podman::subids::user_has_linger($user);
+    return 0 if !ea_podman::subids::grant_covers_current_linger($user);
+    return 0 if user_has_containers_as_root($user);
+    return 0 if _user_has_container_dirs($user);
+
+    return 1;
+}
+
+sub release_user_session_as_root {
+    my ($user) = @_;
+
+    return 0 if !_user_session_is_releasable($user);
+
+    if ( !ea_podman::subids::remove_user_session($user) ) {
+        warn "Could not disable linger for “$user”\n";
+        return 0;
+    }
+
+    # Given back, so no longer ours — or a linger the account later acquires for
+    # its own reasons would look like ours to disable.
+    ea_podman::subids::revoke_linger_grant($user);
+
+    return 1;
+}
+
+# The other half of the bargain: an account that HAS containers must have the
+# lingering user session that keeps them running. init_user() deliberately
+# withholds it from an account with none (CPANEL-55309), so the moment one is
+# actually being created that has to be put right — see
+# _ensure_latest_container(), which calls this for every install, restore, and
+# upgrade. Idempotent, and free once the session is up (the linger marker is
+# world readable, so the check needs no privileges).
+sub ensure_container_session {
+    my $user = scalar getpwuid($>);
+
+    return 1 if defined $user && ea_podman::subids::user_has_linger($user) && -d "/run/user/$>";
+
+    ensure_user(1);    # 1 ➜ a container is being created, so the session is required
+    ensure_su_login(1);
+
+    return 1;
+}
+
+sub release_user_session {
+
+    # A restore removes every container and immediately puts them back
+    # (perform_user_restore), so the account is not really losing its
+    # containers. Tearing the session down in the middle of that would only
+    # make the very next step bring it straight back up — with a
+    # teardown/start-up race in between. That path sets this.
+    return 0 if $ENV{EA_PODMAN_KEEP_USER_SESSION};
+
+    return release_user_session_as_root( scalar getpwuid($>) ) if $> == 0;
+    return Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'RELEASE_USER' );
 }
 
 sub _get_container_root {
@@ -1367,7 +1696,8 @@ sub perform_user_backup {
 
         my $tarball_name = _get_tarball_name();
 
-        print `tar czf $tarball_name ea_podman_backup_$user.json ea-podman.d 2> /dev/null` . "\n";
+        system( 'tar', 'czf', $tarball_name, "ea_podman_backup_$user.json", 'ea-podman.d' ) == 0
+          or die "Could not create “$tarball_name”\n";
         unlink($backup_file);
 
         chdir 'ea-podman-backups';
@@ -1390,13 +1720,23 @@ sub perform_user_restore {
     my $homedir = ( getpwuid($>) )[7];
     my $user    = getpwuid($>);
 
+    $backup_tarball = Cwd::abs_path( $backup_tarball // '' ) || die "Please pass in the path to the backup file you want to restore.\n";
+    die "The backup file is not a readable file ($backup_tarball)\n" if !-f $backup_tarball || !-r _;
+
     # Remove any existing containers
 
     print "\nRemoving existing containers first\n\n";
 
     die "Cannot be run as root\n" if ( $> == 0 );
 
-    system( '/opt/cpanel/ea-podman/bin/ea-podman', 'remove_containers', '--all' );
+    {
+        # These containers are coming right back, so keep the user session up
+        # rather than have the removals release it and the restore below
+        # immediately re-establish it. (CPANEL-55309)
+        local $ENV{EA_PODMAN_KEEP_USER_SESSION} = 1;
+        system( '/opt/cpanel/ea-podman/bin/ea-podman', 'remove_containers', '--all' );
+    }
+
     Path::Tiny::path("$homedir/ea-podman.d")->remove_tree( { safe => 0 } );
     Path::Tiny::path("$homedir/.config/systemd/user")->remove_tree( { safe => 0 } );
 
@@ -1410,7 +1750,8 @@ sub perform_user_restore {
         my $pwd = Cwd::getcwd();
         chdir $homedir;
 
-        print `tar xf $backup_tarball 2> /dev/null` . "\n";
+        system( 'tar', 'xf', $backup_tarball ) == 0
+          or die "Could not extract “$backup_tarball”\n";
 
         chdir $pwd;
     }
@@ -1433,7 +1774,10 @@ sub perform_user_restore {
         }
     }
 
-    ea_podman::util::init_user();
+    # The containers were all removed above and are about to come back, so the
+    # registry cannot vouch for this account right now — say outright that a
+    # session is needed.
+    ea_podman::util::init_user( creating => 1 );
     ea_podman::util::restore_containers_for_user(@containers);
 
     foreach my $container (@containers) {
@@ -1484,3 +1828,44 @@ All consumers of this module must ensure that this function is called prior to c
 Why? If this module doesn’t assume the consumer has init’d it’d need done in pretty much all functions. That would be wasteful and slow things down.
 
 Some exceptions where it is safe to call before C<init_user()> are C<validate_user_container_name()>, C<load_known_containers()>, and C<get_containers()>.
+
+=head2 Creating the account’s first container
+
+C<init_user()> gives the account a lingering user systemd manager only when it
+already has containers, because that manager exists to keep containers running
+and nothing else — an account without any does not get one (CPANEL-55309).
+
+A caller that is about to create a container for an account that may not have
+one yet must say so:
+
+    ea_podman::util::init_user( creating => 1 );
+
+That is C<install> (CLI and UAPI) and C<perform_user_restore()>. Every other
+verb acts on a container that already exists, so the registry answers for it.
+Without C<creating>, an account with no containers gets its subuid/subgid
+ranges and no session, and C<init_user()> returns false to say so.
+
+=head2 Giving the linger back
+
+The only linger C<ea-podman> ever disables is one it enabled itself, and only
+once the account has no containers left at all. An account can be lingering for
+reasons that have nothing to do with containers, and the systemd marker in
+F</var/lib/systemd/linger> does not say who asked for it — so C<ea-podman> keeps
+its own record instead, a marker file per account under
+F</opt/cpanel/ea-podman/granted-linger> (see
+C<ea_podman::subids::user_has_granted_linger()>). No record, no release.
+
+Nothing to pass for this: C<ENSURE_USER> checks whether the account is lingering
+before it runs C<enable-linger> and records the grant only when that call turned
+it on. A record also outlives the linger it was written for, so
+C<ea_podman::subids::grant_covers_current_linger()> compares the two markers'
+timestamps before anything is disabled. Those timestamps are why
+C<ea_podman::subids::ensure_user_session()> leaves an already-established session
+alone rather than re-running C<enable-linger>, which would move systemd's marker
+past our own record on every command.
+
+A WebApp deployment arrives with the account I<already> lingering — the plugin's
+own C<ENSURE_SESSION> runs C<enable-linger> before C<Cpanel::WebApps::Podman>
+calls C<init_user()> — so C<ea-podman> never sees that transition. The plugin
+writes the same grant record when its call is the one that enabled lingering, and
+removing the WebApp then releases it here like any other. See DESIGN.md.

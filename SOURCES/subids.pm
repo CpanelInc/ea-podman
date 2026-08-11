@@ -11,6 +11,7 @@ package ea_podman::subids;
 
 use Path::Tiny 'path';
 use Cpanel::OS;
+use Fcntl       qw(:flock);
 use Time::HiRes ();
 
 our $good = "✅";
@@ -21,18 +22,35 @@ our $file_subuid = "/etc/subuid";
 our $file_subgid = "/etc/subgid";
 our $dir_run     = "/run/user";
 
-sub ensure_user_root {
-    my ( $user, $num_uids ) = @_;
+# systemd records a lingering user as an empty marker file in here:
+# `loginctl enable-linger` creates one, `disable-linger` removes it. Reading
+# the marker is cheaper — and far easier to test — than shelling out to
+# `loginctl show-user <user> -p Linger`.
+our $dir_linger = "/var/lib/systemd/linger";
 
-    $num_uids = 65537 if !$num_uids;
+# Same shape, ea-podman’s own bookkeeping: a marker per account meaning “this
+# linger is one we turned on”. $dir_linger says an account lingers, never who
+# asked for it. Root owned, and not packaged so an upgrade leaves it be.
+our $dir_granted_linger = "/opt/cpanel/ea-podman/granted-linger";
+
+sub ensure_user_root {
+    my ( $user, $num_uids, $ensure_session ) = @_;
+
+    $num_uids       = 65537 if !$num_uids;
+    $ensure_session = 1     if !defined $ensure_session;
 
     _ensure_subids( $user, $num_uids );
 
-    # Always (idempotently) ensure the user’s rootless session, not just on
+    # Only an account that has containers — or is about to get its first one —
+    # is given a lingering user session. Lingering every account that merely ran
+    # a command (or got backed up) was CPANEL-55309; the caller that can see the
+    # container registry makes that call, see ea_podman::util::ensure_user().
+    #
+    # When it does apply it is (idempotently) redone every time, not just on
     # first subid setup: linger may have been torn down since (e.g. a stale
     # state or an explicit `loginctl disable-linger`), which would leave a
     # registered user with no runtime dir. (CPANEL-54037)
-    ensure_user_session($user);
+    ensure_user_session($user) if $ensure_session;
 
     # Tell podman to ignore uid/gid issues
     _ensure_storage_conf();
@@ -41,49 +59,77 @@ sub ensure_user_root {
 }
 
 # Allocate /etc/subuid + /etc/subgid ranges for the user, unless they already
-# have both. New ranges start at 190000 (or just past the highest existing
-# allocation, whichever is greater).
+# have both. A new range starts just past the highest existing allocation; on a
+# host with no allocations at all the first one is placed so that it ends just
+# below 190000.
+#
+# Read → compute → append has to happen under one lock, or two accounts
+# bootstrapping at once claim the same range and their containers end up on the
+# same host uids. One exclusive flock on $file_subuid covers both files: every
+# allocation comes through here and always does the two together.
+#
+# It does not serialize against shadow-utils, which allocates from the same
+# space under its own locking; the disjointness checks below cover that.
 sub _ensure_subids {
     my ( $user, $num_uids ) = @_;
 
-    my $subuid = get_subuids();
-    my $subgid = get_subgids();
+    # Opened first so the lock is held across everything below, and so a missing
+    # file exists by the time it is read.
+    open my $subuid_fh, ">>", $file_subuid or die "Could not open “$file_subuid”: $!\n";
+    open my $subgid_fh, ">>", $file_subgid or die "Could not open “$file_subgid”: $!\n";
 
-    return if exists $subuid->{$user} && exists $subgid->{$user};
+    flock( $subuid_fh, LOCK_EX ) or die "Could not lock “$file_subuid”: $!\n";
 
-    # via the mechanics this means the uids/gids start at 190000
+    my $subuid_ranges = _read_ranges($file_subuid);
+    my $subgid_ranges = _read_ranges($file_subgid);
+
+    my $has_subuid = @{ _user_ranges( $subuid_ranges, $user ) } ? 1 : 0;
+    my $has_subgid = @{ _user_ranges( $subgid_ranges, $user ) } ? 1 : 0;
+
+    # Already allocated is not the same as safely allocated: an older unlocked
+    # version or a concurrent `useradd` may have put this range on top of
+    # another account’s. Each half is checked on its own — a shared subuid range
+    # is no better for having the missing subgid range filled in.
+    _assert_range_is_exclusive( $user, $subuid_ranges, $file_subuid ) if $has_subuid;
+    _assert_range_is_exclusive( $user, $subgid_ranges, $file_subgid ) if $has_subgid;
+
+    return if $has_subuid && $has_subgid;
+
+    # via the mechanics this means the uids/gids end just below 190000
     my $getuid_max = 190000 - $num_uids;
     my $getgid_max = 190000 - $num_uids;
 
-    foreach my $u ( keys %{$subuid} ) {
-        my ( $uid, $range ) = split( /:/, $subuid->{$u} );
-        $uid += $range;
+    foreach my $range ( @{$subuid_ranges} ) {
+        my $uid = $range->{start} + $range->{count};
         $getuid_max = $uid if ( $uid > $getuid_max );
     }
 
-    foreach my $u ( keys %{$subgid} ) {
-        my ( $uid, $range ) = split( /:/, $subgid->{$u} );
-        $uid += $range;
-        $getgid_max = $uid if ( $uid > $getgid_max );
+    foreach my $range ( @{$subgid_ranges} ) {
+        my $gid = $range->{start} + $range->{count};
+        $getgid_max = $gid if ( $gid > $getgid_max );
     }
 
     $getuid_max++;
     $getgid_max++;
 
     my $num_uids_minus_one = $num_uids - 1;
-    if ( !exists $subuid->{$user} ) {
-        if ( open my $fh, ">>", $file_subuid ) {
-            print $fh "$user:$getuid_max:$num_uids_minus_one\n";
-            close $fh;
-        }
+
+    # Checked, not assumed: highest-end-plus-one is only free if every line was
+    # accounted for, and unparsable ones were not (see _read_ranges()).
+    if ( !$has_subuid ) {
+        _assert_allocation_is_free( $user, $getuid_max, $num_uids_minus_one, $subuid_ranges, $file_subuid );
+        print {$subuid_fh} "$user:$getuid_max:$num_uids_minus_one\n" or die "Could not write to “$file_subuid”: $!\n";
     }
 
-    if ( !exists $subgid->{$user} ) {
-        if ( open my $fh, ">>", $file_subgid ) {
-            print $fh "$user:$getgid_max:$num_uids_minus_one\n";
-            close $fh;
-        }
+    if ( !$has_subgid ) {
+        _assert_allocation_is_free( $user, $getgid_max, $num_uids_minus_one, $subgid_ranges, $file_subgid );
+        print {$subgid_fh} "$user:$getgid_max:$num_uids_minus_one\n" or die "Could not write to “$file_subgid”: $!\n";
     }
+
+    # A short write only surfaces on flush, and a truncated line here is worth
+    # dying over. $subuid_fh closes last because that drops the lock.
+    close $subgid_fh or die "Could not write to “$file_subgid”: $!\n";
+    close $subuid_fh or die "Could not write to “$file_subuid”: $!\n";
 
     return;
 }
@@ -114,9 +160,27 @@ sub ensure_user_session {
     my ( $uid, $gid ) = ( getpwnam($user) )[ 2, 3 ];
     die "Could not look up the uid/gid for “$user”\n" if !defined $uid;
 
+    # Nothing to do when the account already lingers and its manager is up — and
+    # running enable-linger anyway is not free. systemd re-touches
+    # $dir_linger/<user> every time, and that file’s timestamp is how we tell our
+    # own linger from somebody else’s (see grant_covers_current_linger()). Since
+    # this runs for every ea-podman command an account with containers makes, a
+    # blind re-enable would age our own grant out of covering the linger it
+    # granted, and the release on the last container would never happen.
+    # (CPANEL-55309)
+    return if user_has_linger($user) && -d "$dir_run/$uid" && -e "$dir_run/$uid/bus";
+
     mkdir $dir_run;    # parent /run/user; harmless when it already exists
 
+    # Re-enabling for an account we already hold a grant on moves systemd’s
+    # marker ahead of that grant, so the grant has to move with it or it stops
+    # covering the very linger it is for. Recorded around the enable, not after
+    # the readiness poll below, which can die.
+    my $regrant = user_has_granted_linger($user);
+
     $linger_enabler->($user);
+
+    record_linger_grant($user) if $regrant;
 
     # enable-linger is asynchronous: it returns *before* logind has finished
     # creating /run/user/<uid> AND starting user@<uid>.service. The readiness
@@ -140,6 +204,115 @@ sub ensure_user_session {
     }
 
     return;
+}
+
+# The counterpart to $linger_enabler: `loginctl disable-linger <user>`, run as
+# root, stops the user’s systemd manager and lets logind tear down
+# /run/user/<uid> once the account has no session left. Held in a package
+# variable so tests can stub the privileged call. (CPANEL-55309)
+our $linger_disabler = \&_disable_linger;
+
+sub _disable_linger {
+    my ($user) = @_;
+    system( "loginctl", "disable-linger", $user );
+    return $? == 0;
+}
+
+# The marker paths below interpolate an account name and two are unlink()ed as
+# root. Anything implausible reads as “no such user”, safe everywhere here.
+sub _is_valid_linger_user {
+    my ($user) = @_;
+
+    return 0 if !defined $user;
+    return $user =~ m{\A[a-z0-9][a-z0-9._-]*\z}i ? 1 : 0;
+}
+
+sub user_has_linger {
+    my ($user) = @_;
+
+    return 0 if !_is_valid_linger_user($user);
+    return -e "$dir_linger/$user" ? 1 : 0;
+}
+
+# The grant record (see $dir_granted_linger): idempotent, root only, and “no
+# record” is always the safe answer — without one nothing takes an account’s
+# linger away. See ea_podman::util::_user_session_is_releasable().
+sub user_has_granted_linger {
+    my ($user) = @_;
+
+    return 0 if !_is_valid_linger_user($user);
+    return -e "$dir_granted_linger/$user" ? 1 : 0;
+}
+
+# Always re-touched, never skipped: the mtime has to track the enable-linger
+# this call is recording. See grant_covers_current_linger().
+sub record_linger_grant {
+    my ($user) = @_;
+
+    return 0 if !_is_valid_linger_user($user) || $user eq "root";
+
+    mkdir( $dir_granted_linger, 0700 );    # the parent is packaged; harmless when it already exists
+    chmod( 0700, $dir_granted_linger );
+
+    local $@;
+    eval { path("$dir_granted_linger/$user")->touch; 1 } or do {
+        warn "Could not record the linger grant for “$user”: $@";
+        return 0;
+    };
+
+    return 1;
+}
+
+sub revoke_linger_grant {
+    my ($user) = @_;
+
+    return 1 if !user_has_granted_linger($user);
+    return unlink("$dir_granted_linger/$user") ? 1 : 0;
+}
+
+# A record says we granted *a* linger; this says whether it is the current one.
+# We record just after enable-linger, so ours is never the older of the two — a
+# newer systemd marker means somebody else enabled this linger after ours went
+# away. Unreadable either way ➜ no, same as a missing record. (CPANEL-55309)
+sub grant_covers_current_linger {
+    my ($user) = @_;
+
+    return 0 if !user_has_granted_linger($user) || !user_has_linger($user);
+
+    my $granted_at      = ( stat("$dir_granted_linger/$user") )[9];
+    my $lingering_since = ( stat("$dir_linger/$user") )[9];
+
+    return 0 if !defined $granted_at || !defined $lingering_since;
+
+    return $lingering_since <= $granted_at ? 1 : 0;
+}
+
+# Undo what ensure_user_session() set up. Idempotent: a no-op (and a “success”)
+# when the user is not lingering in the first place. Deciding that a user no
+# longer needs a rootless session is the caller’s job — see
+# ea_podman::util::release_user_session(). (CPANEL-55309)
+sub remove_user_session {
+    my ($user) = @_;
+
+    return 1 if !user_has_linger($user);
+
+    $linger_disabler->($user);
+
+    # `loginctl disable-linger` can exit non-zero for reasons that leave the
+    # linger correctly off (a stopped manager, for instance), so trust the
+    # marker over the exit code.
+    return user_has_linger($user) ? 0 : 1;
+}
+
+# `loginctl disable-linger` has no user to look up once an account has been
+# deleted, but logind’s marker file outlives the account — and would silently
+# linger any future account that reuses the name. Dropping the marker is
+# precisely what disable-linger itself does. (CPANEL-55309)
+sub remove_stale_linger_marker {
+    my ($user) = @_;
+
+    return 1 if !user_has_linger($user);
+    return unlink("$dir_linger/$user") ? 1 : 0;
 }
 
 sub assert_has_user_namespaces {
@@ -183,9 +356,184 @@ sub get_subgids {
     return _parse_subid_file($file_subgid);
 }
 
+# Every account in the file whose range is not exclusively its own, as
+# user => why. These are the accounts _ensure_subids() refuses to act for, asked
+# of the whole file at once so a box can be audited up front.
+sub get_subuid_problems {
+    return _find_range_problems($file_subuid);
+}
+
+sub get_subgid_problems {
+    return _find_range_problems($file_subgid);
+}
+
 ###############
 #### helpers ##
 ###############
+
+# Every well-formed allocation in $file, in file order, as
+# { user => …, start => …, count => … }.
+#
+# _parse_subid_file() keeps one entry per account, which is all its callers want
+# to display; allocation needs every line, since a duplicate’s IDs are just as
+# taken as any other’s.
+#
+# Plain open rather than Path::Tiny: its readers take a shared flock, which
+# would block on the exclusive lock _ensure_subids() already holds on this file.
+sub _read_ranges {
+    my ($file) = @_;
+
+    # A file that does not exist has nothing allocated in it. Anything else has
+    # to be fatal: treating an unreadable file as empty would hand out IDs an
+    # account already holds.
+    open my $fh, "<", $file or do {
+        return [] if !-e $file;
+        die "Could not read “$file”: $!\n";
+    };
+
+    my @ranges;
+
+    while ( my $line = readline $fh ) {
+        chomp $line;
+        next if $line !~ m/\S/;
+
+        my ( $user,  $ranges ) = split( ":", $line, 2 );
+        my ( $start, $count )  = _parse_range($ranges);
+
+        # A line this cannot parse is one it cannot reason about. Skipping it
+        # keeps a hand-added comment from taking a working account offline; its
+        # IDs going uncounted is why allocations are overlap-checked.
+        next if !defined $count;
+
+        push @ranges, { user => $user, start => $start, count => $count };
+    }
+
+    return \@ranges;
+}
+
+# The “<start>:<count>” half of a subid line, and only when it is one: a
+# non-numeric, empty or zero-count range cannot take part in an overlap.
+sub _parse_range {
+    my ($ranges) = @_;
+
+    return if !defined $ranges;
+
+    my ( $start, $count ) = split( /:/, $ranges );
+
+    return if !defined $start         || !defined $count;
+    return if $start !~ m/\A[0-9]+\z/ || $count !~ m/\A[0-9]+\z/;
+    return if $count == 0;
+
+    return ( $start, $count );
+}
+
+sub _user_ranges {
+    my ( $ranges_ar, $user ) = @_;
+
+    return [ grep { $_->{user} eq $user } @{$ranges_ar} ];
+}
+
+# The first account holding IDs inside [$start, $start + $count - 1], ignoring
+# $skip_user’s own entries.
+sub _find_overlap {
+    my ( $ranges_ar, $start, $count, $skip_user ) = @_;
+
+    my $end = $start + $count - 1;
+
+    for my $range ( @{$ranges_ar} ) {
+        next if defined $skip_user && $range->{user} eq $skip_user;
+
+        my $other_end = $range->{start} + $range->{count} - 1;
+
+        return $range->{user} if $start <= $other_end && $range->{start} <= $end;
+    }
+
+    return;
+}
+
+# Two accounts sharing host IDs is the breach these ranges exist to prevent, so
+# both of these are hard errors. Reallocating automatically is not an option —
+# the container files on disk are owned by the old range’s IDs — so it takes an
+# administrator, which is what the messages say.
+sub _assert_allocation_is_free {
+    my ( $user, $start, $count, $ranges_ar, $file ) = @_;
+
+    my $overlaps = _find_overlap( $ranges_ar, $start, $count, $user );
+    return if !defined $overlaps;
+
+    my $end = $start + $count - 1;
+    die "Refusing to give “$user” the host IDs $start-$end in “$file”: they overlap the IDs “$overlaps” already holds. An administrator needs to sort out “$file” before “$user” can run containers.\n";
+}
+
+sub _assert_range_is_exclusive {
+    my ( $user, $ranges_ar, $file ) = @_;
+
+    my $mine = _user_ranges( $ranges_ar, $user );
+
+    if ( @{$mine} > 1 ) {
+        die "“$user” has more than one range in “$file”, so which host IDs are theirs is ambiguous. An administrator needs to leave them exactly one.\n";
+    }
+
+    my ( $start, $count ) = ( $mine->[0]{start}, $mine->[0]{count} );
+
+    my $overlaps = _find_overlap( $ranges_ar, $start, $count, $user );
+    return if !defined $overlaps;
+
+    my $end = $start + $count - 1;
+    die "“$user” shares the host IDs $start-$end with “$overlaps” in “$file”, so their containers are not isolated from each other’s. An administrator needs to give one of them a range of its own — `ea-podman subids` lists every account this affects.\n";
+}
+
+sub _find_range_problems {
+    my ($file) = @_;
+
+    my $ranges_ar = _read_ranges($file);
+
+    my %problem;
+
+    # More than one line: which host IDs are actually theirs is ambiguous, so it
+    # needs fixing whether or not the lines overlap anything.
+    my %lines;
+    $lines{ $_->{user} }++ for @{$ranges_ar};
+    $problem{$_} = "is listed with more than one range" for grep { $lines{$_} > 1 } keys %lines;
+
+    # Overlaps, by sweeping in start order against the ranges still open at each
+    # start. Every partner is named, not just the one reaching furthest: an
+    # administrator handed a partial list has no way to tell it is partial, and
+    # would have to re-audit after each edit to find the next name.
+    #
+    # @open is pruned to the ranges that reach the current start, so on a healthy
+    # file it holds at most the previous range and the sweep stays linear; it
+    # only grows where ranges genuinely pile up, which is the broken case worth
+    # spending the comparisons on.
+    my %shared_with;
+    my @open;
+    for my $range ( sort { $a->{start} <=> $b->{start} || $a->{user} cmp $b->{user} } @{$ranges_ar} ) {
+
+        # Ending before this one starts means ending before every later one
+        # starts too, so it is done being compared.
+        @open = grep { $_->{start} + $_->{count} - 1 >= $range->{start} } @open;
+
+        # Everything left starts at or before this range and reaches into it.
+        for my $other (@open) {
+            $shared_with{ $range->{user} }{ $other->{user} } = 1;
+            $shared_with{ $other->{user} }{ $range->{user} } = 1;
+        }
+
+        push @open, $range;
+    }
+
+    # Sharing IDs with another account is the more urgent of the two, so it is
+    # what gets reported for an account with both problems. Overlapping only
+    # itself means two lines, which the ambiguity message above already covers.
+    for my $user ( keys %shared_with ) {
+        my @others = grep { $_ ne $user } sort keys %{ $shared_with{$user} };
+        next if !@others;
+
+        $problem{$user} = "shares host IDs with " . join( ", ", map { "“$_”" } @others );
+    }
+
+    return \%problem;
+}
 
 sub _parse_subid_file {
     my ($file) = @_;

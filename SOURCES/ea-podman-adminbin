@@ -30,7 +30,7 @@ if ($@) {                                                     # … if its not 
 __PACKAGE__->run( 'alarm' => 120 ) unless caller;
 
 sub _actions {
-    return qw(LIST GIVE TAKE ENSURE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS MINT_API_TOKEN REVOKE_API_TOKEN EXEC_IN_CONTAINER);
+    return qw(LIST GIVE TAKE ENSURE_USER RELEASE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS MINT_API_TOKEN REVOKE_API_TOKEN EXEC_IN_CONTAINER);
 }
 
 sub LIST {
@@ -77,17 +77,53 @@ sub TAKE {
 }
 
 sub ENSURE_USER {
-    my ($self) = @_;
+    my ( $self, $creating ) = @_;
     my $cpuser = $self->_debug_and_user(1);
 
+    # subuid/subgid ranges are for anybody who runs podman at all. A lingering
+    # user session is not: it exists to keep an account’s containers running, so
+    # only an account that has containers — or says it is about to install its
+    # first ($creating) — gets one. The registry that settles it is root-owned,
+    # so the decision is made here rather than taken on trust. (CPANEL-55309)
+    my $session = ( $creating || ea_podman::util::user_has_containers_as_root($cpuser) ) ? 1 : 0;
+
+    # Only knowable before we do it. An account already lingering records
+    # nothing: that linger belongs to whoever enabled it.
+    my $granting = ( $session && !ea_podman::subids::user_has_linger($cpuser) ) ? 1 : 0;
+
     local $@;
-    eval { ea_podman::subids::ensure_user_root($cpuser); };
+    eval { ea_podman::subids::ensure_user_root( $cpuser, undef, $session ); };
 
     if ($@) {
+
+        # The caller only gets the generic message: the real reason is root-side
+        # detail and can name another account. Log it so a refusal leaves an
+        # administrator something to diagnose.
+        Cpanel::Debug::log_warn("Could not ensure subids for “$cpuser”: $@");
         _die_with_message("Unable to ensure the user has subuids and subgids");
     }
 
-    return 1;
+    ea_podman::subids::record_linger_grant($cpuser) if $granting && ea_podman::subids::user_has_linger($cpuser);
+
+    return $session;
+}
+
+sub RELEASE_USER {
+    my ($self) = @_;
+    my $cpuser = $self->_debug_and_user(1);
+
+    # The mirror image of ENSURE_USER. Only ever the caller’s own account, only a
+    # linger ENSURE_USER recorded granting, and only when the root-owned registry
+    # agrees there is nothing left to keep running — see
+    # ea_podman::util::_user_session_is_releasable().
+    local $@;
+    my $released = eval { ea_podman::util::release_user_session_as_root($cpuser); };
+
+    if ($@) {
+        _die_with_message("Unable to release the user session");
+    }
+
+    return $released ? 1 : 0;
 }
 
 sub REGISTER {
@@ -109,7 +145,15 @@ sub DEREGISTER {
 
     _die_with_message("Must provide a container name") if !defined $container_name;
 
-    eval { ea_podman::util::deregister_container_as_root($container_name); };
+    # Ownership: only ever the caller's own registered container — mirror
+    # EXEC_IN_CONTAINER (CPANEL-55337). Without this, any account could
+    # deregister any other account's container by (guessable) name, dropping
+    # it from the removal hooks and leaking its ports and container.
+    my $all = ea_podman::util::load_known_containers_as_root();
+    my $ent = $all->{$container_name};
+    _die_with_message("No such container for this account") if !$ent || ( $ent->{user} // '' ) ne $cpuser;
+
+    eval { ea_podman::util::deregister_container_as_root( $container_name, $cpuser ); };
 
     _die_with_message("Unable to remove from known_containers: $@") if ($@);
 
@@ -276,6 +320,30 @@ This function removes all ports assigned the given container name.
 
 This function ensures that the user has subuids and subgids for podman functionality.
 
+The ranges are drawn from a space shared by every account, so allocation happens
+under an exclusive lock. It also fails closed: an account whose range is not
+exclusively its own is refused rather than run with containers that are not
+isolated. The caller gets a generic failure; the reason is logged, and
+C<ea-podman subids> lists every affected account.
+
+The subids are for anybody who runs podman at all. A lingering user session is
+not: it keeps the account’s containers running, so only an account that has
+containers — or, per the first argument, is about to install its first one —
+gets one. Returns whether the account has a session.
+
+When this call is what turns the linger on, the grant is recorded (see
+C<ea_podman::subids::record_linger_grant()>) so L</RELEASE_USER> knows the linger
+is ea-podman’s to give back later. An account that is already lingering records
+nothing: that linger belongs to whoever enabled it.
+
+=head2 RELEASE_USER
+
+This function disables the calling account’s systemd linger, but only when it is
+one L</ENSURE_USER> recorded enabling, only when that record still covers the
+linger that is there now, and only when the root-owned registry says the account
+has no containers left to keep running. Any other linger is left strictly alone.
+Returns whether it released one.
+
 =head2 REGISTER
 
 This function adds the given container to ea-podman’s known containers list.
@@ -288,9 +356,15 @@ entry as a strict JSON boolean C<webapp> attribute — truthiness only, never
 the raw value — and it is ignored on an update, where the value already
 recorded in the root-owned registry is preserved.
 
+The list is shared by every account, so the read-modify-write is done under an
+exclusive lock and saved atomically (CPANEL-55342).
+
 =head2 DEREGISTER
 
 This function removes the given container from ea-podman’s known containers list.
+
+As with L</REGISTER>, the read-modify-write is serialized against every other
+mutation of the shared list.
 
 =head2 REGISTERED_CONTAINERS
 

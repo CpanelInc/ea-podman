@@ -393,7 +393,10 @@ sub get_dispatch_args {
             help     => "Has two modes:\n\t<PKG> - An EA4 container based package.\n\t\tNeeds no other arguments or setup as that is all provided by the package. It can take some additional start up arguments.\n\t<NON-PKG-NAME> - manage an arbitrary image as if it where an EA4 container based package.\n\t\tSee https://github.com/CpanelInc/ea-podman/blob/master/README.md for details",
             code     => sub {
                 my ( $app, $name, @start_args ) = @_;
-                ea_podman::util::init_user();
+
+                # The one verb that legitimately needs a rootless session for an
+                # account with no containers yet.
+                ea_podman::util::init_user( creating => 1 );
                 my $container_name = ea_podman::util::install_container( $name, @start_args );
                 print "Done, installed: $container_name\n";
             },
@@ -792,6 +795,14 @@ This is intended to make it easier for a user to purge their ea-podman based con
             code     => sub {
                 my ( $app, $user ) = @_;
 
+                die "rootbackupofuser can only be run by root\n" if $> != 0;
+
+                # The same guard as the PkgAcct hook that calls us, since this
+                # is a reachable entry point in its own right: do not stand up a
+                # rootless session (subids + linger) for an account that has no
+                # containers to back up. (CPANEL-55309)
+                return 1 if !ea_podman::util::user_has_containers_as_root($user);
+
                 require Cpanel::AccessIds;
 
                 Cpanel::AccessIds::do_as_user_with_exception(
@@ -836,22 +847,45 @@ sub subids {
     my $subuid_lu = ea_podman::subids::get_subuids();
     my $subgid_lu = ea_podman::subids::get_subgids();
 
+    # Having a range and having one nobody else has are different things, and
+    # only the second is isolation. Worked out once for the whole file.
+    my $subuid_problems = ea_podman::subids::get_subuid_problems();
+    my $subgid_problems = ea_podman::subids::get_subgid_problems();
+
     if ( $> == 0 ) {
         for my $user ( "root", Cpanel::Config::Users::getcpusers() ) {
-            _check_output_user( $user, $subuid_lu, $subgid_lu );
+            _check_output_user( $user, $subuid_lu, $subgid_lu, $subuid_problems, $subgid_problems );
         }
     }
     else {
         my $user = getpwuid($>);
-        _check_output_user( $user, $subuid_lu, $subgid_lu );
+        _check_output_user( $user, $subuid_lu, $subgid_lu, $subuid_problems, $subgid_problems );
     }
 }
 
 sub _check_output_user {
-    my ( $user, $subuid_lu, $subgid_lu ) = @_;
+    my ( $user, $subuid_lu, $subgid_lu, $subuid_problems, $subgid_problems ) = @_;
 
-    print( exists $subuid_lu->{$user} ? "$ea_podman::subids::good “$user” has subuids ($subuid_lu->{$user})\n" : "$ea_podman::subids::bad “$user” does not have subuids\n" );
-    print( exists $subgid_lu->{$user} ? "$ea_podman::subids::good “$user” has subgids ($subgid_lu->{$user})\n" : "$ea_podman::subids::bad “$user” does not have subgids\n" );
+    _output_user_range( $user, "subuids", $subuid_lu, $subuid_problems );
+    _output_user_range( $user, "subgids", $subgid_lu, $subgid_problems );
+}
+
+sub _output_user_range {
+    my ( $user, $label, $lu, $problems ) = @_;
+
+    if ( !exists $lu->{$user} ) {
+        print "$ea_podman::subids::bad “$user” does not have $label\n";
+        return;
+    }
+
+    # ea-podman refuses to run this account’s containers while its range is not
+    # exclusively its own, so that does not get a checkmark here either.
+    if ( my $problem = $problems->{$user} ) {
+        print "$ea_podman::subids::bad “$user” has $label ($lu->{$user}) but $problem\n";
+        return;
+    }
+
+    print "$ea_podman::subids::good “$user” has $label ($lu->{$user})\n";
 }
 
 1;

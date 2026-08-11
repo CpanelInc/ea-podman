@@ -63,7 +63,7 @@ sub _require_ea_podman_or_die {
 # interleaved into — and corrupt — the JSON response, so capture it. On
 # failure the captured text is appended to the exception so the real error is
 # debuggable instead of a bare "Failed to create container".
-sub _run_in_user_session ($code) {
+sub _run_in_user_session ( $code, %opts ) {
     _require_ea_podman_or_die();
 
     local $ENV{XDG_RUNTIME_DIR} = "/run/user/$>";
@@ -85,7 +85,7 @@ sub _run_in_user_session ($code) {
         sub {
             local $@;
             eval {
-                ea_podman::util::init_user();
+                ea_podman::util::init_user( creating => $opts{creating} );
                 @rv = $code->();
                 1;
             } or $err = $@ || "ea-podman: unknown error";
@@ -98,6 +98,15 @@ sub _run_in_user_session ($code) {
     }
 
     return wantarray ? @rv : $rv[0];
+}
+
+# Ownership: act only on a container that is registered to the caller. Mirrors
+# the EXEC_IN_CONTAINER adminbin's check so a well-formed but foreign (or
+# entirely made up) name cannot reach the destructive helpers (CPANEL-55336).
+sub _verify_own_container ($container_name) {
+    my $entry = ea_podman::util::load_known_containers()->{$container_name};
+    die "No such container for this account.\n" if !$entry || ( $entry->{user} // '' ) ne scalar getpwuid($>);
+    return 1;
 }
 
 # NOTE (gating): UAPI requires an authenticated cpsrvd session (or API token)
@@ -196,10 +205,13 @@ sub install ( $args, $result ) {
     # The image, when given, must be the last start arg.
     push @start_args, $image if length($image);
 
+    # The one verb that needs a rootless session for an account that may not
+    # have a container yet, so it is the one that asks for it. (CPANEL-55309)
     my $container_name = _run_in_user_session(
         sub {
             return ea_podman::util::install_container( $name, @start_args );
-        }
+        },
+        creating => 1,
     );
 
     $result->data( { container_name => $container_name } );
@@ -243,6 +255,7 @@ sub uninstall ( $args, $result ) {
     _run_in_user_session(
         sub {
             ea_podman::util::validate_user_container_name($container_name);
+            _verify_own_container($container_name);
             ea_podman::util::remove_container_by_name($container_name);
             return 1;
         }

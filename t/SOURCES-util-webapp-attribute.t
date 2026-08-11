@@ -57,6 +57,21 @@ subtest 'an upgrade preserves the registered webapp value — it cannot be flipp
     ok( !$containers->{"plain.bob.01"}{webapp}, "upgrade cannot set webapp true on a container installed without --webapp-dir" );
 };
 
+subtest 'a restore re-registers webapp from the backup file, since there is no entry to preserve it from' => sub {
+    my $tmp = File::Temp->newdir();
+    local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";
+
+    # A restore has no entry to carry the value over from — perform_user_restore()
+    # deregisters them all, and a restore onto another server never had one — so
+    # restore_containers_for_user() passes it down from the backup file instead.
+    ea_podman::util::register_container_as_root( "my-app.bob.01", "bob", 1, "node:22", 1 );
+    ea_podman::util::register_container_as_root( "plain.bob.01",  "bob", 1, "redis:7", 0 );
+
+    my $containers = Cpanel::JSON::LoadFile($ea_podman::util::known_containers_file);
+    ok( $containers->{"my-app.bob.01"}{webapp}, "a restored WebApp container is still a WebApp container" );
+    ok( !$containers->{"plain.bob.01"}{webapp}, "and a restored ordinary one is still ordinary" );
+};
+
 subtest 'a duplicate (non-upgrade) registration cannot change webapp' => sub {
     my $tmp = File::Temp->newdir();
     local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";

@@ -212,6 +212,7 @@ plan skip_all => "EAPODMAN_DRIVER must be 'uapi' or 'cli' (got '$DRIVER')" if $D
 
 # Make sure the installed ea-podman actually carries the CPANEL-54037 fix,
 # otherwise this test would silently exercise the old (broken) code path.
+our $HAS_LINGER_FIX;
 {
     open my $fh, '<', "$EAP_LIB/subids.pm" or plan skip_all => "cannot read $EAP_LIB/subids.pm";
     local $/;
@@ -219,6 +220,10 @@ plan skip_all => "EAPODMAN_DRIVER must be 'uapi' or 'cli' (got '$DRIVER')" if $D
     close $fh;
     plan skip_all => "installed ea-podman predates CPANEL-54037 (no enable-linger / ensure_user_session in subids.pm); rebuild/install it first"
       if $src !~ /enable[-_ ]?linger/ && $src !~ /ensure_user_session/;
+
+    # Withholding the linger from an account with no containers, and giving back
+    # one ea-podman granted, came later. Only those assertions are gated on it.
+    $HAS_LINGER_FIX = $src =~ /granted_linger/ ? 1 : 0;
 }
 
 my ($CLI) = grep { -x $_ } @CLI_PATHS;
@@ -279,6 +284,15 @@ SKIP: {
     skip "no jailshell binary", 1 if !-x $JAILSHELL;
     my ( $rc, $out ) = run_cmd( 'su', '-', $USER, '-c', 'cat /etc/subuid' );
     isnt( $rc, 0, "login shell (jailshell) cannot read /etc/subuid — the chroot is active" );
+}
+
+# CPANEL-55309: merely running a verb must not linger an account that has no
+# containers. Doing so for every account a backup touched is what put hundreds
+# of idle user systemd managers on a server.
+SKIP: {
+    skip "installed ea-podman predates CPANEL-55309", 1 if !$HAS_LINGER_FIX;
+    op('list');
+    ok( !-e "/var/lib/systemd/linger/$USER", "an account with no containers is not lingered by running a verb" );
 }
 
 #---------------------------------------------------------------------
@@ -496,6 +510,15 @@ SKIP: {
     my $res = op( 'uninstall', container_name => $container );
     ok( $res->{status}, "[$DRIVER] EAPodman uninstall succeeded" );
     ok( wait_for( sub { !_container_running($USER) }, 30 ), "container is gone after uninstall" );
+
+    # That was the account's last container, so there is nothing left for a user
+    # systemd manager to keep alive, and this linger is one ea-podman granted.
+    # Checked before anything else runs as the user and bootstraps it again.
+    SKIP: {
+        skip "installed ea-podman predates CPANEL-55309", 2 if !$HAS_LINGER_FIX;
+        ok( wait_for( sub { !-e "/var/lib/systemd/linger/$USER" }, 15 ), "the linger ea-podman granted is released with the last container" );
+        ok( !-e "/opt/cpanel/ea-podman/granted-linger/$USER", "…and the grant record goes with it" );
+    }
 
     my $list = op('list');
     ok( !( $list->{data} && exists $list->{data}{$container} ), "uninstalled container no longer registered" );
