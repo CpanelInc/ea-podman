@@ -72,6 +72,10 @@ my $UAPI_MOD  = '/usr/local/cpanel/Cpanel/API/EAPodman.pm';
 my $PORTAUTH  = '/usr/local/cpanel/scripts/cpuser_port_authority';
 my @CLI_PATHS = ( '/usr/local/cpanel/scripts/ea-podman', '/opt/cpanel/ea-podman/bin/ea-podman' );
 
+# ea-podman's record of the lingers it turned on itself — the only ones it will
+# ever disable again.
+my $GRANTED_LINGER = '/opt/cpanel/ea-podman/granted-linger';
+
 #---------------------------------------------------------------------
 # helpers
 #---------------------------------------------------------------------
@@ -176,6 +180,7 @@ plan skip_all => "ea-podman library not installed"            if !-e "$EAP_LIB/s
 plan skip_all => "cpuser_port_authority not found ($PORTAUTH)" if !-x $PORTAUTH;
 
 # ea-podman must carry the CPANEL-54037 fix.
+our $HAS_LINGER_FIX;
 {
     open my $fh, '<', "$EAP_LIB/subids.pm" or plan skip_all => "cannot read $EAP_LIB/subids.pm";
     local $/;
@@ -183,6 +188,10 @@ plan skip_all => "cpuser_port_authority not found ($PORTAUTH)" if !-x $PORTAUTH;
     close $fh;
     plan skip_all => "installed ea-podman predates CPANEL-54037 (no enable-linger / ensure_user_session in subids.pm); rebuild/install it first"
       if $src !~ /enable[-_ ]?linger/ && $src !~ /ensure_user_session/;
+
+    # Withholding the linger from an account with no containers, and giving back
+    # one ea-podman granted, came later. Only those assertions are gated on it.
+    $HAS_LINGER_FIX = $src =~ /granted_linger/ ? 1 : 0;
 }
 
 # ea-podman runs on cgroup v1 as well as v2 (the shipped Type=forking units
@@ -250,8 +259,19 @@ SKIP: {
     unlike( $out, qr/restricted shell/i, "normal user can run the ea-podman CLI directly (not shell-gated)" );
 }
 
+# CPANEL-55309: merely running a verb must not linger an account that has no
+# containers. Doing so for every account a backup touched is what put hundreds
+# of idle user systemd managers on a server.
+SKIP: {
+    skip "installed ea-podman predates CPANEL-55309", 1 if !$HAS_LINGER_FIX;
+    uapi( $USER, 'list' );
+    run_as_user( $USER, _sh($CLI) . " list" ) if $CLI;
+    ok( !-e "/var/lib/systemd/linger/$USER", "an account with no containers is not lingered by running a verb" );
+}
+
 #--- install via UAPI ------------------------------------------------
 my $container;
+my ( $wcontainer, $staged );    # the WebApp deployment further down, for the teardown
 {
     my @args = ( "name=$CBASE", "image=$IMAGE", "cpuser_port=$PORT", 'accept_arbitrary_image_risk=1' );
     my $res  = uapi( $USER, 'install', @args );
@@ -365,8 +385,90 @@ SKIP: {
     my $res = uapi( $USER, 'uninstall', "container_name=$container" );
     ok( $res->{status}, "uapi EAPodman uninstall succeeded" );
 
+    # That was the last container, and this linger is one ea-podman granted, so it
+    # goes back. Checked before anything else runs as the user and re-bootstraps.
+    SKIP: {
+        skip "installed ea-podman predates CPANEL-55309", 2 if !$HAS_LINGER_FIX;
+        ok( wait_for( sub { !-e "/var/lib/systemd/linger/$USER" }, 15 ), "the linger ea-podman granted is released with the last container" );
+        ok( !-e "$GRANTED_LINGER/$USER", "…and the grant record goes with it" );
+    }
+
     my $list = uapi( $USER, 'list' );
     ok( !( $list->{data} && exists $list->{data}{$container} ), "uninstalled container no longer registered" );
+}
+
+#--- a linger ea-podman did NOT grant is left strictly alone ----------
+# Lingering before ea-podman sees it, as an admin (or the WebApp plugin) leaves
+# it. Nothing is recorded, so the last container going away must not take it.
+SKIP: {
+    skip "installed ea-podman predates CPANEL-55309", 5 if !$HAS_LINGER_FIX;
+    skip "ea-podman CLI not found",                   5 if !$CLI;
+
+    unlink "$GRANTED_LINGER/$USER";
+    run_cmd( 'loginctl', 'enable-linger', $USER );
+    ok( -e "/var/lib/systemd/linger/$USER", "baseline: somebody else lingered the account first" );
+
+    my $abase = 'eapod55309adm';
+    my ( $arc, $aout ) = run_as_user(
+        $USER,
+        _sh($CLI) . " install $abase --cpuser-port=$PORT --i-understand-the-risks-do-it-anyway $IMAGE"
+    );
+
+    my ($acontainer) = $aout =~ m/Done, installed:\s*(\S+)/;
+    ok( $acontainer, "install succeeded against an already-lingering account" ) or diag($aout);
+
+  SKIP: {
+        skip "the install did not complete", 3 if !$acontainer;
+
+        ok( !-e "$GRANTED_LINGER/$USER", "no grant is recorded for a linger ea-podman found already on" );
+
+        run_as_user( $USER, _sh($CLI) . " uninstall $acontainer --verify" );
+
+        ok( -e "/var/lib/systemd/linger/$USER", "the linger survives the account's last container" );
+        ok( !-e "$GRANTED_LINGER/$USER",        "…and is still not ours to give back" );
+    }
+
+    run_cmd( 'loginctl', 'disable-linger', $USER );    # leave the account as we found it
+}
+
+#--- a WebApp deployment still installs end to end --------------------
+# --webapp-dir is the cpanel-webapp-plugin's install hook; its linger comes from
+# the plugin, so this covers the deployment itself.
+SKIP: {
+    skip "installed ea-podman predates CPANEL-55309", 4 if !$HAS_LINGER_FIX;
+    skip "ea-podman CLI not found (--webapp-dir is not expressible through UAPI)", 4 if !$CLI;
+
+    run_cmd( 'loginctl', 'disable-linger', $USER );
+    run_cmd( 'systemctl', 'stop', "user\@$uid.service" );
+    wait_for( sub { !-e "/run/user/$uid" }, 5 );
+    unlink "$GRANTED_LINGER/$USER";
+
+    # What the webapp plugin stages, outside ea-podman.d: the application's source,
+    # which the install moves in as the container's webapp/.
+    my $home = ( getpwnam($USER) )[7];
+    $staged = "$home/staged-webapp";
+    run_as_user( $USER, "rm -rf $staged; mkdir -p $staged && echo hi > $staged/index.html" );
+    ok( -e "$staged/index.html", "staged web application is in place" );
+
+    my $wcbase = 'eapod55309wa';
+    my ( $rc, $out ) = run_as_user(
+        $USER,
+        _sh($CLI) . " install $wcbase --cpuser-port=$PORT --webapp-dir=$staged --i-understand-the-risks-do-it-anyway $IMAGE"
+    );
+
+    ($wcontainer) = $out =~ m/Done, installed:\s*(\S+)/;
+    ok( $wcontainer, "WebApp deployment installed a container" ) or diag($out);
+
+  SKIP: {
+        skip "the WebApp install did not complete", 2 if !$wcontainer;
+
+        ok( wait_for( sub { -e "/var/lib/systemd/linger/$USER" }, 15 ), "the WebApp deployment lingered the account" );
+
+        run_as_user( $USER, _sh($CLI) . " uninstall $wcontainer --verify" );
+        undef $wcontainer;    # removed; nothing for the teardown to do
+
+        ok( wait_for( sub { !-e "/var/lib/systemd/linger/$USER" }, 15 ), "and the linger goes back with the account's last container" );
+    }
 }
 
 done_testing();
@@ -438,6 +540,13 @@ END {
     if ( defined $container ) {
         run_cmd( $UAPI, "--user=$USER", '--output=json', 'EAPodman', 'uninstall', "container_name=$container" );
     }
+
+    if ( defined $wcontainer ) {
+        run_cmd( $UAPI, "--user=$USER", '--output=json', 'EAPodman', 'uninstall', "container_name=$wcontainer" );
+    }
+
+    run_as_user( $USER, "rm -rf " . _sh($staged) ) if defined $staged;
+    unlink "$GRANTED_LINGER/$USER";
 
     my $uid_t = ( getpwnam($USER) )[2];
     run_cmd( 'loginctl', 'disable-linger', $USER )         if defined $uid_t;

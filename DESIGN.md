@@ -199,12 +199,73 @@ expressible through the EAPodman UAPI):
   in the root-owned registry (`/opt/cpanel/ea-podman/registered-containers.json`);
   every entry registered without it records `webapp: false`. The attribute is
   established at install time only: the value is collapsed to a strict JSON
-  boolean before it is written, and an upgrade/restore (or a replayed
-  registration) preserves the value already recorded in the registry rather
-  than trusting the caller.
+  boolean before it is written, and an upgrade (or a replayed registration)
+  preserves the value already recorded in the registry rather than trusting the
+  caller. A restore is the one exception, because there is no entry left to
+  preserve it from — every entry was deregistered at the top of the restore, and
+  a restore onto a different server never had one — so it comes from the `webapp`
+  attribute in the account's backup file instead.
+
+  The `webapp` attribute has nothing to do with systemd lingering — see
+  "Lingering" below for that.
 * `--no-start` — generate and enable the container's service but skip the
   final start, so the caller can finish preparing the container's directory
   (e.g. build the moved application in place) and start it explicitly.
+
+### Lingering
+
+Rootless containers run under the account's own `systemd --user` manager, which
+only survives logout and reboot when the account is lingering. So an account that
+has containers must linger — and, per CPANEL-55309, an account that has none must
+not, because a server with hundreds of accounts otherwise ends up with hundreds
+of idle user managers.
+
+Enabling is decided root-side, in the `ENSURE_USER` adminbin, from the root-owned
+container registry: an account gets `loginctl enable-linger` when it has a
+container, or when the caller says it is creating its first (`creating => 1`,
+which only the `install` front-ends and `perform_user_restore()` pass).
+`_ensure_latest_container()` calls `ensure_container_session()` as a backstop, so
+a creation path that neglected to say so still ends up with a session.
+
+Disabling is deliberately narrower. `/var/lib/systemd/linger` records *that* an
+account lingers, never *who* asked, and an administrator or another product may
+have asked for reasons of their own. So `ea-podman` keeps its own record: when
+`ENSURE_USER` finds an account not lingering and turns it on, it writes a marker
+file per account under `/opt/cpanel/ea-podman/granted-linger`
+(`ea_podman::subids::record_linger_grant()`). Two things then have to hold before
+`loginctl disable-linger` runs, both in
+`ea_podman::util::_user_session_is_releasable()`:
+
+1. the record exists **and** still covers the linger that is in place. Records
+   outlive the lingers they were written for, so
+   `ea_podman::subids::grant_covers_current_linger()` compares the two marker
+   files' mtimes — a systemd marker newer than our record is a linger somebody
+   else enabled after ours went away, and is not ours to disable.
+2. the account has no registered containers **and** no container directories
+   left. The second is belt and braces against a registry that has lost track.
+
+`root` is never released. Nothing sweeps the server looking for accounts to tidy
+up, so hosts already affected by CPANEL-55309 need the documented
+`loginctl disable-linger` workaround.
+
+Because the record's timestamp is load-bearing, `ensure_user_session()` does not
+re-run `enable-linger` for an account that already lingers and whose user manager
+is up: systemd re-touches its marker on every `enable-linger`, and that call is on
+the path of every `ea-podman` command an account with containers makes. Left in,
+it moved the marker past our own record on the first command after the install and
+the release never fired again. When the session genuinely does have to be
+re-established (a missing runtime dir, CPANEL-54037) an existing grant is
+re-recorded so it keeps covering the linger it is for.
+
+**The `cpanel-webapp-plugin` deploy path.** The plugin's `ENSURE_SESSION` admin
+function runs `enable-linger` itself, before `Cpanel::WebApps::Podman` calls
+`init_user()`, so `ea-podman` never sees that transition and cannot know whether
+the lingering it finds is the plugin's or an administrator's. The plugin does
+know, and writes the same grant record when its call is what turned lingering on
+(`cpanel-plugins`, CPANEL-55309) — after which removing the WebApp gives the
+lingering back through the ordinary release path above, and a WebApp deployed onto
+an account that was already lingering leaves that lingering alone. Without that
+half in place, a WebApp's lingering is simply never released.
 
 ## Child Documents
 

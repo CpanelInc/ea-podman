@@ -247,6 +247,111 @@ cptest1:165537:65536
 
             ok( exists $hr->{$user_name} );
         };
+
+        # CPANEL-55309: the caller that can see the container registry decides
+        # whether this account gets a lingering session at all.
+        it "should skip the session when the caller says not to" => sub {
+            my $user_name = "cptest9";
+
+            eval { ea_podman::subids::ensure_user_root( $user_name, 65537, 0 ); };
+
+            ok( !-d $conf{mock_rundir} . "/11002", "no runtime dir was bootstrapped" );
+
+            my $hr = ea_podman::subids::get_subuids();
+            ok( exists $hr->{$user_name}, "the subids are still allocated — podman needs those regardless" );
+        };
+
+        it "should ensure the session when the caller asks for one" => sub {
+            my $user_name = "cptest9";
+
+            eval { ea_podman::subids::ensure_user_root( $user_name, 65537, 1 ); };
+
+            ok( -d $conf{mock_rundir} . "/11002" );
+        };
+    };
+
+    describe "linger" => sub {
+        share my %mi;
+        around {
+            %mi = %conf;
+
+            local $conf{mock_dir}    = File::Temp->newdir();
+            local $conf{mock_linger} = $conf{mock_dir} . "/linger";
+            mkdir $conf{mock_linger};
+
+            no warnings qw/once/;
+            local $ea_podman::subids::dir_linger = $conf{mock_linger};
+
+            # Stub the privileged `loginctl disable-linger` call: it removes the
+            # marker file, which is all logind does on the state we can see.
+            local @mi{qw(disabled)} = ( [] );
+            local $ea_podman::subids::linger_disabler = sub {
+                my ($user) = @_;
+                push @{ $mi{disabled} }, $user;
+                unlink "$ea_podman::subids::dir_linger/$user";
+                return 1;
+            };
+
+            yield;
+        };
+
+        it "should see a user that systemd marked as lingering" => sub {
+            Path::Tiny::path("$conf{mock_linger}/cptest1")->touch;
+
+            ok( ea_podman::subids::user_has_linger("cptest1") );
+            ok( !ea_podman::subids::user_has_linger("cptest2") );
+        };
+
+        it "should not consider an undefined or empty user to be lingering" => sub {
+            ok( !ea_podman::subids::user_has_linger(undef) );
+            ok( !ea_podman::subids::user_has_linger("") );
+        };
+
+        it "should disable linger for a lingering user" => sub {
+            Path::Tiny::path("$conf{mock_linger}/cptest1")->touch;
+
+            ok( ea_podman::subids::remove_user_session("cptest1") );
+            is_deeply( $mi{disabled}, ["cptest1"] );
+            ok( !ea_podman::subids::user_has_linger("cptest1") );
+        };
+
+        it "should be a no-op for a user that is not lingering" => sub {
+            ok( ea_podman::subids::remove_user_session("cptest2") );
+            is_deeply( $mi{disabled}, [], "loginctl is not called for a user that is not lingering" );
+        };
+
+        it "should report failure when the linger survives the disable" => sub {
+            Path::Tiny::path("$conf{mock_linger}/cptest1")->touch;
+
+            no warnings qw/once/;
+            local $ea_podman::subids::linger_disabler = sub { return 1; };    # claims success, changes nothing
+
+            ok( !ea_podman::subids::remove_user_session("cptest1"), "the marker is trusted over the exit code" );
+        };
+
+        it "should still report success when loginctl exits non-zero but the linger is gone" => sub {
+            Path::Tiny::path("$conf{mock_linger}/cptest1")->touch;
+
+            no warnings qw/once/;
+            local $ea_podman::subids::linger_disabler = sub {
+                unlink "$ea_podman::subids::dir_linger/$_[0]";
+                return 0;
+            };
+
+            ok( ea_podman::subids::remove_user_session("cptest1") );
+        };
+
+        it "should remove a stale marker left behind by a deleted account" => sub {
+            Path::Tiny::path("$conf{mock_linger}/goneuser")->touch;
+
+            ok( ea_podman::subids::remove_stale_linger_marker("goneuser") );
+            ok( !-e "$conf{mock_linger}/goneuser" );
+            is_deeply( $mi{disabled}, [], "loginctl is never asked to look up an account that no longer exists" );
+        };
+
+        it "should be happy when there is no stale marker to remove" => sub {
+            ok( ea_podman::subids::remove_stale_linger_marker("goneuser") );
+        };
     };
 };
 

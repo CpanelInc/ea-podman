@@ -23,15 +23,21 @@ BEGIN {
     # Script,   in /usr/local/cpanel/scripts/ea-podman
     # AdminBin, in /usr/cpanel/local/bin/admin/Cpanel
 
+    # subids.pm too: the linger bookkeeping these hooks reach lives there, and
+    # they call it directly. util.pm loads it as well, for its own use; the
+    # second require is a no-op.
     if ( -e '/opt/cpanel/ea-podman/lib' ) {    # it has been installed on the machine
         require '/opt/cpanel/ea-podman/lib/ea_podman/util.pm';
+        require '/opt/cpanel/ea-podman/lib/ea_podman/subids.pm';
     }
     else {                                     # this is for testing
         if ( -d 'SOURCES' ) {
             require './SOURCES/util.pm';
+            require './SOURCES/subids.pm';
         }
         else {
             require '/root/git/ea-podman/SOURCES/util.pm';
+            require '/root/git/ea-podman/SOURCES/subids.pm';
         }
     }
 }
@@ -96,7 +102,15 @@ sub _pre_username_change {
     }
 
     # no problem if the user does not have containers
-    return 1, "Success" if ( keys %{$user_containers} == 0 );
+    if ( keys %{$user_containers} == 0 ) {
+
+        # Linger and grant are both keyed on the name that is about to stop
+        # existing, so give ours back while there is still an account to give it
+        # back for. Guarded, so somebody else's linger stays. (CPANEL-55309)
+        ea_podman::util::release_user_session_as_root($user);
+
+        return 1, "Success";
+    }
 
     return 0, qq{
 
@@ -119,7 +133,13 @@ sub _delete_user {
         $user_containers->{ $container->{container_name} } = $container;
     }
 
-    return 1, "Success" if ( keys %{$user_containers} == 0 );
+    # Nothing registered, but the account can still linger on a grant of ours no
+    # removal will come back for (an install that died before registering). It is
+    # going away, so give it back here. (CPANEL-55309)
+    if ( keys %{$user_containers} == 0 ) {
+        ea_podman::util::release_user_session_as_root($user);
+        return 1, "Success";
+    }
 
     # now remove the containers
 
@@ -144,6 +164,18 @@ sub _do_backup {
     my ( $hook, $event ) = @_;
 
     my $user = $event->{user};
+
+    # pkgacct runs for every account, so this hook does too — including for the
+    # overwhelming majority that have never touched a container. Both branches
+    # below reach ea_podman::util::init_user(), which bootstraps a rootless
+    # session for $user as root: it allocates subuid/subgid ranges and runs
+    # `loginctl enable-linger`, starting a user systemd manager that then stays
+    # up forever. perform_user_backup() only discovers there is nothing to back
+    # up *after* all of that, so on a server with hundreds of accounts the first
+    # backup run left every one of them lingering. Ask the (root-owned) registry
+    # first. (CPANEL-55309)
+    return ( 1, "Success" ) if !ea_podman::util::user_has_containers_as_root($user);
+
     if ( $user ne "root" ) {
 
         # /scripts/pkgacct is a perl script on cPanel binaries, and cannot be used to execute

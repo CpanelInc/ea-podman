@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 23
+%define release_prefix 24
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -151,6 +151,17 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-cmd.openapi.yaml
 
 %changelog
+* Thu Jul 30 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-24
+- CPANEL-55143: Misc improvements for wider usage and future plans
+- CPANEL-55350: Run tar via list-form system() and validate the restore tarball path
+- CPANEL-55336: Add additional container name sanity checks
+- CPANEL-55342: Serialize container registry writes under one exclusive lock
+- CPANEL-55337: Verify the target container belongs to the user for deregistration
+- CPANEL-55335: Allocate subuid/subgid ranges under one exclusive lock and
+  refuse to run an account whose range is not exclusively its own
+- CPANEL-55309: Never linger an account that has no containers, and release a
+  linger ea-podman enabled once the account has no containers left
+
 * Tue Jul 28 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-23
 - EA4-295: Make operationId on EA4Podman API more MCP friendly
 

@@ -36,6 +36,13 @@ to call it. See `DESIGN.md` for the internals.
   bootstrap (allocate subuid/subgid and run `loginctl enable-linger`, as root
   via the ea-podman adminbin) so the account gets a persistent rootless user
   session (`/run/user/<uid>` + a lingering `user@<uid>.service`).
+- Only a *container* operation, though. Since CPANEL-55309 the linger half of
+  that bootstrap is withheld from an account with no containers: `list`,
+  `containers` and friends get the subuid/subgid ranges and nothing else, and
+  `install` gets a session because it says it is creating the account's first
+  container. Where ea-podman is the one that turns the linger on it records the
+  fact, and hands it back when the account's last container goes — see
+  "Does `ea-podman` ever turn lingering back off?" in the README.
 
 ## Who can run it
 
