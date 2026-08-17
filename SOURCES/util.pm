@@ -534,6 +534,67 @@ sub get_pkg_from_container_name {
     return $container_name;
 }
 
+# What `podman generate systemd` leaves to systemd's defaults: 5 restarts 100ms
+# apart, so a container that crashes on start is failed forever half a second
+# in. 137 is left out of SuccessExitStatus — that is also an OOM kill.
+our %container_unit_directives = (
+    Unit => [
+        "StartLimitIntervalSec=300",
+        "StartLimitBurst=3",
+    ],
+    Service => [
+        "RestartSec=5",
+        "SuccessExitStatus=143",
+    ],
+);
+
+# Add %container_unit_directives to a generated unit, under the section each
+# belongs to. Leaves alone any the generator already wrote, so it is idempotent.
+# Pure args-in/string-out so it is unit-testable.
+sub _add_container_unit_directives {
+    my ($unit) = @_;
+
+    my %present;    # section => { lc directive name => 1 }
+    my $section = "";
+    for my $line ( split( m/\n/, $unit, -1 ) ) {
+        $section                    = $1 if $line =~ m/^\s*\[(\w+)\]\s*$/;
+        $present{$section}{ lc $1 } = 1  if $line =~ m/^\s*(\w+)\s*=/;
+    }
+
+    my ( @out, %added );
+    for my $line ( split( m/\n/, $unit, -1 ) ) {
+        push @out, $line;
+        next if $line !~ m/^\s*\[(\w+)\]\s*$/;
+
+        my $sec = $1;
+        $added{$sec} = 1;
+        for my $directive ( @{ $container_unit_directives{$sec} || [] } ) {
+            my ($name) = $directive =~ m/^(\w+)=/;
+            push @out, $directive if !$present{$sec}{ lc $name };
+        }
+    }
+
+    # podman writes both sections today; write one it did not rather than
+    # silently dropping the directives that belong in it.
+    for my $sec ( sort keys %container_unit_directives ) {
+        next if $added{$sec};
+        push @out, "[$sec]", @{ $container_unit_directives{$sec} }, "";
+    }
+
+    return join( "\n", @out );
+}
+
+# Its own sub so tests have a seam that does not need podman.
+sub _podman_generate_systemd {
+    my ($container_name) = @_;
+
+    my $container_name_qx = quotemeta($container_name);
+    my $unit              = `podman generate systemd --restart-policy on-failure --name $container_name_qx`;
+    die "Failed to generate service file\n" if $? != 0;
+
+    return $unit;
+}
+
 sub generate_container_service {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
@@ -542,14 +603,32 @@ sub generate_container_service {
     File::Path::Tiny::mk( "$homedir/.config/systemd/user", 0750 );
     my $service_name = get_container_service_name($container_name);
 
-    my $container_name_qx = quotemeta($container_name);
-    my $service_name_qx   = quotemeta($service_name);
+    my $unit = _add_container_unit_directives( _podman_generate_systemd($container_name) );
+    path("$homedir/.config/systemd/user/$service_name")->spew($unit);
 
-    `podman generate systemd --restart-policy on-failure --name $container_name_qx > ~/.config/systemd/user/$service_name_qx`;
-    die "Failed to generate service file\n" if $? != 0;
+    # The unit changed on disk; without this the manager goes on using the copy
+    # it already parsed, so an existing container would keep its old directives.
+    sysctl("daemon-reload") || warn "Failed to reload the systemd user manager, “$service_name” may still be running under its previous settings\n";
 
     sysctl( enable => $service_name ) || die "Failed to enable “$service_name”\n";
     return 1;
+}
+
+# Silent sysctl(), since systemctl gripes about an unloaded unit and system()
+# cannot suppress that. Its own sub so tests have a seam.
+sub _systemctl_quiet {
+    my (@args) = @_;
+
+    my $args_qx = join( " ", map { quotemeta } @args );
+    `systemctl --user $args_qx 2> /dev/null > /dev/null`;
+
+    return $? == 0 ? 1 : 0;
+}
+
+# Clear the `failed` state a stop or a used-up StartLimitBurst leaves behind.
+sub reset_container_unit_failure {
+    my ($container_name) = @_;
+    return _systemctl_quiet( "reset-failed", get_container_service_name($container_name) );
 }
 
 # Install-time hook for the cpanel-webapp-plugin (--webapp-dir). Package
@@ -847,8 +926,12 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
 
     generate_container_service($container_name);
 
-    my $service_name = get_container_service_name($container_name);
-    sysctl( start => $service_name ) if !$no_start;
+    if ( !$no_start ) {
+
+        # else an upgrade of a container that used up its restarts cannot start it
+        reset_container_unit_failure($container_name);
+        sysctl( start => get_container_service_name($container_name) );
+    }
 }
 
 # Validate a --webapp-dir value: the absolute path of the staged directory
