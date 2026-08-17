@@ -457,7 +457,7 @@ sub create_user_container {
         @ulimit = ( "--ulimit" => "nproc=$cap:$cap" );
     }
 
-    return podman( 'create', "--hostname" => $container_name, "--name" => $container_name, @ulimit, @start_args );
+    return podman( 'create', "--name" => $container_name, @ulimit, @start_args );
 }
 
 # The RLIMIT_NPROC hard cap of the calling user's systemd --user manager (which

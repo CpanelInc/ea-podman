@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 24
+%define release_prefix 25
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -151,6 +151,11 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-cmd.openapi.yaml
 
 %changelog
+* Fri Aug 14 2026 Julian Brown <julian.brown@webpros.com> - 1.0-25
+- CPANEL-55825: Do not set the container's internal hostname to the
+  container name, since the kernel rejects hostnames over 64 bytes and a
+  legal app name can produce a longer container name than that
+
 * Thu Jul 30 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-24
 - CPANEL-55143: Misc improvements for wider usage and future plans
 - CPANEL-55350: Run tar via list-form system() and validate the restore tarball path
