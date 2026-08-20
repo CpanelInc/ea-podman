@@ -284,6 +284,18 @@ lingering back through the ordinary release path above, and a WebApp deployed on
 an account that was already lingering leaves that lingering alone. Without that
 half in place, a WebApp's lingering is simply never released.
 
+**The restore path calls the plugin back.** A restore reassigns every host port
+and re-points nothing, so a WebApp's Apache include still names the port from
+before the backup and every request 503s forever. Both restore paths (tarball
+and manifest-only) therefore end in `_warn_if_ports_changed()`, which calls the
+plugin's
+`Cpanel::WebApps::Repair::repair_current_user()` — once for the whole restore,
+because the plugin batches the rewrites into one Apache reload — and skips the
+"ports have changed" warning for the containers it reports repaired. The call is
+guarded (file present → `require` → `can()`) and its failure is warned about and
+no more, so the two packages ship in either order and a restore never fails over
+a repair (CPANEL-55949).
+
 ## Child Documents
 
 * None
