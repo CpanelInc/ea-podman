@@ -282,7 +282,15 @@ sub _lifecycle ( $args, $action ) {
         sub {
             ea_podman::util::validate_user_container_name($container_name);
             my $service = ea_podman::util::get_container_service_name($container_name);
-            return ea_podman::util::sysctl( $action => $service );
+
+            # Before a bring-up and after a stop, never after a start — that
+            # would hide a real failure from status().
+            my $stopping = $action eq 'stop';
+            ea_podman::util::reset_container_unit_failure($container_name) if !$stopping;
+            my $rv = ea_podman::util::sysctl( $action => $service );
+            ea_podman::util::reset_container_unit_failure($container_name) if $stopping;
+
+            return $rv;
         }
     );
 

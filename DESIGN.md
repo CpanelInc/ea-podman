@@ -97,6 +97,23 @@ We are going with user level systemd:
 1. `Ubic` does not work well with containers (init style scripts).
 2. `podman` has a mechanism that makes it dead simple to do.
 
+`podman generate systemd` sets only `Restart=on-failure`, and systemd's defaults
+give a container 5 restarts 100ms apart — one that crashes on start burns all
+five in half a second and stays `failed`. `generate_container_service()` adds
+`%container_unit_directives` to the generated unit: three tries 5s apart in a 5
+minute window, plus `SuccessExitStatus=143` so a deliberate stop of a container
+whose PID 1 exits on SIGTERM is not a failure. 137 is left out — that is also an
+OOM kill.
+
+That only covers a PID 1 that handles SIGTERM; the kernel does not apply default
+signal dispositions to PID 1 of a namespace, so one that does not is SIGKILLed by
+`podman stop` and exits 137. So `start`/`stop`/`restart` and the install/upgrade
+bring-up call `reset_container_unit_failure()` — before a bring-up, since the 5
+minute window would otherwise refuse to start a container the user just fixed,
+and after a stop, but never after a start, which would hide a real failure from
+`status`. (`daemon-reload` happens to clear the window too, but that is systemd's
+business, not a documented guarantee.)
+
 ### If it needs files on the host
 
 Each instance will have a directory `~/ea-podman.d/<CONTAINER_NAME>/`.
