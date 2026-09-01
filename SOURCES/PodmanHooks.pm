@@ -90,8 +90,13 @@ sub _compile_podman {
 sub _pre_username_change {
     my ( $hook, $event ) = @_;
 
-    # no work if the username is not changed
-    return ( 1, "Success" ) if ( $event->{newuser} && $event->{newuser} eq $event->{user} );
+    # no work if the username is not changed. modifyacct's pre-hook payload
+    # only carries newuser when the caller actually passed it, so a call that
+    # never touches the username at all (e.g. changing an unrelated cpuser
+    # field) reaches us with newuser absent, not equal-to-user - treat that
+    # the same as "not a rename" instead of falling through to the containers
+    # check below and refusing an edit that was never a rename.
+    return ( 1, "Success" ) if ( !length( $event->{newuser} // '' ) || $event->{newuser} eq $event->{user} );
 
     my $user = $event->{user};
 

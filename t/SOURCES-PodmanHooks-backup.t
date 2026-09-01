@@ -172,4 +172,17 @@ subtest 'a rename that is not really a rename is still a no-op' => sub {
     is_deeply( \@released, [], "the account is not going anywhere, so its session is not touched" );
 };
 
+subtest 'a modifyacct call that never mentions newuser is not treated as a rename, even with containers' => sub {
+    my $tmp = _registry( { name => "redis.bob.01", user => "bob" } );
+
+    my @released;
+    no warnings qw(redefine once);
+    local *ea_podman::util::release_user_session_as_root = sub { push @released, $_[0]; return 1; };
+
+    my @rv = PodmanHooks::_pre_username_change( {}, { user => "bob" } );
+
+    is_deeply( \@rv,       [ 1, "Success" ], "the unrelated field edit is allowed" );
+    is_deeply( \@released, [], "and nothing is released for an account that keeps its containers" );
+};
+
 done_testing();

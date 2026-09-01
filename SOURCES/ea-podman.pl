@@ -448,6 +448,9 @@ sub get_dispatch_args {
                 ea_podman::util::init_user();
 
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
+
+                # else a container that used up its restarts cannot start for five minutes
+                ea_podman::util::reset_container_unit_failure($container_name);
                 ea_podman::util::sysctl( start => $service_name );
             }
         },
@@ -463,6 +466,9 @@ sub get_dispatch_args {
 
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
                 ea_podman::util::sysctl( stop => $service_name );
+
+                # a PID 1 that ignores SIGTERM is SIGKILLed and exits 137, recorded as a failure
+                ea_podman::util::reset_container_unit_failure($container_name);
             }
         },
         restart => {
@@ -476,6 +482,8 @@ sub get_dispatch_args {
                 ea_podman::util::init_user();
 
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
+
+                ea_podman::util::reset_container_unit_failure($container_name);
                 ea_podman::util::sysctl( restart => $service_name );
             }
         },
