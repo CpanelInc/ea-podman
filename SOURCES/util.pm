@@ -139,8 +139,29 @@ sub ensure_su_login {    # needed when $user is from root `su - $user` / AccessI
     # missing, the privileged bootstrap did not run (or linger was torn down):
     # fail with a clear, actionable error rather than letting podman emit a
     # cryptic “Failed to connect to user scope bus” downstream.
+    #
+    # The first line’s wording is load-bearing: ea-podman.pl matches
+    # /rootless runtime directory .* does not exist/ on it to fall back to the
+    # EAPodman UAPI for a CageFS account (CPANEL-54672). Append to this die, do
+    # not reword that sentence.
     my $user = getpwuid($>) // $>;
-    die "ea-podman: the rootless runtime directory “$ENV{XDG_RUNTIME_DIR}” for “$user” does not exist.\n" . "The privileged setup must run first so `loginctl enable-linger $user` can create it (run `ea-podman subids --ensure` as root, or invoke via the ENSURE_USER adminbin / the cpsrvd path).\n";
+    die "ea-podman: the rootless runtime directory “$ENV{XDG_RUNTIME_DIR}” for “$user” does not exist.\n" . "The privileged setup must run first so `loginctl enable-linger $user` can create it (run `ea-podman subids --ensure` as root, or invoke via the ENSURE_USER adminbin / the cpsrvd path).\n" . _masked_user_manager_note();
+}
+
+# A masked `user@.service` is the other way an account ends up with no runtime
+# dir/manager — not something the privileged setup the die above names can be
+# blamed for. This note is printed *because* the root-side bypass did not get
+# the manager up, so it must not claim that it did. (EA4-319; the bypass is
+# ea_podman::subids::with_user_manager_unmasked().)
+sub _masked_user_manager_note {
+
+    # subids.pm is loaded by the guarded sibling require at the top of this file,
+    # but keyed on an older symbol, so a vendored/stale copy can be in %INC
+    # without this one. No explanation is better than dying for a footnote.
+    return "" if !defined &ea_podman::subids::masked_user_manager_explanation;
+    return "" if !ea_podman::subids::user_manager_mask_file();
+
+    return "Note: " . ea_podman::subids::masked_user_manager_explanation();
 }
 
 sub podman {

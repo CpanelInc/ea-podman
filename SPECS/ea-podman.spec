@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 26
+%define release_prefix 27
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -130,6 +130,11 @@ rm -rf %{buildroot}
 
 %files
 /opt/cpanel/ea-podman/
+# Transient runtime files created under the packaged dir at runtime; not
+# shipped, but declared so rpm -e/prune knows to drop them. (`user@.service`
+# mask window bookkeeping, EA4-319.)
+%ghost /opt/cpanel/ea-podman/user-manager-mask.lock
+%ghost /opt/cpanel/ea-podman/user-manager-mask.state
 /usr/local/cpanel/scripts/ea-podman
 %attr(0755,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman
 %attr(0744,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
@@ -151,6 +156,20 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-cmd.openapi.yaml
 
 %changelog
+* Tue Sep 01 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-27
+- EA4-319: Add compatibility for cagefs 7.6.39, which masks the user@.service
+  template (CloudLinux CLOS-4517) and so stops the per-user systemd manager
+  rootless podman needs from ever starting. ea-podman now lifts that mask only
+  for as long as it takes to start an account's manager and then puts it
+  straight back, so the mask is in place at rest; the manager survives the
+  remask because masking a unit does not stop an already-running instance. The
+  bypass is a no-op off a cagefs host, only runs for an account whose manager is
+  not already up, and is restored on every exit path including a crash. Also
+  asks systemd for the manager directly rather than relying on enable-linger
+  alone, so an account that already lingers but has no session bus (a cagefs
+  host after a reboot) is repaired instead of failing, and names the mask in the
+  error when the manager still will not start
+
 * Mon Aug 17 2026 Jared Wright <jared.wright@webpros.com> - 1.0-26
 - CPANEL-55871: Give generated container units sane restart defaults, so a
   container that crashes on start gets three real retries instead of five in

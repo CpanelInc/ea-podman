@@ -7,6 +7,9 @@
 use strict;
 use warnings;
 
+# Despite the name, this module owns the whole root-side rootless-session
+# bootstrap, not just /etc/subuid and /etc/subgid. If you are looking for where
+# ea-podman touches systemd as root, it is here.
 package ea_podman::subids;
 
 use Path::Tiny 'path';
@@ -32,6 +35,24 @@ our $dir_linger = "/var/lib/systemd/linger";
 # linger is one we turned on”. $dir_linger says an account lingers, never who
 # asked for it. Root owned, and not packaged so an upgrade leaves it be.
 our $dir_granted_linger = "/opt/cpanel/ea-podman/granted-linger";
+
+# CageFS 7.6.39+ masks the `user@.service` *template*, so no per-user systemd
+# manager can start and rootless podman has nothing to talk to. See
+# docs/container-shell-access.md “CageFS 7.6.39+ masks user@.service” for why
+# CloudLinux does it and why we cannot just leave it unmasked, and
+# with_user_manager_unmasked() for what we do about it. (EA4-319)
+#
+# A mask is the unit name symlinked to /dev/null. Two possible locations,
+# because `systemctl mask` writes under /etc and `systemctl mask --runtime`
+# writes under /run; which one it is in is what a restore has to preserve.
+our $file_mask_etc = "/etc/systemd/system/user\@.service";
+our $file_mask_run = "/run/systemd/system/user\@.service";
+
+# $file_mask_state records an in-progress window, so a run that is killed
+# outright (where no signal handler gets to fire) still has its mask put back —
+# by the next run through the guard.
+our $file_mask_lock  = "/opt/cpanel/ea-podman/user-manager-mask.lock";
+our $file_mask_state = "/opt/cpanel/ea-podman/user-manager-mask.state";
 
 sub ensure_user_root {
     my ( $user, $num_uids, $ensure_session ) = @_;
@@ -142,8 +163,9 @@ sub _ensure_subids {
 # (and UPS-504).
 #
 # `loginctl enable-linger <user>`, run as root, instead creates
-# /run/user/<uid> as a tmpfs *and* starts user@<uid>.service (the user systemd
-# manager), persisting both across logout/reboot — exactly what rootless
+# /run/user/<uid> as a tmpfs *and* — on first enable, see ensure_user_session()
+# — starts user@<uid>.service (the user systemd manager), persisting both
+# across logout/reboot — exactly what rootless
 # container persistence requires. Held in a package variable so tests can
 # stub the privileged call.
 our $linger_enabler = \&_enable_linger;
@@ -153,6 +175,208 @@ sub _enable_linger {
     system( "loginctl", "enable-linger", $user );
     return $? == 0;
 }
+
+# Package variables so tests can stub the privileged calls, same as $linger_enabler.
+our $daemon_reloader      = \&_daemon_reload;
+our $user_manager_starter = \&_start_user_manager;
+
+sub _daemon_reload {
+    system( "systemctl", "daemon-reload" );
+    return $? == 0;
+}
+
+sub _start_user_manager {
+    my ($uid) = @_;
+    system( "systemctl", "start", "user\@$uid.service" );
+    return $? == 0;
+}
+
+# Which of the two locations `user@.service` is masked in, or undef when it is
+# not masked.
+#
+# Read off the filesystem rather than shelled out to
+# `systemctl is-enabled user@.service`. Same reasoning as $dir_linger above: it
+# is cheaper, it is far easier to test, and `is-enabled` only says “masked”
+# without saying where. Per systemd.unit(5) an empty unit file masks too, so it
+# counts here; a restore normalises it to the canonical symlink.
+sub user_manager_mask_file {
+    for my $file ( $file_mask_etc, $file_mask_run ) {
+        next if !lstat($file);
+
+        return $file if -l _  && ( readlink($file) // '' ) eq "/dev/null";
+        return $file if !-l _ && -z _;
+    }
+
+    return;
+}
+
+# Put the mask back. Idempotent: a mask already in place is left alone, which is
+# what makes it safe to call on a path we never got as far as lifting.
+sub _restore_user_manager_mask {
+    my ($file) = @_;
+
+    return 0 if !defined $file;
+    return 0 if $file ne $file_mask_etc && $file ne $file_mask_run;    # not ours to create
+
+    if ( !lstat($file) ) {
+
+        # /run/systemd/system may not exist yet. mkpath dies rather than
+        # returning false, and this sub runs on the error path, so it must not be
+        # allowed to throw: the symlink below is the authoritative check and
+        # reports the real errno either way.
+        eval { path($file)->parent->mkpath; 1 };
+
+        if ( !symlink( "/dev/null", $file ) ) {
+
+            # Failing to put the mask back leaves CloudLinux’s CLOS-4517 fix off
+            # on this host, which is a good deal worse than whatever we were
+            # doing at the time. Say so loudly, and keep $file_mask_state so the
+            # next run through the guard tries again — unlinking it here would
+            # strand the host unmasked with nothing left to notice.
+            warn "ea-podman: could not put the `user\@.service` mask back at “$file”: $!\n" . "This host is left with the mask lifted. Restore it with `systemctl mask user\@.service` (`--runtime` if it was a runtime mask); ea-podman will also retry on its next run.\n";
+            return 0;
+        }
+
+        $daemon_reloader->();
+    }
+
+    unlink $file_mask_state;
+
+    return 1;
+}
+
+sub _write_mask_state {
+    my ($file) = @_;
+
+    path($file_mask_state)->spew("$file\n");    # parent is packaged, always there
+
+    return;
+}
+
+sub _read_mask_state {
+    return if !-e $file_mask_state;
+
+    chomp( my $file = path($file_mask_state)->slurp );
+
+    # Only ever one of the two paths we mask. Anything else is not ours to
+    # unlink or create, and this is the one place the value is trusted.
+    return if $file ne $file_mask_etc && $file ne $file_mask_run;
+
+    return $file;
+}
+
+# Set while a window is open, so a call inside $code does not unmask and remask
+# a second time — and does not deadlock: flock() is per open file description,
+# so a nested open of the lock file would block forever against this process’s
+# own lock.
+our $_in_window = 0;
+
+# Run $code with `user@.service` temporarily unmasked, then put the mask back
+# immediately. CloudLinux’s CLOS-4517 fix stays in place at rest and we bypass it
+# only for the operation that cannot work without it, for only as long as that
+# operation takes. It works because masking a unit does not stop an instance
+# that is already running — only new starts are refused — so a manager started
+# inside the window keeps running afterwards.
+#
+#   * Only the manager *start* needs this. The `systemctl --user` calls
+#     (ea_podman::util::sysctl, _systemctl_quiet) talk to the account’s
+#     already-running manager over its own bus, where the template mask is
+#     irrelevant; wrapping those would buy nothing and cost two
+#     `daemon-reload`s plus a host-wide window on every container
+#     start/stop/status.
+#   * While the window is open the template is unmasked host-wide, not
+#     per-account. It is short and serialized, but it cannot be made per-account
+#     without leaving a persistent carve-out on disk, which is the thing we are
+#     avoiding.
+#
+# See docs/container-shell-access.md “CageFS 7.6.39+ masks user@.service”.
+sub with_user_manager_unmasked {
+    my ($code) = @_;
+
+    if ($_in_window) { $code->(); return }
+
+    # Fast path only: no lock and no daemon-reload, so a non-cagefs host pays
+    # nothing. Another process may have the mask lifted this instant, so the
+    # read that counts is the one under the lock below.
+    if ( !user_manager_mask_file() && !-e $file_mask_state ) { $code->(); return }
+
+    # Serialize: two accounts bootstrapping at once must not have one of them
+    # remask while the other still needs the window open. Same
+    # one-exclusive-flock shape as _ensure_subids() above.
+    open my $lock_fh, ">>", $file_mask_lock or die "Could not open “$file_mask_lock”: $!\n";
+    flock( $lock_fh, LOCK_EX ) or die "Could not lock “$file_mask_lock”: $!\n";
+
+    # Under the lock, a state file means a predecessor was killed mid-window and
+    # left the template unmasked — a live window holds this lock, so we could not
+    # have got it. Its recorded mask is the one to put back on the way out, and
+    # adopting it here (rather than restoring it now, only to lift it again two
+    # statements later) saves a wasted symlink/daemon-reload round trip.
+    my $file = user_manager_mask_file() // _read_mask_state();
+
+    if ( !defined $file ) { $code->(); return }
+
+    _write_mask_state($file);
+
+    my $bail = sub { die "ea-podman: SIG$_[0] while the `user\@.service` mask was lifted\n" };
+    local ( $SIG{INT}, $SIG{TERM}, $SIG{HUP} ) = ( $bail, $bail, $bail );
+
+    # The eval, not a guard object with a DESTROY: the restore below then runs on
+    # every way out of here — normal return, a die from $code, a die from the
+    # unlink itself, or one of the signals above. A `kill -9` is the only case
+    # nothing in-process can cover, which is what $file_mask_state is for.
+    eval {
+        # Unlink the symlink ourselves rather than call `systemctl unmask`, so the
+        # restore is byte-exact: --runtime cannot be combined with unmask
+        # (systemctl(1)), so a mask/unmask round trip would silently relocate a
+        # runtime mask into /etc. Already gone when we adopted a killed run’s
+        # window, and then there is nothing to lift.
+        if ( lstat($file) ) {
+            unlink $file or die "Could not unmask “$file”: $!\n";
+            $daemon_reloader->();
+        }
+
+        local $_in_window = 1;
+        $code->();
+
+        1;
+    };
+    my $err = $@;
+
+    _restore_user_manager_mask($file);
+
+    die $err if $err;
+
+    return;
+}
+
+# The one statement of what the mask is and where it comes from, so the
+# root-side and cpuser-side messages cannot drift apart.
+sub masked_user_manager_explanation {
+    return "`user\@.service` is masked on this server, which stops any per-user systemd manager from starting. CageFS 7.6.39 and newer mask it deliberately (CloudLinux CLOS-4517) and `cagefsctl --hook-install` re-applies the mask on every cagefs install and upgrade.\n";
+}
+
+# Appended to both dies below, because either can be the one that fires.
+#
+# EA4-319 open question 2 assumed only the bus would be missing, on the grounds
+# that user-runtime-dir@.service is not itself masked. Measured on systemd 239,
+# that is wrong: user@.service has Requires=user-runtime-dir@%i.service, so
+# masking user@ fails the whole job and the runtime dir never gets created
+# either — with or without a login session. The runtime-directory die is
+# therefore the one a masked host actually hits, which also means the original
+# “the runtime directory did not become available” report was accurate rather
+# than misleading.
+sub _masked_user_manager_hint {
+    my ($uid) = @_;
+
+    my $file = user_manager_mask_file() or return "";
+
+    return "\n" . masked_user_manager_explanation() . "The mask is at “$file”. ea-podman lifts it only for as long as it takes to start the account’s manager and then puts it straight back; here that bypass did not take effect.\n" . "Check `systemctl status user\@$uid.service` and `journalctl -u user\@$uid.service` for why the manager itself failed.\n";
+}
+
+# The readiness poll below, as package variables so a test can exercise the
+# timeout without actually sleeping for it.
+our $poll_iterations = 100;
+our $poll_sleeper    = sub { Time::HiRes::usleep(100_000) };    # 0.1s × 100 ≈ 10s max
 
 sub ensure_user_session {
     my ($user) = @_;
@@ -168,39 +392,73 @@ sub ensure_user_session {
     # blind re-enable would age our own grant out of covering the linger it
     # granted, and the release on the last container would never happen.
     # (CPANEL-55309)
+    #
+    # It is also what keeps the unmask window below off the hot path entirely: a
+    # healthy account never reaches it, so on a cagefs host we pay for the bypass
+    # once per cold account, not once per command.
     return if user_has_linger($user) && -d "$dir_run/$uid" && -e "$dir_run/$uid/bus";
 
     mkdir $dir_run;    # parent /run/user; harmless when it already exists
 
-    # Re-enabling for an account we already hold a grant on moves systemd’s
-    # marker ahead of that grant, so the grant has to move with it or it stops
-    # covering the very linger it is for. Recorded around the enable, not after
-    # the readiness poll below, which can die.
-    my $regrant = user_has_granted_linger($user);
-
-    $linger_enabler->($user);
-
-    record_linger_grant($user) if $regrant;
-
-    # enable-linger is asynchronous: it returns *before* logind has finished
-    # creating /run/user/<uid> AND starting user@<uid>.service. The readiness
-    # signal that `systemctl --user` + rootless podman actually need is the
-    # user manager’s dbus socket at /run/user/<uid>/bus — the directory itself
-    # appears well before the manager is up, so polling only for the dir races
-    # and leaves podman with “Failed to connect to user scope bus”. Poll for
-    # the bus socket.
     my $rundir = "$dir_run/$uid";
     my $bus    = "$rundir/bus";
-    for ( 1 .. 100 ) {
-        last if -d $rundir && -e $bus;
-        Time::HiRes::usleep(100_000);    # 0.1s × 100 ≈ 10s max
+
+    # Two calls, two different jobs, both refused while `user@.service` is
+    # masked, so both go in one window:
+    #
+    #   * enable-linger owns *persistence* — the /var/lib/systemd/linger marker,
+    #     so the account’s containers survive logout and reboot.
+    #   * the explicit start owns *up right now*, which enable-linger cannot do:
+    #     for an account that already lingers, logind will not retry a manager it
+    #     believes it already handled. That is exactly the state a cagefs host is
+    #     in after a reboot — linger marker present, no runtime dir, no bus —
+    #     where enable-linger alone is a no-op.
+    #
+    # The `!-e $bus` skip on the start is an “already up” shortcut, not
+    # selectivity. When it does run, `systemctl start` blocks until the job
+    # settles, which is what lets the window close before the poll below rather
+    # than around it. (EA4-319)
+    my $start_failed;
+    with_user_manager_unmasked(
+        sub {
+            # Re-enabling for an account we already hold a grant on moves systemd’s
+            # marker ahead of that grant, so the grant has to move with it or it stops
+            # covering the very linger it is for. Recorded around the enable, not after
+            # the readiness poll below, which can die.
+            my $regrant = user_has_granted_linger($user);
+
+            $linger_enabler->($user);
+
+            record_linger_grant($user) if $regrant;
+
+            $start_failed = !$user_manager_starter->($uid) if !-e $bus;
+
+            return;
+        }
+    );
+
+    # Deliberately OUTSIDE the window. The mask only refuses new *starts* of
+    # user@.service; waiting for a socket to appear under /run/user/<uid> touches
+    # nothing it gates. Polling inside would hold the host-wide unmask window and
+    # the lock for up to the full ceiling, serializing every other account behind
+    # one slow bootstrap.
+    #
+    # The readiness signal `systemctl --user` and rootless podman actually need is
+    # the manager’s dbus socket, not the directory: the directory appears well
+    # before the manager is up, so polling only for it races and leaves podman
+    # with “Failed to connect to user scope bus”.
+    if ( !$start_failed ) {
+        for ( 1 .. $poll_iterations ) {
+            last if -d $rundir && -e $bus;
+            $poll_sleeper->();
+        }
     }
 
     if ( !-d $rundir ) {
-        die "The directory “$rundir” is missing and could not be created by `loginctl enable-linger $user`.\n";
+        die "The directory “$rundir” is missing: neither `loginctl enable-linger $user` nor `systemctl start user\@$uid.service` produced it.\n" . _masked_user_manager_hint($uid);
     }
     if ( !-e $bus ) {
-        die "The user session bus “$bus” did not appear after `loginctl enable-linger $user` (the user systemd manager did not start).\n";
+        die "The user session bus “$bus” did not appear after `loginctl enable-linger $user` and `systemctl start user\@$uid.service` (the user systemd manager did not start).\n" . _masked_user_manager_hint($uid);
     }
 
     return;

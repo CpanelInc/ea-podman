@@ -366,6 +366,14 @@ sub _op_cli {
     like( $out, qr/enabled/i, "CageFS is enabled for $USER" );
 }
 
+# EA4-319: cagefs 7.6.39+ masks the user@.service template (CloudLinux
+# CLOS-4517), so no per-user systemd manager can start. Recorded before install
+# so the after-check can prove the mask went back *identically* — a bypass that
+# quietly relocated or dropped it would be a regression in CloudLinux's security
+# fix, not a fix for ours.
+my $MASK_BEFORE = _user_manager_mask_file();
+diag( "user\@.service mask before install: " . ( $MASK_BEFORE // "(not masked)" ) );
+
 ok( !-e "/run/user/$uid", "baseline: no /run/user/$uid before install" );
 {
     my ( $rc, $out ) = run_cmd( 'loginctl', 'show-user', $USER, '-p', 'Linger' );
@@ -415,6 +423,40 @@ ok( -S "/run/user/$uid/bus", "user dbus socket /run/user/$uid/bus exists" );
 {
     my ( $rc, $out ) = run_cmd( 'systemctl', 'is-active', "user\@$uid.service" );
     like( $out, qr/\bactive\b/, "user\@$uid.service (user systemd manager) is active" );
+}
+
+# EA4-319: the manager above had to be started through a masked template, so the
+# mask was lifted to do it. The remask-survival check is the property the whole
+# approach rests on: masking does not stop an already-running instance.
+{
+    my $after = _user_manager_mask_file();
+
+    if ($MASK_BEFORE) {
+        is( $after,                         $MASK_BEFORE, "the user\@.service mask is back in the same location after the deploy (no /etc <-> /run relocation)" );
+        is( readlink( $after // '' ) // '', "/dev/null",  "as the canonical mask symlink" );
+
+        my ( $rc, $out ) = run_cmd( 'systemctl', 'is-active', "user\@$uid.service" );
+        like( $out, qr/\bactive\b/, "and the manager started inside the window survives the remask" );
+    }
+    else {
+        is( $after, undef, "nothing was masked before the deploy, and nothing is masked after it" );
+    }
+
+    ok( !-e "/opt/cpanel/ea-podman/user-manager-mask.state", "no in-progress unmask record is left behind" );
+}
+
+# EA4-319: `cagefsctl --hook-install` re-applies the mask on every cagefs install
+# and upgrade, so what we did must not fight with that.
+SKIP: {
+    skip "no user\@.service mask on this host", 2 if !$MASK_BEFORE;
+
+    _cagefsctl('--hook-install');
+
+    ok( _user_manager_mask_file(), "the mask is in place after `cagefsctl --hook-install` re-applies it" );
+
+    my $res = op('list');
+    ok( $res->{status}, "an already-bootstrapped account still works after a cagefs hook re-install" )
+      or diag( "errors: " . join( "; ", @{ $res->{errors} || [] } ) );
 }
 
 #--- the container is registered (authoritative: same context as install)
@@ -511,6 +553,23 @@ done_testing();
 #---------------------------------------------------------------------
 # helpers (cont.)
 #---------------------------------------------------------------------
+# Which location `user@.service` is masked in, or undef. Deliberately an
+# independent oracle: re-derived from the filesystem rather than calling
+# ea_podman::subids::user_manager_mask_file(), so it cannot agree with the code
+# under test tautologically — and so this test does not have to load a module
+# out of the *installed* package. Per systemd.unit(5) a unit is masked when its
+# name is symlinked to /dev/null or is an empty file. (EA4-319)
+sub _user_manager_mask_file {
+    for my $file ( "/etc/systemd/system/user\@.service", "/run/systemd/system/user\@.service" ) {
+        next if !lstat($file);
+
+        return $file if -l _  && ( readlink($file) // '' ) eq "/dev/null";
+        return $file if !-l _ && -z _;
+    }
+
+    return;
+}
+
 sub _in_path {
     my ($bin) = @_;
     for my $d ( split /:/, $ENV{PATH} || '' ) {

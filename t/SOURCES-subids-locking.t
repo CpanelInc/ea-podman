@@ -274,6 +274,78 @@ subtest 'unsafe ranges can be audited across the whole file' => sub {
     is_deeply( ea_podman::subids::get_subuid_problems(), { alice => "shares host IDs with “bob”", bob => "shares host IDs with “alice”" }, "an account with both problems is reported for the overlap" );
 };
 
+# The unmask window is host-wide while it is open, so two accounts bootstrapping
+# at once must not have one of them remask while the other still needs it —
+# without the lock, the first to finish puts the mask back under the second.
+# (EA4-319)
+subtest 'concurrent unmask windows never overlap' => sub {
+    my $dir = File::Temp->newdir();
+    push @keep_alive, $dir;
+
+    mkdir "$dir/etc";
+    my $mask = "$dir/etc/user\@.service";
+    symlink( "/dev/null", $mask ) or die "could not seed the mask: $!";
+
+    no warnings qw/once/;
+    local $ea_podman::subids::file_mask_etc   = $mask;
+    local $ea_podman::subids::file_mask_run   = "$dir/etc/never-masked-here";
+    local $ea_podman::subids::file_mask_lock  = "$dir/mask.lock";
+    local $ea_podman::subids::file_mask_state = "$dir/mask.state";
+    local $ea_podman::subids::daemon_reloader = sub { return 1 };
+
+    # Serialized, the log alternates open/close; overlapping, it does not.
+    my $log = "$dir/window.log";
+
+    my $WINDOWS = 12;
+    _fork_and_wait(
+        sub {
+            my ($n) = @_;
+
+            ea_podman::subids::with_user_manager_unmasked(
+                sub {
+                    _append( $log, "open $n" );
+
+                    # Widen the window so an unserialized run really does overlap.
+                    select( undef, undef, undef, 0.03 );
+
+                    _append( $log, "DIRTY $n" ) if -e $mask;
+
+                    _append( $log, "close $n" );
+                    return;
+                }
+            );
+
+            return;
+        },
+        count => $WINDOWS,
+        what  => "unmask windows",
+    );
+
+    my @events = split /\n/, path($log)->slurp;
+
+    is_deeply( [ grep { /^DIRTY/ } @events ], [], "no window ever saw the mask back in place while it was still open" );
+
+    my $overlaps = 0;
+    my $depth    = 0;
+    for my $event (@events) {
+        if ( $event =~ /^open/ ) {
+            $depth++;
+            $overlaps++ if $depth > 1;
+        }
+        elsif ( $event =~ /^close/ ) {
+            $depth--;
+        }
+    }
+    is( $overlaps, 0, "the windows are strictly serial: never two open at once" );
+
+    is( scalar( grep { /^open/ } @events ),  $WINDOWS, "every child got a window" );
+    is( scalar( grep { /^close/ } @events ), $WINDOWS, "and closed it" );
+
+    ok( -l $mask, "the mask is back after the last window closes" );
+    is( readlink($mask), "/dev/null", "pointing where it did before" );
+    ok( !-e "$dir/mask.state", "and no in-progress record is left behind" );
+};
+
 done_testing();
 
 sub _mock_files {
@@ -342,9 +414,12 @@ sub _fork {
 }
 
 sub _fork_and_wait {
-    my ($code) = @_;
+    my ( $code, %opt ) = @_;
 
-    my @pids = map { _fork( $_, $code ) } 1 .. $CHILDREN;
+    my $count = $opt{count} // $CHILDREN;
+    my $what  = $opt{what}  // "allocations";
+
+    my @pids = map { _fork( $_, $code ) } 1 .. $count;
 
     my $failed = 0;
     for my $pid (@pids) {
@@ -352,7 +427,17 @@ sub _fork_and_wait {
         $failed++ if $?;
     }
 
-    is( $failed, 0, "all $CHILDREN concurrent allocations finished cleanly" );
+    is( $failed, 0, "all $count concurrent $what finished cleanly" );
+
+    return;
+}
+
+sub _append {
+    my ( $file, $line ) = @_;
+
+    open my $fh, ">>", $file or die "could not open “$file”: $!";
+    syswrite( $fh, "$line\n" );    # one syswrite per line: no buffering to interleave
+    close $fh;
 
     return;
 }
