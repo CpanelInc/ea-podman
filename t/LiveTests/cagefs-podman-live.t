@@ -197,6 +197,27 @@ our $HAS_LINGER_FIX;
 my ($CLI) = grep { -x $_ } @CLI_PATHS;
 plan skip_all => "EAPODMAN_DRIVER=cli but no ea-podman CLI found (@CLI_PATHS)" if $DRIVER eq 'cli' && !$CLI;
 
+# EA4-319: the boot-time sweep that starts the per-user systemd managers logind
+# cannot start while `user@.service` is masked. Newer than everything gated
+# above, and its two halves can be missing independently — the verb lives in the
+# CLI, the unit is a packaged systemd file — so each is gated on its own instead
+# of skip_all'd: on a host with no mask the rest of this test does not care.
+our $BOOT_UNIT = 'ea-podman-user-managers.service';
+our ( $HAS_BOOT_UNIT, $HAS_SWEEP_VERB );
+{
+    my ($rc) = run_cmd( 'systemctl', 'cat', $BOOT_UNIT );
+    $HAS_BOOT_UNIT = $rc == 0 ? 1 : 0;
+
+    $HAS_SWEEP_VERB = 0;
+    my ($pl) = grep { -e $_ } ( '/opt/cpanel/ea-podman/bin/ea-podman.pl', "$EAP_LIB/../../bin/ea-podman.pl" );
+    if ( $CLI && $pl && open my $fh, '<', $pl ) {
+        local $/;
+        my $src = <$fh>;
+        close $fh;
+        $HAS_SWEEP_VERB = $src =~ /ensure_user_sessions/ ? 1 : 0;
+    }
+}
+
 # In 'cli' mode, the installed CLI must carry the CPANEL-54672 CageFS fallback
 # (otherwise this test would just reproduce the bug it's meant to guard).
 if ( $DRIVER eq 'cli' ) {
@@ -445,6 +466,41 @@ ok( -S "/run/user/$uid/bus", "user dbus socket /run/user/$uid/bus exists" );
     ok( !-e "/opt/cpanel/ea-podman/user-manager-mask.state", "no in-progress unmask record is left behind" );
 }
 
+# EA4-319: the window above repairs an account mid-command, which is no help at
+# boot — nothing runs ea-podman then, so on a masked host a rebooted account
+# keeps no manager until somebody happens to. The sweep is what closes that, and
+# this is it being deployed at all. It is exercised for real further down, once
+# there is a manager to lose.
+SKIP: {
+    skip "installed ea-podman predates EA4-319 (no $BOOT_UNIT)", 2 if !$HAS_BOOT_UNIT;
+
+    my ( $rc, $out ) = run_cmd( 'systemctl', 'is-enabled', $BOOT_UNIT );
+    like( $out, qr/\benabled\b/, "$BOOT_UNIT is enabled, so it runs at boot" ) or diag($out);
+
+    # What it runs, not just that it is wired up: a unit whose ExecStart names a
+    # verb the installed CLI does not have would fail every boot, quietly.
+    ( $rc, $out ) = run_cmd( 'systemctl', 'cat', $BOOT_UNIT );
+    like( $out, qr/^ExecStart=.*\bensure_user_sessions\b/m, "…and its ExecStart runs the sweep verb" ) or diag($out);
+}
+
+# The verb by hand, against an account whose manager is already up. It has to
+# find the account (which it can only do from the container registry), cost
+# nothing, and — the part that matters on a CageFS host — not open a mask window
+# it does not need. Reporting `ok` rather than `started` is that last one: the
+# window is only ever opened for accounts it reports as `started`/`failed`.
+#
+# It sweeps every account in the registry, not just this one, so on a box with
+# other containerised accounts whose managers are down it will start those too.
+# That is the verb doing its job, and this is a throwaway VM either way.
+SKIP: {
+    skip "installed ea-podman predates EA4-319 (no ensure_user_sessions verb)", 3 if !$HAS_SWEEP_VERB;
+
+    my ( $rc, $out ) = run_cmd( $CLI, 'ensure_user_sessions' );
+    is( $rc, 0, "`ea-podman ensure_user_sessions` exits 0 on a healthy host" ) or diag($out);
+    like( $out, qr/^\Q$USER\E:\s+ok\b/m, "…reports $USER as already ok, so it opened no window for it" ) or diag($out);
+    ok( !-e "/opt/cpanel/ea-podman/user-manager-mask.state", "…and left no in-progress unmask record behind" );
+}
+
 # EA4-319: `cagefsctl --hook-install` re-applies the mask on every cagefs install
 # and upgrade, so what we did must not fight with that.
 SKIP: {
@@ -519,14 +575,65 @@ SKIP: {
     }
 }
 
-#--- persistence proxy: restart the user manager (simulates reboot) --
+#--- persistence proxy: bring the manager back the way boot does -----
+#
+# EA4-319: this used to be a single `systemctl restart user@<uid>.service`. By
+# now the template is masked again — `cagefsctl --hook-install` above put it
+# back — and systemd refuses the start half of that restart while leaving the
+# running manager alone, since masking refuses new starts but does not stop a
+# running instance (ea4-319-mask-poc.sh stage 4). The bus socket therefore never
+# went away and the checks below passed having restarted nothing at all.
+#
+# So take the manager down for real first, then bring it back through whatever
+# is actually supposed to do that at boot: the sweep where the template is
+# masked and logind cannot, logind's own path where it can.
 {
-    run_cmd( 'systemctl', 'restart', "user\@$uid.service" );
-    ok( wait_for( sub { -S "/run/user/$uid/bus" }, 15 ), "user manager came back after restart (linger)" );
+    my $masked_now = _user_manager_mask_file();
+
+    # `systemctl is-active`, not the bus socket: /run/user/<uid>/bus outlives the
+    # manager that was listening on it, which is why the sweep itself asks
+    # systemd rather than trusting the socket (subids.pm, $user_manager_is_active).
+    my $manager_active = sub { return ( run_cmd( 'systemctl', 'is-active', "user\@$uid.service" ) )[1] =~ /\bactive\b/ ? 1 : 0 };
+
+    # Stop, not restart: a stop job is allowed on a masked unit, a start job is
+    # not, which is the whole reason the old `restart` here was a no-op.
+    run_cmd( 'systemctl', 'stop', "user\@$uid.service" );
+    ok( wait_for( sub { !$manager_active->() }, 15 ), "the user manager can be stopped (the state a reboot leaves behind on a masked host)" )
+      or diag( "still up: " . ( run_cmd( 'systemctl', 'is-active', "user\@$uid.service" ) )[1] );
+
+    my $came_back = 0;
+
+    if ($masked_now) {
+      SKIP: {
+            skip "installed ea-podman predates EA4-319 (no $BOOT_UNIT); nothing brings this account back at boot", 4 if !$HAS_BOOT_UNIT;
+
+            # Starting the unit, not calling the verb: the unit is what fires at
+            # boot, so a unit that cannot run its own ExecStart is the whole bug.
+            my ( $rc, $out ) = run_cmd( 'systemctl', 'start', $BOOT_UNIT );
+            is( $rc, 0, "the boot-time sweep runs clean with the template masked" ) or diag($out);
+
+            $came_back = wait_for( sub { $manager_active->() && -S "/run/user/$uid/bus" }, 30 );
+            ok( $came_back, "…and the account's user manager is back, which on a masked host nothing else would have done" )
+              or diag( ( run_cmd( 'systemctl', 'status', $BOOT_UNIT, '--no-pager', '-l' ) )[1] );
+
+            # This sweep really did open a window (unlike the no-op one above),
+            # so this is the one place the boot path's own remask is observable.
+            is( _user_manager_mask_file(), $masked_now, "…with the mask back in the same location it was in" );
+            ok( !-e "/opt/cpanel/ea-podman/user-manager-mask.state", "…and no in-progress unmask record left behind" );
+        }
+    }
+    else {
+        my ( $rc, $out ) = run_cmd( 'systemctl', 'start', "user\@$uid.service" );
+        is( $rc, 0, "the user manager starts again (nothing masked on this host)" ) or diag($out);
+
+        $came_back = wait_for( sub { $manager_active->() && -S "/run/user/$uid/bus" }, 30 );
+        ok( $came_back, "user manager came back (linger)" );
+    }
 
     SKIP: {
         skip "non-redis image ($IMAGE); skipping post-reboot serving check", 1 if $IMAGE !~ /redis/i;
-        ok( wait_for( sub { _redis_serving_via_port($USER) }, 60 ), "redis auto-started and serves after the user manager restart (survives reboot)" );
+        skip "the user manager never came back; nothing to serve",           1 if !$came_back;
+        ok( wait_for( sub { _redis_serving_via_port($USER) }, 60 ), "redis auto-started and serves once the manager is back (survives reboot)" );
     }
 }
 

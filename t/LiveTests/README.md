@@ -44,6 +44,29 @@ as well as v2 (AlmaLinux 9/10 and Ubuntu 24.04, which default to v2).
 | `ea-memcached16-cli-live.t` | A **normal** account uses the `ea-podman` CLI directly (`install <PKG>` mode) to install a real EA4 container-based package, `ea-memcached16`. | A live cPanel VM (cgroup v1 or v2), with `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
 | `ea-memcached16-cagefs-cli-live.t` | Sister to the above, but the account is **CageFS**-enabled: the CLI is driven through a real CageFS login, exercising the CPANEL-54672 fallback to the UAPI bridge. | CloudLinux (cgroup v1 or v2), with CageFS installed + initialized, and `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
 
+### EA4-319 in the two cagefs `.t` files
+
+Both cagefs tests carry the `user@.service` mask checks: the mask is recorded
+before install and must come back at the same path afterward, with the manager
+started inside the window still running through the remask, no in-progress state
+file left behind, and the account still working after `cagefsctl --hook-install`
+re-applies the mask.
+
+Their "survives a reboot" step goes through `ea-podman-user-managers.service`
+rather than restarting the manager directly. It used to be one
+`systemctl restart user@<uid>.service`, which is **not** a reboot proxy on a
+masked host: systemd refuses the start half and leaves the running manager
+alone, so the socket never disappeared and the checks passed having restarted
+nothing (this is the mask-poc's stage-4 finding — masking refuses new starts, it
+does not stop a running instance). They now stop the manager for real and bring
+it back the way boot does: the sweep unit where the template is masked, plain
+`systemctl start` where it is not. They also check the unit is enabled and that
+its `ExecStart` runs the sweep verb, and that `ea-podman ensure_user_sessions`
+no-ops (reports `ok`, opens no window) on an account that is already healthy.
+
+That is as close as a `.t` gets. Only a real reboot proves the fix end to end —
+`ea4-319-mask-poc.sh` stage 6, below, owns that.
+
 ## `ea4-319-mask-poc.sh` — the CageFS `user@.service` mask
 
 Not a `.t` file and not part of the suite: a standalone, self-narrating shell
