@@ -1564,6 +1564,26 @@ sub user_has_containers_as_root {
     return ( grep { $_->{user} eq $user } values %{$containers_hr} ) ? 1 : 0;
 }
 
+# Every account the registry says has at least one container: the plural of
+# user_has_containers_as_root(), off the same source, and the list the boot-time
+# sweep works from (see `ea-podman ensure_user_sessions`, EA4-319).
+#
+# The registry, not $dir_granted_linger: a grant records that ea-podman turned
+# *a* linger on, which is not the same question as “does this account have
+# containers to bring back”. Sorted so the sweep — and its output — is
+# deterministic.
+sub users_with_containers_as_root {
+    my $containers_hr = load_known_containers_as_root();
+
+    my %seen;
+    for my $container ( values %{$containers_hr} ) {
+        next if !defined $container->{user} || $container->{user} eq "";
+        $seen{ $container->{user} } = 1;
+    }
+
+    return sort keys %seen;
+}
+
 # Independent of the registry: a live container directory under the account’s
 # home means it still has containers even if the root-owned registry says
 # otherwise (it was reset by a botched upgrade, say). Removal renames these to

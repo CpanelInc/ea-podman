@@ -152,6 +152,32 @@ restore_mask() {
 }
 trap restore_mask EXIT INT TERM
 
+# logind session ids belonging to $U. Column 3 of list-sessions is the user.
+user_sessions() {
+    loginctl list-sessions --no-legend 2>/dev/null | awk -v u="$U" '$3 == u {print $1}'
+}
+
+# Stop the account's leftover session scopes so logind can finish with it.
+#
+# Rootless podman keeps a PAUSE PROCESS alive between commands to hold the user
+# namespace open ($XDG_RUNTIME_DIR/libpod/pause.pid). It gets reparented to init
+# but stays in the login session's cgroup scope, which leaves the scope
+# "active (abandoned)" and the session in State=closing indefinitely -- so logind
+# never removes /run/user/<uid>, and `systemctl stop user@<uid>.service` does not
+# stick because the session still wants a manager.
+#
+# That makes this the normal state of ANY account that has run rootless podman
+# over ssh -- including anything ea4-319-mask-poc.sh has touched -- so the
+# teardown has to handle it rather than treat it as an odd host.
+# `loginctl terminate-user` alone does NOT clear it: it moves the session to
+# closing and leaves the scope up.
+clear_user_sessions() {
+    local sid
+    for sid in $(user_sessions); do
+        run "systemctl stop session-$sid.scope"
+    done
+}
+
 pick_user() {
     U="${1:-}"
     if [ -z "$U" ]; then
@@ -190,9 +216,15 @@ stage_old_lib() {
 
     if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
         local rev
+        # NOT `grep -q`: it closes the pipe on the first match, and this script
+        # runs under `set -o pipefail`, so `git show`'s SIGPIPE becomes the
+        # pipeline's status. Every revision that DOES contain the fix then looks
+        # like one that does not, and the loop breaks on HEAD -- silently making
+        # the A side the FIXED code, which is the one thing this test must never
+        # do. Plain `grep` reads all of its input, so nothing gets SIGPIPEd.
         for rev in $(git -C "$REPO" log --format=%H -- SOURCES/subids.pm); do
             git -C "$REPO" show "$rev:SOURCES/subids.pm" 2>/dev/null \
-                | grep -q with_user_manager_unmasked || { A_REV=$rev; break; }
+                | grep with_user_manager_unmasked > /dev/null || { A_REV=$rev; break; }
         done
     fi
 
@@ -284,6 +316,33 @@ preflight() {
     stage "PRE" "Preflight"
     say "  checkout     : $REPO"
     say "  test account : $U (uid $X, home $HOME_U)"
+
+    # Checked here, before anything is masked, because it invalidates the whole
+    # run. logind keeps user@<uid>.service up for a session and will not remove
+    # /run/user/<uid> until the LAST one ends, so the COLD stage below cannot
+    # tear the account down -- and side A would then find a healthy session, take
+    # its early return, and look like the OLD code coping with a masked host.
+    #
+    # A session in State=closing is not a person: it is almost always the rootless
+    # podman PAUSE PROCESS (see clear_user_sessions), and COLD can clear it. An
+    # ACTIVE session is somebody's login, and killing it is not this script's
+    # call.
+    local sid live=""
+    for sid in $(user_sessions); do
+        [ "$(loginctl show-session "$sid" -p State --value 2>/dev/null)" = closing ] && continue
+        live="$live $sid"
+    done
+
+    if [ -n "$live" ]; then
+        nope "$U has active logind session(s):$live"
+        say  "         This account cannot be made cold while somebody is logged in as it,"
+        say  "         and a run that is not cold reports the old bootstrap SUCCEEDING on a"
+        say  "         masked host -- which looks like EA4-319 is wrong, but only means the"
+        say  "         test never got into the state it is about."
+        say  "         Use an account nobody is logged in as, or end them first:"
+        say  "             loginctl terminate-user $U"
+        exit 1
+    fi
     say "  podman       : $(podman --version)"
     say "  systemd      : $(systemctl --version | head -1)"
     show_state
@@ -353,10 +412,35 @@ setup() {
     run "as_user 'systemctl --user disable --now container-$CTR.service'"
     run "as_user 'podman rm -f $CTR'"
     run "loginctl disable-linger $U"
+
+    # Before the manager stop, not after: while a session scope is still up the
+    # stop does not stick and /run/user/<uid> stays. See clear_user_sessions.
+    clear_user_sessions
+
     run "systemctl stop user@$X.service"
     sleep 2
     run "rm -f $MASK_STATE"
     show_state
+
+    # Asserted, not assumed. If the account is not really cold, side A below
+    # finds a healthy session, returns without dying, and the run reports "the
+    # OLD bootstrap SUCCEEDED on a masked host" -- which reads as EA4-319 being
+    # wrong when in fact the test never got into the state it is about.
+    expect "no manager and no /run/user/$X"
+    run "systemctl is-active user@$X.service"
+    run "ls -ld /run/user/$X"
+
+    if [ ! -d "/run/user/$X" ] && [ "$(systemctl is-active "user@$X.service" 2>&1)" != active ]; then
+        verdict "the account is cold -- A and B both start from the state a masked host has"
+    else
+        nope "$U is NOT cold after the teardown, so the A/B below would be meaningless."
+        say  "         Almost always a live login session: logind keeps user@$X.service up for"
+        say  "         one and will not remove /run/user/$X until the LAST session ends, so"
+        say  "         \`systemctl stop\` does not stick. Check with:"
+        say  "             loginctl list-sessions | grep $U"
+        say  "         Then use an account nobody is logged in as, or end those sessions."
+        exit 1
+    fi
 }
 
 apply_mask() {

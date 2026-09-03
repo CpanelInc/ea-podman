@@ -191,6 +191,22 @@ sub _start_user_manager {
     return $? == 0;
 }
 
+# Is the account’s manager actually running?
+#
+# Asked instead of testing for the bus socket, because the socket outlives the
+# manager: logind only tears /run/user/<uid> down once the account’s LAST session
+# ends, so `systemctl stop user@<uid>.service` on an account that still has a
+# login leaves an orphaned /run/user/<uid>/bus behind. A start decision made on
+# `-e $bus` then skips the start and reports success while nothing is listening —
+# and rootless podman fails with “Failed to connect to user scope bus”. (EA4-319)
+our $user_manager_is_active = \&_user_manager_is_active;
+
+sub _user_manager_is_active {
+    my ($uid) = @_;
+    system( "systemctl", "is-active", "--quiet", "user\@$uid.service" );
+    return $? == 0;
+}
+
 # Which of the two locations `user@.service` is masked in, or undef when it is
 # not masked.
 #
@@ -396,7 +412,16 @@ sub ensure_user_session {
     # It is also what keeps the unmask window below off the hot path entirely: a
     # healthy account never reaches it, so on a cagefs host we pay for the bypass
     # once per cold account, not once per command.
-    return if user_has_linger($user) && -d "$dir_run/$uid" && -e "$dir_run/$uid/bus";
+    #
+    # “Its manager is up” has to be asked of systemd, not inferred from the bus
+    # socket: the socket outlives the manager, so an account whose manager was
+    # stopped while it still had a login keeps an orphaned
+    # /run/user/<uid>/bus and would take this return forever — leaving podman to
+    # fail with “Failed to connect to user scope bus” on every command, with
+    # nothing here ever trying to repair it. It is one extra `systemctl is-active`
+    # per command, ordered last so the three cheap checks short-circuit it, on a
+    # path that already forks podman. (EA4-319)
+    return if user_has_linger($user) && -d "$dir_run/$uid" && -e "$dir_run/$uid/bus" && $user_manager_is_active->($uid);
 
     mkdir $dir_run;    # parent /run/user; harmless when it already exists
 
@@ -414,10 +439,13 @@ sub ensure_user_session {
     #     in after a reboot — linger marker present, no runtime dir, no bus —
     #     where enable-linger alone is a no-op.
     #
-    # The `!-e $bus` skip on the start is an “already up” shortcut, not
-    # selectivity. When it does run, `systemctl start` blocks until the job
-    # settles, which is what lets the window close before the poll below rather
-    # than around it. (EA4-319)
+    # The skip on the start is an “already up” shortcut, not selectivity. It asks
+    # systemd whether the manager is running rather than testing for the bus
+    # socket: the socket outlives the manager (see $user_manager_is_active), so
+    # `-e $bus` would skip the start for an account whose manager is dead and
+    # leave it dead. When the start does run, `systemctl start` blocks until the
+    # job settles, which is what lets the window close before the poll below
+    # rather than around it. (EA4-319)
     my $start_failed;
     with_user_manager_unmasked(
         sub {
@@ -431,7 +459,7 @@ sub ensure_user_session {
 
             record_linger_grant($user) if $regrant;
 
-            $start_failed = !$user_manager_starter->($uid) if !-e $bus;
+            $start_failed = !$user_manager_starter->($uid) if !$user_manager_is_active->($uid);
 
             return;
         }
@@ -462,6 +490,145 @@ sub ensure_user_session {
     }
 
     return;
+}
+
+# The boot-time counterpart to ensure_user_session(): bring up the managers for
+# a whole list of accounts in one sweep. Driven by `ea-podman
+# ensure_user_sessions`, which the ea-podman-user-managers.service unit runs at
+# boot — the trigger EA4-319 was missing, since nothing else invokes the unmask
+# window at boot and logind will not start a masked `user@.service` for a
+# lingering account on its own.
+#
+# Deliberately NOT a loop over ensure_user_session(), for two reasons that pull
+# against each other and only bite at this scale:
+#
+#   * One window for the whole host, not one per account. $_in_window already
+#     makes a nested call reuse an open window, so a loop *inside* one
+#     with_user_manager_unmasked() would get that much right on its own: one
+#     unmask/remask pair and two daemon-reloads for the sweep instead of 2N.
+#   * But that same loop would drag every account’s readiness poll INSIDE the
+#     window, and that poll is outside it on purpose (see ensure_user_session
+#     above): its ceiling is ~10s per account, so on a box with hundreds of
+#     accounts the host-wide unmask would be held open for the entire sweep.
+#     Exactly backwards from “as short as we can make it”.
+#
+# So the phases are split by hand. Every start happens in one window — each
+# blocks until its job settles, which is what keeps the window short — then the
+# window closes and the buses are polled *together*, one ceiling for the sweep
+# rather than one per account.
+#
+# Warns and carries on per account rather than dying: one account that cannot
+# start its manager must not cost every other account on the box its containers,
+# and must not abort the sweep with the mask half-restored. Returns a hashref of
+# user => "ok" (already up), "started", "failed", or "unknown" (no such user).
+sub ensure_user_sessions {
+    my (@users) = @_;
+
+    my %result;
+    my @pending;
+
+    mkdir $dir_run;    # parent /run/user; harmless when it already exists
+
+    for my $user (@users) {
+        my $uid = ( getpwnam($user) )[2];
+
+        if ( !defined $uid ) {
+
+            # An account in the registry that no longer exists on the box. Not
+            # fatal, and not this sweep’s business to clean up.
+            warn "ea-podman: no such user “$user”; skipping\n";
+            $result{$user} = "unknown";
+            next;
+        }
+
+        # The reason a non-cagefs host pays nothing here: after a normal boot
+        # logind has already started every lingering account’s manager, so every
+        # account is healthy, @pending is empty, and no window is ever opened.
+        #
+        # Stricter than ensure_user_session()’s early return, which stops at the
+        # bus socket: that one is on the hot path of every ea-podman command and
+        # cannot afford a `systemctl is-active` per call. This runs once at boot,
+        # so it can afford to ask systemd rather than trust a socket that outlives
+        # the manager it belongs to (see $user_manager_is_active).
+        if ( user_has_linger($user) && -d "$dir_run/$uid" && -e "$dir_run/$uid/bus" && $user_manager_is_active->($uid) ) {
+            $result{$user} = "ok";
+            next;
+        }
+
+        push @pending, { user => $user, uid => $uid };
+    }
+
+    return \%result if !@pending;
+
+    with_user_manager_unmasked(
+        sub {
+            for my $acct (@pending) {
+                my ( $user, $uid ) = @{$acct}{qw(user uid)};
+
+                # Contained per account: a die here would unwind out of the
+                # window, restoring the mask with accounts still unstarted.
+                local $@;
+                eval {
+
+                    # Same regrant bookkeeping as ensure_user_session(): a
+                    # re-enable moves systemd’s linger marker ahead of our grant,
+                    # so the grant has to move with it or it stops covering the
+                    # very linger it is for. (CPANEL-55309)
+                    my $regrant = user_has_granted_linger($user);
+
+                    $linger_enabler->($user);
+
+                    record_linger_grant($user) if $regrant;
+
+                    $acct->{start_failed} = !$user_manager_starter->($uid) if !$user_manager_is_active->($uid);
+
+                    1;
+                } or do {
+                    warn "ea-podman: could not start the user systemd manager for “$user”: $@";
+                    $acct->{start_failed} = 1;
+                };
+            }
+
+            return;
+        }
+    );
+
+    # Outside the window, and shared across accounts: the starts above already
+    # blocked until their jobs settled, so this is the tail of a race we have
+    # mostly won already. An account whose start outright failed is not waited
+    # for at all, same as ensure_user_session().
+    my @waiting = grep { !$_->{start_failed} } @pending;
+
+    for ( 1 .. $poll_iterations ) {
+        @waiting = grep { !( -d "$dir_run/$_->{uid}" && -e "$dir_run/$_->{uid}/bus" ) } @waiting;
+        last if !@waiting;
+        $poll_sleeper->();
+    }
+
+    for my $acct (@pending) {
+        my ( $user, $uid ) = @{$acct}{qw(user uid)};
+        my $rundir = "$dir_run/$uid";
+
+        # The manager, not just the socket: an orphaned bus left behind by a
+        # stopped manager would otherwise be reported as a success.
+        if ( -d $rundir && -e "$rundir/bus" && $user_manager_is_active->($uid) ) {
+            $result{$user} = "started";
+            next;
+        }
+
+        $result{$user} = "failed";
+
+        # The same symptoms ensure_user_session() dies on, and the same hint —
+        # which names the mask when there is one. A warn, not a die: see above.
+        my $why =
+            !-d $rundir            ? "the runtime directory “$rundir” was never created"
+          : !-e "$rundir/bus"      ? "the user session bus “$rundir/bus” never appeared"
+          :                          "the session bus “$rundir/bus” exists but `user\@$uid.service` is not running, so nothing is listening on it";
+
+        warn "ea-podman: the user systemd manager for “$user” (uid $uid) did not come up: $why.\n" . _masked_user_manager_hint($uid);
+    }
+
+    return \%result;
 }
 
 # The counterpart to $linger_enabler: `loginctl disable-linger <user>`, run as

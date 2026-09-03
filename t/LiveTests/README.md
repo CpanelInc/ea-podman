@@ -56,11 +56,12 @@ literally `systemctl mask user@.service`, so masking it by hand on a plain box
 produces the identical host state. That is what this script does.
 
 ```sh
-./ea4-319-mask-poc.sh status              # inspect, changes nothing
-./ea4-319-mask-poc.sh --yes run [USER]    # stages 0-4
-./ea4-319-mask-poc.sh --yes pre-reboot    # arm stage 5, then reboot
-./ea4-319-mask-poc.sh post-reboot         # check stage 5 after the reboot
-./ea4-319-mask-poc.sh cleanup             # remove the container, restore state
+./ea4-319-mask-poc.sh status                  # inspect, changes nothing
+./ea4-319-mask-poc.sh --yes run [USER]        # stages 0-4
+./ea4-319-mask-poc.sh --yes pre-reboot        # arm stage 5 (the gap), then reboot
+./ea4-319-mask-poc.sh --yes pre-reboot-fixed  # arm stage 6 (the fix), then reboot
+./ea4-319-mask-poc.sh post-reboot             # check whichever was armed
+./ea4-319-mask-poc.sh cleanup                 # remove the container, restore state
 ```
 
 Each stage prints why it exists, every command it runs with its output, and a
@@ -71,7 +72,9 @@ PASS/FAIL verdict saying what to conclude. What it demonstrates:
 2. `loginctl enable-linger` alone cannot repair an already-lingering account
 3. unmask → start the manager → remask ("the sandwich") repairs it
 4. the manager and its container **survive** the remask — the load-bearing claim
-5. (needs a reboot) whether containers come back on their own
+5. (needs a reboot) containers do **not** come back on their own — measured and
+   confirmed on a masked host
+6. (needs a reboot) with `ea-podman-user-managers.service` installed, they **do**
 
 Stage 1 is worth reading carefully. EA4-319 open question 2 predicted the
 runtime directory would survive, since `user-runtime-dir@.service` is not itself
@@ -80,10 +83,23 @@ masked. Measured on systemd 239, that is wrong: `user@.service` carries
 and the runtime directory is never created either — with or without a login
 session. Both of ea-podman's readiness errors therefore name the mask.
 
+**Stage 6 is the odd one out.** Stages 0–5 involve no ea-podman code at all;
+stage 6 does, because it is the only test that can prove the fix — the fix is a
+systemd unit that runs at boot, so no unit test reaches it. It works from
+ea-podman's own container registry, so the account needs a container ea-podman
+knows about (`ea-podman install <PKG>`); the hand-made container stage 0 creates
+is deliberately not in the registry, and `pre-reboot-fixed` refuses to arm rather
+than pass vacuously. It also checks the unit is installed and enabled first.
+
 Safety: masking `user@.service` is **host-wide** — while masked, no account on
 the box can get a per-user systemd manager. The script records the mask state at
 startup and restores exactly that on exit, including via an `EXIT`/`INT`/`TERM`
 trap, so a CageFS-applied mask is put back as found. Throwaway VM only.
+
+The one exception is `pre-reboot` and `pre-reboot-fixed`, which disarm that trap
+on purpose: leaving the mask in place across the reboot *is* the test. Until you
+run `post-reboot` or `cleanup`, the box boots with no per-user systemd manager
+for any account.
 
 It drives the test account over **ssh to localhost** (setting up and removing its
 own key), not `su`: `su` leaves the caller's cwd in place, which the cpuser often
@@ -91,6 +107,50 @@ cannot enter — the same trap `ea_podman::util::ensure_su_login()` works around
 `util.pm:107-115`. It also sets `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS`
 explicitly, because an ssh login does not necessarily create a logind session,
 which is why `ensure_su_login()` sets them by hand too.
+
+## `ea4-319-verify-boot-fix.sh` — the boot-time fix, end to end
+
+The manual verification runbook for `ea-podman-user-managers.service` as a
+script. Where `ea4-319-mask-poc.sh` proves the *mechanism* with no ea-podman
+code, this one drives ea-podman itself.
+
+```sh
+./ea4-319-verify-boot-fix.sh local              # repo checks only, safe anywhere
+./ea4-319-verify-boot-fix.sh --yes run [USER]   # stages 1-5 on this box
+./ea4-319-verify-boot-fix.sh register [USER]    # give USER a registered container
+./ea4-319-verify-boot-fix.sh --yes pre-reboot [USER]   # arm stage 6, then reboot
+./ea4-319-verify-boot-fix.sh post-reboot        # check stage 6
+./ea4-319-verify-boot-fix.sh cleanup            # undo the reboot state
+./ea4-319-verify-boot-fix.sh pkg                # check a built RPM instead
+```
+
+1. **local** — the test suite, perl/bash syntax, that the spec still parses and
+   ships the unit, and that systemd accepts the unit file. Changes nothing, so it
+   runs anywhere including a dev checkout.
+2. **deploy** — installs the changed `subids.pm`/`util.pm`/`ea-podman.pl` over
+   the installed ea-podman, recompiles the CLI, and enables the unit. Lets a box
+   be tested without waiting on an OBS build; it is deliberately *not* a test of
+   packaging, which is what the `pkg` stage is for.
+3. **smoke** — the verb is registered, is refused to non-root, and no-ops on a
+   healthy host.
+4. **masked** — the load-bearing one: with the template masked and root's manager
+   stopped, the sweep starts it and puts the mask back, so `is-enabled` says
+   `masked` and `is-active` says `active` at the same time.
+5. **unit** — runs the systemd unit itself and shows its journal, since that is
+   what actually fires at boot.
+6. **reboot** — hands off to `ea4-319-mask-poc.sh` stage 6, which owns the reboot
+   harness. The only test that proves containers come back.
+
+The `register` stage needs an EA4 **container-based package** on the host, since
+`ea-podman install <PKG>` installs a container *from* one and cannot fetch the
+package itself. It defaults to `ea-redis62`; on a host without it, it names the
+package-manager command and offers to run it (`--yes` accepts). `EAPODMAN_TEST_PKG`
+picks a different package and `ea-podman avail` lists the candidates — the same
+convention `ea-memcached16-cli-live.t` uses.
+
+Stage 4 masks `user@.service` host-wide for a few seconds and restores the state
+it found on every exit path, trap included; stage 2 overwrites the installed
+ea-podman; `register` may install an EA4 package. Throwaway VM only.
 
 ## `ea4-319-ab-verify.sh` — does the fix actually fix it?
 

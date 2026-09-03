@@ -9,13 +9,16 @@
 #   produces the IDENTICAL host state -- same /dev/null symlink. You do not
 #   need CageFS to reproduce the bug.
 #
-#   Five things get demonstrated, in order:
+#   Seven things get demonstrated, in order:
 #     0. rootless podman under `systemctl --user` works normally
-#     1. with the template masked, the runtime DIR appears but the BUS does not
+#     1. with the template masked, NEITHER the runtime dir NOR the bus appears
 #     2. `loginctl enable-linger` alone cannot repair an already-lingering acct
 #     3. unmask -> start the manager -> remask ("the sandwich") repairs it
 #     4. the manager and its container SURVIVE the remask   <-- the load-bearing claim
 #     5. (optional, needs a reboot) containers do NOT come back on their own
+#     6. (optional, needs a reboot) ...and that with the boot-time fix installed
+#        they DO. Unlike 0-5 this one exercises ea-podman itself -- it is the
+#        only way to prove the fix, since nothing else runs at boot.
 #
 # SAFETY
 #   Masking user@.service is HOST-WIDE: while masked, no account on this box can
@@ -26,8 +29,9 @@
 # USAGE
 #   ./ea4-319-poc.sh status                 # inspect, change nothing
 #   ./ea4-319-poc.sh --yes run [USER]       # stages 0-4
-#   ./ea4-319-poc.sh --yes pre-reboot       # arm stage 5, then reboot yourself
-#   ./ea4-319-poc.sh post-reboot            # check stage 5 after the reboot
+#   ./ea4-319-poc.sh --yes pre-reboot       # arm stage 5 (the gap), then reboot
+#   ./ea4-319-poc.sh --yes pre-reboot-fixed # arm stage 6 (the fix), then reboot
+#   ./ea4-319-poc.sh post-reboot            # check whichever was armed
 #   ./ea4-319-poc.sh cleanup                # remove the container, restore state
 
 set -uo pipefail
@@ -238,7 +242,20 @@ stage0() {
     run "as_user_env 'systemctl --user daemon-reload'"
     run "as_user_env 'systemctl --user enable --now container-$CTR.service'"
     expect "active"
-    if run "as_user_env 'systemctl --user is-active container-$CTR.service'" | grep -qx '      active'; then
+
+    # Captured, not piped into `grep -q`: -q closes the pipe on its first match,
+    # and this script runs under `set -o pipefail`, so the producer's SIGPIPE
+    # becomes the pipeline's status. One line of output is too little to SIGPIPE
+    # in practice -- but the identical shape silently picked the WRONG revision
+    # in ea4-319-ab-verify.sh's stage_old_lib, so do not build on "in practice".
+    #
+    # Compared exactly rather than with a glob, because "inactive" contains
+    # "active". run() prints its command line first, so the state is the last line.
+    local state
+    state=$(run "as_user_env 'systemctl --user is-active container-$CTR.service'")
+    printf '%s\n' "$state"
+
+    if [ "$(printf '%s' "$state" | tail -1 | tr -d '[:space:]')" = active ]; then
         verdict "the container is managed by the account's own systemd manager"
     else
         nope "baseline did not come up -- everything after this would be meaningless,"
@@ -364,6 +381,7 @@ stage5_arm() {
     run "systemctl mask user@.service"; run "systemctl daemon-reload"
     run "loginctl enable-linger $U"
     printf '%s\n' "$INITIAL_MASK" > "$STATEDIR/initial_mask"
+    printf '%s\n' "gap" > "$STATEDIR/mode"
     touch "$STATEDIR/armed"
     RESTORE_ARMED=0        # deliberately leave the mask in place across the reboot
     show_state
@@ -371,10 +389,103 @@ stage5_arm() {
     say "  $(c '1;33' 'Now reboot, then run:')  $0 post-reboot"
 }
 
+# ---- stage 6: the same reboot, with the fix in place --------------------------
+#
+# Stage 5 proves the gap; this proves it is closed. It is the only test that can:
+# the fix is a systemd unit that runs at boot, so no unit test reaches it.
+#
+# Unlike every stage above it, this one DOES involve ea-podman -- the boot sweep
+# works from ea-podman's own container registry, so the account has to have a
+# container ea-podman knows about. A container made by hand (as stage 0 does) is
+# invisible to it, which is not a bug: an account with no registered containers
+# has nothing for the sweep to bring back.
+EAPODMAN=/opt/cpanel/ea-podman/bin/ea-podman
+UNIT=ea-podman-user-managers.service
+
+# Is $U in ea-podman's registry? That is exactly what the sweep asks.
+#
+# NOT `grep -q`: it closes the pipe on the first match, and this script runs
+# under `set -o pipefail`, so ea-podman's SIGPIPE would become the pipeline's
+# status and a match would read as "not registered".
+user_is_registered() {
+    [ -x "$EAPODMAN" ] || return 1
+    "$EAPODMAN" containers --all 2>/dev/null | grep "\"user\" *: *\"$U\"" > /dev/null
+}
+
+stage6_arm() {
+    stage 6 "Arm the reboot test WITH the boot-time fix (EA4-319)"
+    why "Stage 5 proved containers stay down. The fix is $UNIT,"
+    why "which runs \`ea-podman ensure_user_sessions\` at boot: for every account the"
+    why "registry says has containers, it opens ONE unmask window for the whole host,"
+    why "starts each manager inside it, remasks, and polls for the buses afterwards."
+    pause
+
+    if [ ! -x "$EAPODMAN" ]; then
+        nope "$EAPODMAN is not installed -- there is no fix here to test."
+        exit 1
+    fi
+
+    expect "the unit is installed and enabled"
+    run "systemctl is-enabled $UNIT"
+    if [ "$(systemctl is-enabled "$UNIT" 2>&1)" != enabled ]; then
+        nope "$UNIT is not enabled. Install the ea-podman build that ships it,"
+        say  "         or enable it by hand with \`systemctl enable $UNIT\`."
+        exit 1
+    fi
+
+    if ! user_is_registered; then
+        nope "$U has no ea-podman-registered container, so the boot sweep has nothing"
+        say  "         to bring back for it and this stage would pass vacuously."
+        say  "         Give the account one first, e.g. as $U:"
+        say  "             ea-podman install <PKG>"
+        say  "         (stage 0's hand-made container is deliberately not in the registry)"
+        exit 1
+    fi
+    verdict "$U is in the registry, so the sweep will act on it"
+
+    run "systemctl mask user@.service"; run "systemctl daemon-reload"
+    run "loginctl enable-linger $U"
+    printf '%s\n' "$INITIAL_MASK" > "$STATEDIR/initial_mask"
+    printf '%s\n' "fixed" > "$STATEDIR/mode"
+    touch "$STATEDIR/armed"
+    RESTORE_ARMED=0        # the mask stays across the reboot; that is the test
+    show_state
+    echo
+    say "  $(c '1;33' 'Now reboot, then run:')  $0 post-reboot"
+}
+
+stage6_check() {
+    stage 6 "After the reboot, with the fix installed"
+    show_state
+    echo
+    expect "the template is STILL masked, and the manager is up anyway"
+    run "systemctl is-enabled user@.service"
+    run "systemctl is-active $UNIT"
+    run "systemctl is-active user@$X.service"
+    run "ls -l /run/user/$X/bus"
+    run "as_user_env 'podman ps'"
+    run "journalctl -u $UNIT --no-pager -l" | head -20
+
+    local masked active
+    masked=$(systemctl is-enabled user@.service 2>&1)
+    active=$(systemctl is-active "user@$X.service" 2>&1)
+
+    if [ "$active" = active ] && [ "$masked" = masked ]; then
+        verdict "FIXED: the manager came back on its own after a reboot, and the"
+        say  "         template is still masked -- so the sweep ran, opened its window,"
+        say  "         and put CLOS-4517 back. This is what stage 5 proved did NOT"
+        say  "         happen before. Check \`podman ps\` above for the containers."
+    elif [ "$active" = active ]; then
+        nope "the manager is up but the template is NOT masked ($masked) -- the sweep"
+        say  "         did not restore the mask. That is worse than the bug; capture"
+        say  "         \`journalctl -u $UNIT\` on the ticket."
+    else
+        nope "the manager did NOT come back ($active). The fix did not take effect --"
+        say  "         see the journal above for what $UNIT did."
+    fi
+}
+
 stage5_check() {
-    U=$(cat "$STATEDIR/user" 2>/dev/null); X=$(id -u "$U" 2>/dev/null)
-    [ -f "$STATEDIR/armed" ] || { nope "not armed -- run 'pre-reboot' first"; exit 1; }
-    INITIAL_MASK=$(cat "$STATEDIR/initial_mask" 2>/dev/null)
     stage 5 "After the reboot"
     show_state
     echo
@@ -390,6 +501,22 @@ stage5_check() {
         note "the manager DID come back -- that would contradict the expected gap."
         note "Capture this output on the ticket; it changes the severity."
     fi
+}
+
+# Shared by both reboot stages: pick up the state the arming step left behind and
+# run whichever check was armed.
+post_reboot() {
+    U=$(cat "$STATEDIR/user" 2>/dev/null); X=$(id -u "$U" 2>/dev/null)
+    [ -f "$STATEDIR/armed" ] || { nope "not armed -- run 'pre-reboot' or 'pre-reboot-fixed' first"; exit 1; }
+    INITIAL_MASK=$(cat "$STATEDIR/initial_mask" 2>/dev/null)
+    [ -f "$STATEDIR/id_poc" ] && SSH_KEY="$STATEDIR/id_poc"
+
+    if [ "$(cat "$STATEDIR/mode" 2>/dev/null)" = fixed ]; then
+        stage6_check
+    else
+        stage5_check
+    fi
+
     RESTORE_ARMED=1
     rm -f "$STATEDIR/armed"
 }
@@ -429,9 +556,11 @@ case "$CMD" in
                  stage "--" "Current state"; show_state ;;
     run)         pick_user "${1:-}"; preflight; stage0; stage1; stage2; stage3; stage4
                  echo; note "stage 5 needs a reboot: $0 --yes pre-reboot"
+                 note "stage 6 (the fix) too:        $0 --yes pre-reboot-fixed"
                  note "when done: $0 cleanup" ;;
     pre-reboot)  pick_user "${1:-}"; preflight; stage5_arm ;;
-    post-reboot) stage5_check ;;
+    pre-reboot-fixed) pick_user "${1:-}"; preflight; stage6_arm ;;
+    post-reboot) post_reboot ;;
     cleanup)     cleanup ;;
-    *)           sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *)           sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac

@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 27
+%define release_prefix 28
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -48,6 +48,11 @@ Source21:      EAPodman-cmd.openapi.yaml
 # Install-time hook for the cpanel-webapp-plugin: moves a staged web
 # application into its new container's directory (--webapp-dir, CPANEL-54441).
 Source22:      webapp-dir-setup
+
+# Boot-time sweep that starts the per-user systemd managers rootless podman
+# needs. Only actually necessary where `user@.service` is masked (CageFS 7.6.39+
+# / CloudLinux CLOS-4517), but it is a cheap no-op everywhere else. (EA4-319)
+Source23:      ea-podman-user-managers.service
 %if 0%{?rhel} == 8
 Requires:       gcc-toolset-11
 %endif
@@ -119,6 +124,9 @@ install %{SOURCE22} %{buildroot}/opt/cpanel/ea-podman/webapp-dir-setup
 mkdir -p %{buildroot}/var/cpanel/perl5/lib
 install -p %{SOURCE8} %{buildroot}/var/cpanel/perl5/lib/PodmanHooks.pm
 
+mkdir -p %{buildroot}/usr/lib/systemd/system
+install -p -m 0644 %{SOURCE23} %{buildroot}/usr/lib/systemd/system/ea-podman-user-managers.service
+
 echo "{}" > %{buildroot}/opt/cpanel/ea-podman/registered-containers.json
 
 %post
@@ -154,8 +162,23 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-restart.openapi.yaml
 %attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-status.openapi.yaml
 %attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-cmd.openapi.yaml
+%attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
+* Thu Sep 03 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-28
+- EA4-319: Bring an account's containers back after a reboot on a host where
+  `user@.service` is masked. The unmask/remask bypass lives inside ea-podman, so
+  nothing ran at boot and a lingering account came up with no systemd manager --
+  its containers stayed down until its next ea-podman command. A new
+  root-only `ea-podman ensure_user_sessions`, run at boot by
+  ea-podman-user-managers.service, now starts the manager for every account the
+  container registry says has containers. It sweeps the whole host inside a
+  single unmask window rather than one per account, polls for the session buses
+  outside that window so the host-wide unmask is not held open for the sweep,
+  and warns and carries on per account so one account that cannot start costs
+  only itself. It is a no-op on a host that is not masked, where logind has
+  already started those managers by the time it runs.
+
 * Tue Sep 01 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-27
 - EA4-319: Add compatibility for cagefs 7.6.39, which masks the user@.service
   template (CloudLinux CLOS-4517) and so stops the per-user systemd manager

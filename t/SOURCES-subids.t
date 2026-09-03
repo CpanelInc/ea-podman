@@ -194,6 +194,12 @@ cptest1:165537:65536
                 return 1;
             };
 
+            # Stub the other privileged call ensure_user_session() makes, for the
+            # same reason: unstubbed it is a real `systemctl is-active` (and then
+            # a real `systemctl start`) against the host. A live manager owns the
+            # socket the stub above creates.
+            local $ea_podman::subids::user_manager_is_active = sub { -e "$ea_podman::subids::dir_run/$_[0]/bus" ? 1 : 0 };
+
             yield;
         };
 
@@ -573,6 +579,11 @@ cptest1:165537:65536
             local $ea_podman::subids::user_manager_starter = sub { push @{ $sess{started} }, $_[0]; return 1 };
             local $ea_podman::subids::linger_enabler       = sub { $sess{enabled}++;                return 1 };
 
+            # The healthy case these tests model: a live manager is exactly what
+            # owns the bus socket. The stale-socket case -- socket without
+            # manager -- is its own test below.
+            local $ea_podman::subids::user_manager_is_active = sub { -e "$ea_podman::subids::dir_run/$_[0]/bus" ? 1 : 0 };
+
             # Do not actually sleep out the 10s ceiling to test the timeout.
             local $ea_podman::subids::poll_iterations = 2;
             local $ea_podman::subids::poll_sleeper    = sub { $sess{slept}++; return };
@@ -629,6 +640,28 @@ cptest1:165537:65536
             is( $sess{enabled}, 1, "enable-linger ran" );
             is_deeply( $sess{started}, [], "and was enough on its own, so systemd is not asked again" );
             is( $sess{slept}, 0, "and nothing is polled for, since the bus is already there" );
+        };
+
+        # Caught on a live box: `systemctl stop user@<uid>.service` on an account
+        # that still has a login leaves /run/user/<uid>/bus behind, because logind
+        # only tears the runtime dir down once the LAST session ends. A start
+        # decision made on `-e $bus` skips the start and leaves the account with a
+        # socket nothing is listening on. (EA4-319)
+        it "should still start the manager when the bus socket is stale" => sub {
+            Path::Tiny::path("$ea_podman::subids::dir_linger/cptest1")->touch;
+            mkdir "$ea_podman::subids::dir_run/11002";
+            Path::Tiny::path("$ea_podman::subids::dir_run/11002/bus")->touch;
+
+            local $ea_podman::subids::user_manager_is_active = sub { $sess{active} ? 1 : 0 };
+            local $ea_podman::subids::user_manager_starter   = sub {
+                push @{ $sess{started} }, $_[0];
+                $sess{active} = 1;
+                return 1;
+            };
+
+            ea_podman::subids::ensure_user_session("cptest1");
+
+            is_deeply( $sess{started}, [11002], "the orphaned socket does not fool it into skipping the start" );
         };
 
         it "should die naming the runtime directory when that is what is missing" => sub {
@@ -692,6 +725,279 @@ cptest1:165537:65536
             like( $@, qr/CLOS-4517/,                              "and points at where the mask comes from" );
             like( $@, qr/journalctl -u user\@11002\.service/,     "with the per-uid unit to go and read" );
             ok( ea_podman::subids::user_manager_mask_file(), "and the mask is restored even though the session failed" );
+        };
+    };
+    # The boot sweep (EA4-319). What is worth pinning here is not that it starts
+    # managers -- ensure_user_session already covers that -- but the two things
+    # that are only true because the sweep is hand-split into phases: ONE window
+    # for the whole host, and the readiness poll outside it.
+    describe "ensure_user_sessions" => sub {
+        our %sweep;
+
+        around {
+            local $conf{mock_dir} = File::Temp->newdir();
+
+            local %sweep = ( started => [], enabled => [], reloads => 0, slept => 0, in_window => [] );
+
+            mkdir "$conf{mock_dir}/run";
+            mkdir "$conf{mock_dir}/linger";
+            mkdir "$conf{mock_dir}/granted";
+            mkdir "$conf{mock_dir}/etc";
+
+            no warnings qw/once redefine/;
+
+            # The file-wide getpwnam mock answers 11002 for every name, which
+            # cannot express a sweep over several accounts. cptestN => 1100N.
+            local *CORE::GLOBAL::getpwnam = sub {
+                my ($user_name) = @_;
+                return if $user_name !~ m/\Acptest([0-9])\z/;
+                return ( $user_name, "x", 11000 + $1, 11004, 20, "", "", "/home/$user_name", "/bin/bash" );
+            };
+
+            local $ea_podman::subids::dir_run            = "$conf{mock_dir}/run";
+            local $ea_podman::subids::dir_linger         = "$conf{mock_dir}/linger";
+            local $ea_podman::subids::dir_granted_linger = "$conf{mock_dir}/granted";
+            local $ea_podman::subids::file_mask_etc      = "$conf{mock_dir}/etc/user\@.service";
+            local $ea_podman::subids::file_mask_run      = "$conf{mock_dir}/etc/never-masked-here";
+            local $ea_podman::subids::file_mask_lock     = "$conf{mock_dir}/mask.lock";
+            local $ea_podman::subids::file_mask_state    = "$conf{mock_dir}/mask.state";
+
+            local $ea_podman::subids::daemon_reloader = sub { $sweep{reloads}++;                return 1 };
+            local $ea_podman::subids::linger_enabler  = sub { push @{ $sweep{enabled} }, $_[0]; return 1 };
+
+            # As in the readiness block above: healthy means the manager owns the
+            # socket. The stale case -- socket without manager -- is its own test.
+            local $ea_podman::subids::user_manager_is_active = sub { -e "$ea_podman::subids::dir_run/$_[0]/bus" ? 1 : 0 };
+
+            # Records whether the template was unmasked at the moment of each
+            # start, which is how "inside the window" is asserted below.
+            local $ea_podman::subids::user_manager_starter = sub {
+                my ($uid) = @_;
+                push @{ $sweep{started} }, $uid;
+                push @{ $sweep{in_window} }, ( ea_podman::subids::user_manager_mask_file() ? 0 : 1 );
+
+                my $d = "$ea_podman::subids::dir_run/$uid";
+                mkdir $d;
+                Path::Tiny::path("$d/bus")->touch;
+
+                return 1;
+            };
+
+            local $ea_podman::subids::poll_iterations = 2;
+            local $ea_podman::subids::poll_sleeper    = sub { $sweep{slept}++; return };
+
+            yield;
+        };
+
+        # Puts an account in the post-reboot state a masked host produces:
+        # lingering, but no runtime dir and no bus.
+        my $lingering = sub {
+            Path::Tiny::path("$ea_podman::subids::dir_linger/$_[0]")->touch;
+            return;
+        };
+
+        it "should start a manager for every account that needs one" => sub {
+            $lingering->("cptest1");
+            $lingering->("cptest3");
+
+            my $result = ea_podman::subids::ensure_user_sessions( "cptest1", "cptest3" );
+
+            is_deeply( [ sort { $a <=> $b } @{ $sweep{started} } ], [ 11001, 11003 ],                               "each account's manager is asked for, by its own uid" );
+            is_deeply( $result,                                     { cptest1 => "started", cptest3 => "started" }, "and both are reported started" );
+        };
+
+        it "should open exactly one unmask window for the whole sweep" => sub {
+            symlink( "/dev/null", $ea_podman::subids::file_mask_etc );
+
+            $lingering->($_) for qw(cptest1 cptest2 cptest3);
+
+            ea_podman::subids::ensure_user_sessions( "cptest1", "cptest2", "cptest3" );
+
+            is( scalar @{ $sweep{started} }, 3, "all three managers were started" );
+            is_deeply( $sweep{in_window}, [ 1, 1, 1 ], "every one of them inside the window" );
+            is( $sweep{reloads}, 2, "but only one unmask/remask pair for the sweep, not one per account" );
+            ok( ea_podman::subids::user_manager_mask_file(), "and the mask is back afterwards" );
+        };
+
+        # The whole reason this is not a loop over ensure_user_session(): nesting
+        # would drag each account's ~10s poll inside the host-wide unmask.
+        it "should poll for the buses only after the mask is back" => sub {
+            symlink( "/dev/null", $ea_podman::subids::file_mask_etc );
+
+            $lingering->("cptest1");
+
+            local $ea_podman::subids::user_manager_starter = sub { push @{ $sweep{started} }, $_[0]; return 1 };
+            local $ea_podman::subids::poll_sleeper         = sub {
+                $sweep{slept}++;
+                push @{ $sweep{in_window} }, ( ea_podman::subids::user_manager_mask_file() ? 0 : 1 );
+                return;
+            };
+
+            {
+                local $SIG{__WARN__} = sub { };    # the stub never produces a bus, so the sweep warns
+                ea_podman::subids::ensure_user_sessions("cptest1");
+            }
+
+            is( $sweep{slept}, 2, "it polled" );
+            is_deeply( $sweep{in_window}, [ 0, 0 ], "and the template was masked again the whole time it did" );
+        };
+
+        it "should share one poll ceiling across the sweep rather than one per account" => sub {
+            $lingering->($_) for qw(cptest1 cptest2 cptest3);
+
+            local $ea_podman::subids::user_manager_starter = sub { push @{ $sweep{started} }, $_[0]; return 1 };
+
+            {
+                local $SIG{__WARN__} = sub { };    # as above: no bus, so all three warn
+                ea_podman::subids::ensure_user_sessions( "cptest1", "cptest2", "cptest3" );
+            }
+
+            is( $sweep{slept}, 2, "the ceiling is the sweep's, not 2 x 3 accounts" );
+        };
+
+        it "should skip an account whose manager is already up, without opening a window" => sub {
+            symlink( "/dev/null", $ea_podman::subids::file_mask_etc );
+
+            $lingering->("cptest1");
+            mkdir "$ea_podman::subids::dir_run/11001";
+            Path::Tiny::path("$ea_podman::subids::dir_run/11001/bus")->touch;
+
+            my $result = ea_podman::subids::ensure_user_sessions("cptest1");
+
+            is_deeply( $result,         { cptest1 => "ok" }, "reported as already up" );
+            is_deeply( $sweep{started}, [],                  "nothing started" );
+            is_deeply( $sweep{enabled}, [],                  "no enable-linger" );
+            is( $sweep{reloads}, 0, "and no window opened at all -- the boot no-op on a healthy host" );
+        };
+
+        it "should carry on after an account that cannot be started" => sub {
+            $lingering->($_) for qw(cptest1 cptest2);
+
+            local $ea_podman::subids::user_manager_starter = sub {
+                my ($uid) = @_;
+                push @{ $sweep{started} }, $uid;
+                return 0 if $uid == 11001;
+
+                my $d = "$ea_podman::subids::dir_run/$uid";
+                mkdir $d;
+                Path::Tiny::path("$d/bus")->touch;
+                return 1;
+            };
+
+            my $result;
+            my @warnings;
+            {
+                local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+                $result = ea_podman::subids::ensure_user_sessions( "cptest1", "cptest2" );
+            }
+
+            is_deeply( $sweep{started}, [ 11001, 11002 ],                              "the account after the failure was still tried" );
+            is_deeply( $result,         { cptest1 => "failed", cptest2 => "started" }, "and only the one that failed is reported failed" );
+            like( join( "", @warnings ), qr/cptest1/, "the failure is warned about" );
+            is( $sweep{slept}, 0, "and no time is spent polling for a bus that is not coming" );
+        };
+
+        it "should not let one account's exception abort the sweep or strand the mask" => sub {
+            symlink( "/dev/null", $ea_podman::subids::file_mask_etc );
+
+            $lingering->($_) for qw(cptest1 cptest2);
+
+            local $ea_podman::subids::linger_enabler = sub {
+                my ($user) = @_;
+                die "boom\n" if $user eq "cptest1";
+                push @{ $sweep{enabled} }, $user;
+                return 1;
+            };
+
+            my $result;
+            {
+                local $SIG{__WARN__} = sub { };
+                $result = ea_podman::subids::ensure_user_sessions( "cptest1", "cptest2" );
+            }
+
+            is_deeply( $sweep{enabled}, ["cptest2"], "the sweep carried on past the die" );
+            is( $result->{cptest1}, "failed",  "the account that threw is reported failed" );
+            is( $result->{cptest2}, "started", "and the other one still came up" );
+            ok( ea_podman::subids::user_manager_mask_file(), "and the mask is back, not stranded off by the unwind" );
+        };
+
+        it "should name the mask when a manager will not start on a masked host" => sub {
+            symlink( "/dev/null", $ea_podman::subids::file_mask_etc );
+
+            $lingering->("cptest1");
+
+            local $ea_podman::subids::user_manager_starter = sub { return 0 };
+
+            my @warnings;
+            {
+                local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+                ea_podman::subids::ensure_user_sessions("cptest1");
+            }
+
+            my $warned = join( "", @warnings );
+            like( $warned, qr/cptest1.*11001/,                    "names the account and its uid" );
+            like( $warned, qr/\Quser\E\@\Q.service` is masked\E/, "and says the template is masked" );
+            like( $warned, qr/CLOS-4517/,                         "and where the mask comes from" );
+        };
+
+        it "should skip an account that no longer exists rather than die" => sub {
+            $lingering->("cptest1");
+
+            my $result;
+            my @warnings;
+            {
+                local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+                $result = ea_podman::subids::ensure_user_sessions( "ghostuser", "cptest1" );
+            }
+
+            is( $result->{ghostuser}, "unknown", "a registry entry for a deleted account is not fatal" );
+            is( $result->{cptest1},   "started", "and does not stop the accounts that do exist" );
+            like( join( "", @warnings ), qr/no such user/, "it is warned about" );
+        };
+
+        # The sweep's half of the stale-socket bug above. This one also has to be
+        # caught in the RESULT: reporting "started" for an account whose manager
+        # never came up is worse than the bug, because it hides it.
+        it "should not report an account started on the strength of a stale socket" => sub {
+            $lingering->("cptest1");
+            mkdir "$ea_podman::subids::dir_run/11001";
+            Path::Tiny::path("$ea_podman::subids::dir_run/11001/bus")->touch;
+
+            # The socket is there; nothing is listening on it, and the start fails.
+            local $ea_podman::subids::user_manager_is_active = sub { 0 };
+            local $ea_podman::subids::user_manager_starter   = sub { push @{ $sweep{started} }, $_[0]; return 0 };
+
+            my $result;
+            my @warnings;
+            {
+                local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+                $result = ea_podman::subids::ensure_user_sessions("cptest1");
+            }
+
+            is_deeply( $sweep{started}, [11001], "the stale socket does not skip the start" );
+            is( $result->{cptest1}, "failed", "and it is not reported started just because the socket exists" );
+            like( join( "", @warnings ), qr/nothing is listening on it/, "the warning says what is actually wrong" );
+        };
+
+        it "should not sweep an account whose manager is already running" => sub {
+            $lingering->("cptest1");
+            mkdir "$ea_podman::subids::dir_run/11001";
+            Path::Tiny::path("$ea_podman::subids::dir_run/11001/bus")->touch;
+
+            local $ea_podman::subids::user_manager_is_active = sub { 1 };
+
+            my $result = ea_podman::subids::ensure_user_sessions("cptest1");
+
+            is_deeply( $result,         { cptest1 => "ok" }, "the healthy early return still holds" );
+            is_deeply( $sweep{started}, [],                  "nothing started" );
+        };
+
+        it "should do nothing when given no accounts" => sub {
+            my $result = ea_podman::subids::ensure_user_sessions();
+
+            is_deeply( $result,         {}, "empty result" );
+            is_deeply( $sweep{started}, [], "and nothing touched" );
+            is( $sweep{reloads}, 0, "no window" );
         };
     };
 };

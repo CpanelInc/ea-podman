@@ -311,13 +311,41 @@ Properties worth knowing:
   symlink-to-`/dev/null` on restore — still masked, and still exactly what
   `systemctl mask` writes.
 
-**Known limitation — reboot.** The bypass lives inside ea-podman, so nothing runs
-at boot. At boot the mask is in place and logind cannot start
-`user@<uid>.service` for lingering accounts, so an account's containers do not
-come back on their own. The explicit `systemctl start` in the window means the
-account's *next* ea-podman command (including a WebApp deploy or any EAPodman
-UAPI call) repairs it rather than failing, but nothing repairs it proactively.
-See EA4-319.
+**Reboot.** At boot the mask is already in place, so logind cannot start
+`user@<uid>.service` for a lingering account and its containers would not come
+back on their own — the bypass lives inside ea-podman, and nothing else runs at
+boot. Measured on a real masked host: confirmed, the manager does not return.
+
+The trigger for it is `ea-podman-user-managers.service`, a `oneshot` unit run at
+boot that calls the root-only `ea-podman ensure_user_sessions`. That sweeps every
+account the container registry says has containers and does for each one what
+`ensure_user_session()` does for a single account.
+
+It is not a loop over `ensure_user_session()`, because at boot the scale changes
+which shape is affordable:
+
+- **One window for the whole host.** `$_in_window` already makes a nested call
+  reuse an open window, so the sweep gets one unmask/remask pair and two
+  `daemon-reload`s instead of 2N.
+- **But the readiness poll stays outside it.** That poll's ceiling is ~10s *per
+  account*; letting the sweep nest inside one window would hold the host-wide
+  unmask open for the entire sweep, which is exactly backwards. So the phases are
+  split by hand: every `systemctl start` happens in one window (each blocks until
+  its job settles, which is what keeps the window short), then the window closes
+  and the buses are polled together — one ceiling for the sweep, not one per
+  account.
+
+It warns and carries on per account, so one account that cannot start its manager
+costs only itself and cannot abort the sweep with the mask half-restored. On a
+host that is not masked it is a no-op: logind has already started those managers
+by the time it runs, every account takes the "already up" early return, and no
+window is ever opened.
+
+An account's *next* ea-podman command still repairs it too, exactly as before —
+the boot sweep is a second, proactive path to the same repair, not a replacement.
+
+Proving it needs a real reboot, so it is a live test rather than a unit test:
+`t/LiveTests/ea4-319-mask-poc.sh --yes pre-reboot-fixed` (stage 6). See EA4-319.
 
 ### `bash` on a `hidepid` host
 
@@ -345,8 +373,10 @@ that delegation and therefore does work on a `hidepid` host.
 - **CageFS 7.6.39+ masks `user@.service`** (CloudLinux CLOS-4517), which stops
   the per-user systemd manager rootless podman needs. ea-podman unmasks, starts
   the manager, and remasks immediately; the manager survives the remask because
-  masking does not stop a running instance. Containers do not come back by
-  themselves after a reboot — the account's next ea-podman command repairs it.
+  masking does not stop a running instance. Logind cannot start those managers
+  itself at boot while the template is masked, so
+  `ea-podman-user-managers.service` runs the same repair then for every account
+  the registry says has containers.
 - A **non-interactive** "run a command in the container" verb sidesteps all three
   walls; it is implemented as the `cmd` UAPI verb (CPANEL-54360), entering the
   container with `nsenter` as root (necessary because `hidepid=2` hides the
