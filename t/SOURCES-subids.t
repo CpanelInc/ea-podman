@@ -664,6 +664,115 @@ cptest1:165537:65536
             is_deeply( $sess{started}, [11002], "the orphaned socket does not fool it into skipping the start" );
         };
 
+        # The inverse of the stale socket above, and the case nothing handled.
+        # Confirmed live on CloudLinux 8 (root, 2026-09-04): /run/user/<uid> torn
+        # down underneath a manager that stays running. The manager keeps the
+        # account's containers up but cannot recreate its own socket, the start is
+        # skipped because systemd says "active", and the poll then waits out its
+        # ceiling for a bus that is never coming -- on this and on every later
+        # command, forever. Only a restart repairs it, and a restart is not this
+        # path's to perform: init_user() reaches here for read-only verbs too.
+        # (EA4-319)
+        it "should report, not repair, a running manager whose bus is gone" => sub {
+            Path::Tiny::path("$ea_podman::subids::dir_linger/cptest1")->touch;
+            mkdir "$ea_podman::subids::dir_run/11002";
+
+            local $ea_podman::subids::user_manager_is_active = sub { 1 };
+
+            eval { ea_podman::subids::ensure_user_session("cptest1"); };
+
+            like( $@, qr/is running, but its session bus/,  "it names the actual condition" );
+            like( $@, qr/systemctl stop user\@11002\.service/, "and the recovery that always works, whether or not the account has containers" );
+            like( $@, qr/stops the account/,                 "and warns that the repair is not free" );
+            like( $@, qr/but not for an account with no containers/, "and says where ensure_user_sessions does NOT help" );
+            unlike( $@, qr/did not appear/, "not the generic bus message, which points at the wrong bug" );
+
+            is_deeply( $sess{started}, [], "nothing is started -- `systemctl start` on a running unit is a no-op" );
+            is( $sess{slept}, 2, "and it still polls first, so a manager that is merely slow to come up is not misreported" );
+
+            # Without this the adminbin swallows it into "Unable to ensure the
+            # user has subuids and subgids" and the operator never sees the one
+            # message written to tell them what to do. (EA4-319)
+            ok( ea_podman::subids::is_user_session_error($@), "and it is marked as safe to show the caller" );
+            unlike( ea_podman::subids::strip_user_session_error($@), qr/\Qea-podman user session: \E/, "with the marker stripped for display" );
+        };
+
+        it "should mark the runtime-directory and bus dies as showable too" => sub {
+            Path::Tiny::path("$ea_podman::subids::dir_linger/cptest1")->touch;
+
+            eval { ea_podman::subids::ensure_user_session("cptest1"); };
+            ok( ea_podman::subids::is_user_session_error($@), "the runtime-directory die is a session error" );
+            like( ea_podman::subids::strip_user_session_error($@), qr/\AThe directory/, "and strips to the bare message" );
+
+            local $ea_podman::subids::linger_enabler = sub { mkdir "$ea_podman::subids::dir_run/11002"; return 1 };
+
+            eval { ea_podman::subids::ensure_user_session("cptest1"); };
+            ok( ea_podman::subids::is_user_session_error($@), "the bus die is a session error" );
+            like( ea_podman::subids::strip_user_session_error($@), qr/\AThe user session bus/, "and strips to the bare message" );
+        };
+
+        it "should not mark an unrelated error as showable" => sub {
+            ok( !ea_podman::subids::is_user_session_error("subuid collision with “someone-else”\n"), "a subid refusal is not showable -- it names another account" );
+            ok( !ea_podman::subids::is_user_session_error(undef),                                     "and undef is not showable" );
+            is( ea_podman::subids::strip_user_session_error("plain\n"), "plain\n", "stripping leaves an unmarked error alone" );
+        };
+
+        # The reachable path, found live on a second CL8 box (2026-09-04): an
+        # install grants the session, the image pull fails, install_container's
+        # error path releases the session it just granted, and the account is left
+        # wedged with NO containers -- which the boot sweep works from, so it
+        # would never come back to it. With nothing to take down, restarting the
+        # manager here costs no downtime, so the caller that can see the registry
+        # says so and this repairs in place. (EA4-319)
+        it "should repair in place when the account has no containers to lose" => sub {
+            Path::Tiny::path("$ea_podman::subids::dir_linger/cptest1")->touch;
+            mkdir "$ea_podman::subids::dir_run/11002";
+
+            my @stopped;
+            local $ea_podman::subids::user_manager_stopper = sub { push @stopped, $_[0]; return 1 };
+
+            # Active throughout, exactly as the wedge behaves: stopping and
+            # starting is what produces the bus, not the "active" answer.
+            local $ea_podman::subids::user_manager_is_active = sub { 1 };
+            local $ea_podman::subids::user_manager_starter   = sub {
+                push @{ $sess{started} }, $_[0];
+                Path::Tiny::path("$ea_podman::subids::dir_run/$_[0]/bus")->touch;
+                return 1;
+            };
+
+            eval { ea_podman::subids::ensure_user_session( "cptest1", may_restart => 1 ); };
+
+            is( $@, "", "it does not die" );
+            is_deeply( \@stopped,          [11002], "the unusable manager is stopped" );
+            is_deeply( $sess{started},     [11002], "and started again, which is the only thing that recreates the socket" );
+            ok( -e "$ea_podman::subids::dir_run/11002/bus", "and the bus is back" );
+        };
+
+        it "should not repair in place by default, so a read-only verb cannot bounce containers" => sub {
+            Path::Tiny::path("$ea_podman::subids::dir_linger/cptest1")->touch;
+            mkdir "$ea_podman::subids::dir_run/11002";
+
+            my @stopped;
+            local $ea_podman::subids::user_manager_stopper   = sub { push @stopped, $_[0]; return 1 };
+            local $ea_podman::subids::user_manager_is_active = sub { 1 };
+
+            eval { ea_podman::subids::ensure_user_session("cptest1"); };
+
+            is_deeply( \@stopped, [], "no restart without an explicit may_restart from the caller" );
+            like( $@, qr/is running, but/, "it reports instead" );
+        };
+
+        it "should report the runtime directory when that is what went missing under a running manager" => sub {
+            Path::Tiny::path("$ea_podman::subids::dir_linger/cptest1")->touch;
+
+            local $ea_podman::subids::user_manager_is_active = sub { 1 };
+
+            eval { ea_podman::subids::ensure_user_session("cptest1"); };
+
+            like( $@, qr/is running, but its runtime directory/, "the directory variant of the same fault" );
+            like( $@, qr/ensure_user_sessions/,                  "with the same repair instruction" );
+        };
+
         it "should die naming the runtime directory when that is what is missing" => sub {
             eval { ea_podman::subids::ensure_user_session("cptest1"); };
 
@@ -737,7 +846,7 @@ cptest1:165537:65536
         around {
             local $conf{mock_dir} = File::Temp->newdir();
 
-            local %sweep = ( started => [], enabled => [], reloads => 0, slept => 0, in_window => [] );
+            local %sweep = ( started => [], enabled => [], reloads => 0, slept => 0, in_window => [], stopped_in_window => [] );
 
             mkdir "$conf{mock_dir}/run";
             mkdir "$conf{mock_dir}/linger";
@@ -868,6 +977,64 @@ cptest1:165537:65536
             is_deeply( $sweep{started}, [],                  "nothing started" );
             is_deeply( $sweep{enabled}, [],                  "no enable-linger" );
             is( $sweep{reloads}, 0, "and no window opened at all -- the boot no-op on a healthy host" );
+        };
+
+        # The repair half of the fault reported by ensure_user_session(): the
+        # sweep is the one caller allowed to restart a manager, because boot and
+        # an explicit admin invocation are the two contexts where taking the
+        # account's containers down is expected. (EA4-319)
+        it "should restart a manager that is running with no bus under it" => sub {
+            # Masked, so "was the template lifted when this ran" is a real
+            # question rather than vacuously true.
+            symlink( "/dev/null", $ea_podman::subids::file_mask_etc );
+
+            $lingering->("cptest1");
+            mkdir "$ea_podman::subids::dir_run/11001";
+
+            # Active until something stops it, which is what makes the start below
+            # a no-op unless the stop really happened.
+            my %active = ( 11001 => 1 );
+            my @stopped;
+
+            local $ea_podman::subids::user_manager_is_active = sub { $active{ $_[0] } ? 1 : 0 };
+            local $ea_podman::subids::user_manager_stopper   = sub {
+                push @stopped, $_[0];
+                push @{ $sweep{stopped_in_window} }, ( ea_podman::subids::user_manager_mask_file() ? 0 : 1 );
+                $active{ $_[0] } = 0;
+                return 1;
+            };
+            local $ea_podman::subids::user_manager_starter = sub {
+                my ($uid) = @_;
+                push @{ $sweep{started} }, $uid;
+                $active{$uid} = 1;
+
+                my $d = "$ea_podman::subids::dir_run/$uid";
+                mkdir $d;
+                Path::Tiny::path("$d/bus")->touch;
+                return 1;
+            };
+
+            my $result = ea_podman::subids::ensure_user_sessions("cptest1");
+
+            is_deeply( \@stopped,       [11001],                 "the useless manager is stopped first" );
+            is_deeply( $sweep{started}, [11001],                 "and only then started -- a start alone would be a no-op" );
+            is_deeply( $result,         { cptest1 => "started" }, "and the account comes back" );
+
+            # A stop can block for TimeoutStopSec (90s). Inside the window that
+            # would hold the host-wide unmask open for minutes. (EA4-319)
+            is_deeply( $sweep{stopped_in_window}, [0], "and the stop happened with the template still masked, i.e. outside the window" );
+        };
+
+        it "should not stop a manager that was never running" => sub {
+            $lingering->("cptest1");
+
+            my @stopped;
+            local $ea_podman::subids::user_manager_stopper = sub { push @stopped, $_[0]; return 1 };
+
+            ea_podman::subids::ensure_user_sessions("cptest1");
+
+            is_deeply( \@stopped,       [],      "no stop for a manager that is already down" );
+            is_deeply( $sweep{started}, [11001], "just a start" );
         };
 
         it "should carry on after an account that cannot be started" => sub {

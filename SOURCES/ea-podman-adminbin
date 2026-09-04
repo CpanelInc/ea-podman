@@ -85,21 +85,36 @@ sub ENSURE_USER {
     # only an account that has containers — or says it is about to install its
     # first ($creating) — gets one. The registry that settles it is root-owned,
     # so the decision is made here rather than taken on trust. (CPANEL-55309)
-    my $session = ( $creating || ea_podman::util::user_has_containers_as_root($cpuser) ) ? 1 : 0;
+    my $has_containers = ea_podman::util::user_has_containers_as_root($cpuser);
+    my $session        = ( $creating || $has_containers ) ? 1 : 0;
 
     # Only knowable before we do it. An account already lingering records
     # nothing: that linger belongs to whoever enabled it.
     my $granting = ( $session && !ea_podman::subids::user_has_linger($cpuser) ) ? 1 : 0;
 
     local $@;
-    eval { ea_podman::subids::ensure_user_root( $cpuser, undef, $session ); };
+    # No containers ⇒ nothing to take down, so a manager that is up but unusable
+    # may be restarted in place rather than reported. The reachable case is a
+    # failed install, which releases the session it had just granted and can
+    # leave the account wedged with no containers at all. See
+    # ea_podman::subids::ensure_user_session().
+    eval { ea_podman::subids::ensure_user_root( $cpuser, undef, $session, !$has_containers ); };
 
-    if ($@) {
+    if ( my $err = $@ ) {
 
-        # The caller only gets the generic message: the real reason is root-side
-        # detail and can name another account. Log it so a refusal leaves an
-        # administrator something to diagnose.
-        Cpanel::Debug::log_warn("Could not ensure subids for “$cpuser”: $@");
+        # A failure about this account's own user session names nothing but its
+        # own uid and its own /run/user/<uid>, and it is the message that tells
+        # the operator which command repairs the account -- useless if only root
+        # ever reads it in the error log. Pass it through. (EA4-319)
+        if ( ea_podman::subids::is_user_session_error($err) ) {
+            Cpanel::Debug::log_warn("Could not ensure the user session for “$cpuser”: $err");
+            _die_with_message( ea_podman::subids::strip_user_session_error($err) );
+        }
+
+        # Everything else gets the generic message: a subid refusal names
+        # /etc/subuid and the account it collided with, which is root-side detail.
+        # Log it so a refusal still leaves an administrator something to diagnose.
+        Cpanel::Debug::log_warn("Could not ensure subids for “$cpuser”: $err");
         _die_with_message("Unable to ensure the user has subuids and subgids");
     }
 

@@ -609,8 +609,43 @@ SKIP: {
 
             # Starting the unit, not calling the verb: the unit is what fires at
             # boot, so a unit that cannot run its own ExecStart is the whole bug.
-            my ( $rc, $out ) = run_cmd( 'systemctl', 'start', $BOOT_UNIT );
-            is( $rc, 0, "the boot-time sweep runs clean with the template masked" ) or diag($out);
+            #
+            # `restart`, not `start`: the unit is Type=oneshot + RemainAfterExit=yes
+            # (deliberately - see the unit file), so once anything has run it - an
+            # earlier phase, an earlier run of this test, the boot we are standing on -
+            # it sits at `active (exited)` and a `start` job is a NO-OP THAT RETURNS 0.
+            # The sweep then never runs and the manager check below fails with nothing
+            # to show for it. `restart` on a RemainAfterExit oneshot does stop-then-start
+            # and genuinely re-runs ExecStart.
+            # Which invocation of the unit we are looking at. Both properties are
+            # read because neither is guaranteed across the systemd versions this
+            # runs on (239 on CL8, 252 on CL9, 257 on CL10) and either one changing
+            # is proof enough.
+            my $generation = sub {
+                my $id = ( run_cmd( 'systemctl', 'show', '-p', 'InvocationID',                    '--value', $BOOT_UNIT ) )[1] // '';
+                my $ts = ( run_cmd( 'systemctl', 'show', '-p', 'ExecMainStartTimestampMonotonic', '--value', $BOOT_UNIT ) )[1] // '';
+                s/\s+//g for ( $id, $ts );
+                return "$id/$ts";
+            };
+
+            my $gen_before = $generation->();
+            my ( $rc, $out ) = run_cmd( 'systemctl', 'restart', $BOOT_UNIT );
+            my $gen_after = $generation->();
+
+            # rc alone cannot carry this: a no-op start exits 0 too, which is exactly
+            # how a sweep that never ran used to read as a pass here. A restart that
+            # really re-ran ExecStart reports a different generation than before it.
+            #
+            # Judged on $gen_after, not $gen_before: before the restart the unit may
+            # legitimately be inactive with nothing to report. If systemd reports
+            # nothing even AFTER a successful restart then this host cannot answer the
+            # question, and the assertion degrades to the exit status rather than
+            # failing for a reason that has nothing to do with EA4-319.
+            my $can_tell = $gen_after =~ /[0-9a-f]/ ? 1 : 0;
+            diag("this systemd reports no InvocationID/ExecMainStartTimestamp for $BOOT_UNIT; falling back to exit status alone") if !$can_tell;
+
+            ok( $rc == 0 && ( !$can_tell || $gen_after ne $gen_before ), "the boot-time sweep really ran, and ran clean, with the template masked" )
+              or diag( "rc=$rc generation before=$gen_before after=$gen_after\n$out" );
 
             $came_back = wait_for( sub { $manager_active->() && -S "/run/user/$uid/bus" }, 30 );
             ok( $came_back, "…and the account's user manager is back, which on a masked host nothing else would have done" )

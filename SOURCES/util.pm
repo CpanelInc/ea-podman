@@ -1536,15 +1536,21 @@ sub ensure_user {
     # containers, or one making its first (`creating`), gets one. Returns
     # whether it has one.
     if ( $> == 0 ) {
-        my $session = ( $creating || user_has_containers_as_root("root") ) ? 1 : 0;
+        my $has_containers = user_has_containers_as_root("root");
+        my $session        = ( $creating || $has_containers ) ? 1 : 0;
 
         local $@;
-        eval { ea_podman::subids::ensure_user_root( "root", undef, $session ); };
+
+        # No containers ⇒ nothing to take down, so a manager that is up but
+        # unusable may be restarted in place. See ensure_user_session().
+        eval { ea_podman::subids::ensure_user_root( "root", undef, $session, !$has_containers ); };
 
         # Root is already looking at root-side state, so it gets the reason
         # itself: a subid refusal names the file and the other account, which is
         # the point of it.
-        die "Unable to ensure the root has subuids and subgids: $@" if $@;
+        # Stripped, not tested for: root sees the reason either way, and the
+        # marker is only there to tell the adminbin what a cpuser may be shown.
+        die "Unable to ensure the root has subuids and subgids: " . ea_podman::subids::strip_user_session_error($@) if $@;
 
         # No grant for root: /run/user/0 is not ours to take away.
         return $session;

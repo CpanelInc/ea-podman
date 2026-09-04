@@ -313,6 +313,11 @@ preflight() {
     [ -x "$PERL" ] || { nope "$PERL is missing"; exit 1; }
     INITIAL_MASK=$(mask_file)
 
+    # Persisted because cleanup() is its own dispatch verb in a separate process
+    # and never runs preflight(); without this it cannot tell a mask it applied
+    # from a mask CageFS owns. pick_user() has already made $STATEDIR.
+    printf '%s\n' "$INITIAL_MASK" > "$STATEDIR/initial_mask"
+
     stage "PRE" "Preflight"
     say "  checkout     : $REPO"
     say "  test account : $U (uid $X, home $HOME_U)"
@@ -611,9 +616,29 @@ summary() {
 cleanup() {
     [ -z "$U" ] && { U=$(cat "$STATEDIR/user" 2>/dev/null); X=$(id -u "$U" 2>/dev/null)
                      HOME_U=$(getent passwd "$U" 2>/dev/null | cut -d: -f6); }
+
+    # The mask this box had BEFORE the run, recorded by preflight(). Without it
+    # INITIAL_MASK is empty here, restore_mask() below matches neither of its two
+    # branches, and the unconditional unmask that used to sit on the next line
+    # left a CageFS host reporting `static` -- silently disabling CLOS-4517 and
+    # making every later test phase pass vacuously against an unmasked host.
+    [ -z "$INITIAL_MASK" ] && INITIAL_MASK=$(cat "$STATEDIR/initial_mask" 2>/dev/null || true)
+
     stage "END" "Cleanup"
-    run "systemctl unmask user@.service"
+
+    # Only ever take off a mask we put on ourselves.
+    if [ -n "$INITIAL_MASK" ]; then
+        note "this box was already masked before the run ($INITIAL_MASK) -- leaving that mask in place"
+    else
+        run "systemctl unmask user@.service"
+    fi
     run "systemctl daemon-reload"
+
+    # Best-effort from here: these talk to the account's own user manager, and we
+    # no longer unmask above, so on a host whose manager has already gone they
+    # cannot be autostarted and will fail noisily. That is fine -- they are `run`,
+    # not `check`, so nothing is recorded as a FAILURE, and the parts that matter
+    # (the state file, the lock, stopping the manager) do not depend on them.
     if [ -n "$U" ]; then
         run "as_user 'systemctl --user disable --now container-$CTR.service'"
         run "as_user 'rm -f ~/.config/systemd/user/container-$CTR.service'"

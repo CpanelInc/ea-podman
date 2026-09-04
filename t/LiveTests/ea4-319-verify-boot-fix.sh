@@ -373,7 +373,12 @@ stage_unit() {
     why "boot, so its ExecStart, its conditions and its exit status matter too."
     pause
 
-    run "systemctl start $UNIT"
+    # `restart`, not `start`: the unit is Type=oneshot + RemainAfterExit=yes, so
+    # once anything has run it -- an earlier run of this script, the boot we are
+    # standing on -- it sits at `active (exited)` and a `start` job is a no-op
+    # that still returns 0. Result would still read `success` from the previous
+    # invocation and this stage would pass without running the sweep at all.
+    run "systemctl restart $UNIT"
     run "systemctl status $UNIT --no-pager -l" | head -20
     run "journalctl -u $UNIT --no-pager -l" | tail -20
 

@@ -55,7 +55,7 @@ our $file_mask_lock  = "/opt/cpanel/ea-podman/user-manager-mask.lock";
 our $file_mask_state = "/opt/cpanel/ea-podman/user-manager-mask.state";
 
 sub ensure_user_root {
-    my ( $user, $num_uids, $ensure_session ) = @_;
+    my ( $user, $num_uids, $ensure_session, $may_restart ) = @_;
 
     $num_uids       = 65537 if !$num_uids;
     $ensure_session = 1     if !defined $ensure_session;
@@ -71,7 +71,10 @@ sub ensure_user_root {
     # first subid setup: linger may have been torn down since (e.g. a stale
     # state or an explicit `loginctl disable-linger`), which would leave a
     # registered user with no runtime dir. (CPANEL-54037)
-    ensure_user_session($user) if $ensure_session;
+    # $may_restart says the account has no containers, so restarting a manager
+    # that is up but unusable costs nothing. The caller decides because only it
+    # can see the root-owned container registry. See ensure_user_session().
+    ensure_user_session( $user, may_restart => $may_restart ) if $ensure_session;
 
     # Tell podman to ignore uid/gid issues
     _ensure_storage_conf();
@@ -188,6 +191,27 @@ sub _daemon_reload {
 sub _start_user_manager {
     my ($uid) = @_;
     system( "systemctl", "start", "user\@$uid.service" );
+    return $? == 0;
+}
+
+# The counterpart to $user_manager_starter, needed for one case only: a manager
+# that is running while its runtime directory or bus socket is gone. `systemctl
+# start` on a running unit is a no-op, so a restart is the only repair, and a
+# restart has to begin with a stop.
+#
+# Expect this to be slow. Stopping a manager takes its containers down with it,
+# and a container whose PID 1 does not exit on SIGTERM is only killed at
+# TimeoutStopSec — 90s by default — so budget that per account. It is why only
+# the sweep does this and the per-command path reports instead. (EA4-319)
+our $user_manager_stopper = \&_stop_user_manager;
+
+sub _stop_user_manager {
+    my ($uid) = @_;
+
+    # Allowed while the template is masked: masking refuses new *starts*, not
+    # stops. That is what lets both callers do this OUTSIDE the unmask window,
+    # which matters because a stop can take TimeoutStopSec (90s) to return.
+    system( "systemctl", "stop", "user\@$uid.service" );
     return $? == 0;
 }
 
@@ -365,6 +389,28 @@ sub with_user_manager_unmasked {
     return;
 }
 
+# Marks a die as being about THIS account's own user session -- its own uid, its
+# own /run/user/<uid> -- and so safe to show the caller verbatim. A subid refusal
+# is not: it names /etc/subuid and the account it collided with, which is
+# root-side detail a cpuser must not see. The adminbin swallows everything by
+# default and uses these two to make the exception, so the one message written to
+# tell an operator which command repairs their account actually reaches them.
+# (EA4-319)
+our $session_error_prefix = "ea-podman user session: ";
+
+sub is_user_session_error {
+    my ($err) = @_;
+    return ( defined $err && index( $err, $session_error_prefix ) == 0 ) ? 1 : 0;
+}
+
+sub strip_user_session_error {
+    my ($err) = @_;
+    return $err if !is_user_session_error($err);
+
+    substr( $err, 0, length($session_error_prefix) ) = "";
+    return $err;
+}
+
 # The one statement of what the mask is and where it comes from, so the
 # root-side and cpuser-side messages cannot drift apart.
 sub masked_user_manager_explanation {
@@ -395,7 +441,12 @@ our $poll_iterations = 100;
 our $poll_sleeper    = sub { Time::HiRes::usleep(100_000) };    # 0.1s × 100 ≈ 10s max
 
 sub ensure_user_session {
-    my ($user) = @_;
+    my ( $user, %opts ) = @_;
+
+    # Whether this caller is allowed to restart a manager that is running but
+    # unusable (see the die below). Defaults to off: the callers that may are the
+    # ones that have checked there are no containers to take down with it.
+    my $may_restart = $opts{may_restart} ? 1 : 0;
 
     my ( $uid, $gid ) = ( getpwnam($user) )[ 2, 3 ];
     die "Could not look up the uid/gid for “$user”\n" if !defined $uid;
@@ -482,11 +533,63 @@ sub ensure_user_session {
         }
     }
 
+    # A manager that is still running with its runtime directory or bus gone is a
+    # state this path cannot repair, and must not try to. The start above is
+    # skipped for an active manager -- and `systemctl start` on one is a no-op
+    # anyway -- so the poll has just waited out its whole ceiling for a socket
+    # nothing was ever going to create, and every later command for this account
+    # will do the same. Only a restart fixes it.
+    #
+    # Deliberately not restarted here. ea_podman::util::init_user() reaches this
+    # for every verb, including read-only ones, so repairing would mean an
+    # `ea-podman list` taking the account's containers down for as long as
+    # TimeoutStopSec allows -- a worse outcome than the fault it repairs, and one
+    # the caller never asked for. The sweep does restart it (see
+    # ensure_user_sessions below), because boot and an explicit admin invocation
+    # are the two contexts where that is expected. So: name the condition, and
+    # name the command whose job it is.
+    #
+    # Checked after the poll rather than before it, so a manager that another
+    # process started a moment ago still gets its ceiling to finish coming up.
+    # (EA4-319)
+    if ( ( !-d $rundir || !-e $bus ) && $user_manager_is_active->($uid) ) {
+
+        # Nothing to lose: with no containers under it, restarting the manager
+        # costs no downtime, so repair it here rather than making the caller do
+        # it. This is the reachable case -- a failed install releases the session
+        # it just granted (ea_podman::util::install_container), which can leave
+        # the account wedged with zero containers, and the sweep works from the
+        # registry so it would never come back to it.
+        if ($may_restart) {
+            $user_manager_stopper->($uid);
+
+            my $restarted;
+            with_user_manager_unmasked( sub { $restarted = $user_manager_starter->($uid); return } );
+
+            if ($restarted) {
+                for ( 1 .. $poll_iterations ) {
+                    last if -d $rundir && -e $bus;
+                    $poll_sleeper->();
+                }
+            }
+        }
+
+        if ( ( !-d $rundir || !-e $bus ) && $user_manager_is_active->($uid) ) {
+            my $what = !-d $rundir ? "its runtime directory “$rundir” is gone" : "its session bus “$bus” is gone, so nothing is listening on it";
+
+            die $session_error_prefix
+              . "The user systemd manager for “$user” (uid $uid) is running, but $what.\n"
+              . "A manager cannot recreate its own runtime directory or socket, so this does not heal on its own: it happens when /run/user/$uid is torn down underneath a manager that is still up.\n"
+              . "Repair it as root with `systemctl stop user\@$uid.service` and then re-run this command; the manager is started fresh. This stops the account’s containers, which come back with it.\n"
+              . "`ea-podman ensure_user_sessions` does the same for every account the container registry lists — but not for an account with no containers, which is how this state is usually reached.\n";
+        }
+    }
+
     if ( !-d $rundir ) {
-        die "The directory “$rundir” is missing: neither `loginctl enable-linger $user` nor `systemctl start user\@$uid.service` produced it.\n" . _masked_user_manager_hint($uid);
+        die $session_error_prefix . "The directory “$rundir” is missing: neither `loginctl enable-linger $user` nor `systemctl start user\@$uid.service` produced it.\n" . _masked_user_manager_hint($uid);
     }
     if ( !-e $bus ) {
-        die "The user session bus “$bus” did not appear after `loginctl enable-linger $user` and `systemctl start user\@$uid.service` (the user systemd manager did not start).\n" . _masked_user_manager_hint($uid);
+        die $session_error_prefix . "The user session bus “$bus” did not appear after `loginctl enable-linger $user` and `systemctl start user\@$uid.service` (the user systemd manager did not start).\n" . _masked_user_manager_hint($uid);
     }
 
     return;
@@ -560,6 +663,32 @@ sub ensure_user_sessions {
 
     return \%result if !@pending;
 
+    # Stop the unusable managers BEFORE opening the window, not inside it.
+    #
+    # “Active” is not “usable”: a manager whose /run/user/<uid> was torn down
+    # beneath it keeps running with no socket to talk to and cannot recreate one,
+    # and `systemctl start` on a running unit is a no-op, so the only repair is a
+    # restart. The sweep is where a restart belongs -- it runs at boot and from an
+    # explicit admin invocation, both contexts where taking the account's
+    # containers down is expected. Every other path reports instead; see
+    # ensure_user_session() above.
+    #
+    # Out here because a stop is slow and needs no window. It takes the account's
+    # containers with it, and a container whose PID 1 ignores SIGTERM is only
+    # killed at TimeoutStopSec -- 90s each, measured. Inside the window that would
+    # hold the host-wide unmask open for minutes on a box with several such
+    # accounts, which is the very thing the phase split above exists to avoid.
+    # Masking refuses new *starts*, not stops, so nothing here needs the template
+    # lifted. (EA4-319)
+    for my $acct (@pending) {
+        my $uid = $acct->{uid};
+
+        next if !$user_manager_is_active->($uid);
+        next if -e "$dir_run/$uid/bus";
+
+        $user_manager_stopper->($uid);
+    }
+
     with_user_manager_unmasked(
         sub {
             for my $acct (@pending) {
@@ -580,6 +709,9 @@ sub ensure_user_sessions {
 
                     record_linger_grant($user) if $regrant;
 
+                    # Anything still active here is genuinely usable: the
+                    # unusable ones were stopped in the pre-pass above, so this
+                    # is the same “already up” shortcut as ever.
                     $acct->{start_failed} = !$user_manager_starter->($uid) if !$user_manager_is_active->($uid);
 
                     1;
