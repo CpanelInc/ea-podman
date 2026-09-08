@@ -796,6 +796,49 @@ This is intended to make it easier for a user to purge their ea-podman based con
                 return 1;
             },
         },
+        ensure_user_sessions => {
+            clue     => "ensure_user_sessions [--quiet]",
+            abstract => "Bring up the per-user systemd managers every account with containers needs",
+            help     =>
+              "root only. For each account the container registry says has containers, makes sure it lingers and that its user systemd manager is running — lifting a masked `user\@.service` for as long as that takes, exactly as any other ea-podman command does.\n\nRun at boot by ea-podman-user-managers.service. Nothing else starts these managers at boot on a host where `user\@.service` is masked (CageFS 7.6.39+ / CloudLinux CLOS-4517), so without it an account's containers stay down until its next ea-podman command. Safe and near-free to run by hand at any time: an account whose manager is already up is skipped without opening a window.\n\nReports what it did per account and exits non-zero if any account's manager could not be started.\n\n--quiet prints only failures, for unattended runs.",
+            code => sub {
+                my ( $app, @other_args ) = @_;
+
+                die "ensure_user_sessions can only be run by root\n" if $> != 0;
+
+                my $quiet = 0;
+                for my $arg (@other_args) {
+                    if ( $arg eq "--quiet" ) { $quiet = 1 }
+                    else                     { die "Unknown argument “$arg”\n" }
+                }
+
+                my @users = ea_podman::util::users_with_containers_as_root();
+
+                if ( !@users ) {
+                    print "No accounts have ea-podman containers, so there are no user systemd managers to start.\n" if !$quiet;
+                    return 1;
+                }
+
+                my $result = ea_podman::subids::ensure_user_sessions(@users);
+
+                # The per-account warnings have already gone to STDERR from
+                # ensure_user_sessions(); this is the summary.
+                my @failed = sort grep { $result->{$_} eq "failed" } keys %{$result};
+
+                if ( !$quiet ) {
+                    for my $user ( sort keys %{$result} ) {
+                        print "$user: $result->{$user}\n";
+                    }
+                }
+
+                if (@failed) {
+                    warn "ea-podman: could not start the user systemd manager for: " . join( ", ", @failed ) . "\n";
+                    exit 1;
+                }
+
+                return 1;
+            },
+        },
         rootbackupofuser => {
             clue     => "rootbackupofuser - internal use only",
             abstract => "internal use only",

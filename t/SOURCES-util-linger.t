@@ -53,6 +53,12 @@ sub _mock_world {
     $ea_podman::subids::dir_granted_linger  = $granted;
     $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";
 
+    # ensure_user_session() asks systemd whether the manager is running rather
+    # than trusting the bus socket, which outlives it (EA4-319). Unstubbed that
+    # is a real `systemctl` against the host. These fixtures model a healthy
+    # world, where a live manager is exactly what owns the socket.
+    $ea_podman::subids::user_manager_is_active = sub { -e "$ea_podman::subids::dir_run/$_[0]/bus" ? 1 : 0 };
+
     for my $container ( @{ $args{containers} || [] } ) {
         ea_podman::util::register_container_as_root( $container->{name}, $container->{user}, 0, "redis:7", $container->{webapp} );
     }
@@ -96,6 +102,29 @@ subtest 'user_has_containers_as_root' => sub {
     ok( ea_podman::util::user_has_containers_as_root("bob"),   "an account with a registered container" );
     ok( !ea_podman::util::user_has_containers_as_root("alice"), "an account with none" );
     ok( !ea_podman::util::user_has_containers_as_root(undef),   "no account at all" );
+};
+
+# The list the boot sweep works from, so an account missing here is an account
+# whose containers stay down after a reboot on a masked host. (EA4-319)
+subtest 'users_with_containers_as_root' => sub {
+    my $tmp = File::Temp->newdir();
+    _mock_world(
+        tmp        => $tmp,
+        containers => [
+            { name => "redis.bob.01",   user => "bob" },
+            { name => "redis.bob.02",   user => "bob" },
+            { name => "redis.alice.01", user => "alice" },
+        ],
+    );
+
+    is_deeply( [ ea_podman::util::users_with_containers_as_root() ], [ "alice", "bob" ], "each account once, sorted, however many containers it has" );
+};
+
+subtest 'users_with_containers_as_root with an empty registry' => sub {
+    my $tmp = File::Temp->newdir();
+    _mock_world( tmp => $tmp );
+
+    is_deeply( [ ea_podman::util::users_with_containers_as_root() ], [], "nothing to sweep when nobody has containers" );
 };
 
 subtest 'the linger grant record' => sub {

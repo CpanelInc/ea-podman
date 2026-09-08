@@ -5,6 +5,12 @@ if [ "$numhooks" -ge 1 ]; then
     /usr/local/cpanel/bin/manage_hooks delete module PodmanHooks
 fi
 
+# Fresh install, not upgrade
+if [[ "$1" == "1" || "$1" == "install" ]]; then
+    rm -f /opt/cpanel/ea-podman/user-manager-mask.lock
+    rm -f /opt/cpanel/ea-podman/user-manager-mask.state
+fi
+
 
 # This happens on dnf reinstall
 if [[ "$1" == "2" ]]; then
