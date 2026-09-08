@@ -56,3 +56,8 @@ install -p -m 0644 $SOURCE21 $DEB_INSTALL_ROOT/usr/local/cpanel/Cpanel/API/EAPod
 # cPanel hooks module
 mkdir -p $DEB_INSTALL_ROOT/var/cpanel/perl5/lib
 install -p $SOURCE8 $DEB_INSTALL_ROOT/var/cpanel/perl5/lib/PodmanHooks.pm
+
+# Boot-time sweep that starts the per-user systemd managers rootless podman
+# needs; see the unit itself and EA4-319.
+mkdir -p $DEB_INSTALL_ROOT/usr/lib/systemd/system
+install -p -m 0644 $SOURCE23 $DEB_INSTALL_ROOT/usr/lib/systemd/system/ea-podman-user-managers.service

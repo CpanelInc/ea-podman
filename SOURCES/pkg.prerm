@@ -8,6 +8,14 @@ if [[ "$1" == "0" || "$1" == "remove" ]]; then
         /opt/cpanel/ea-podman/bin/ea-podman remove_containers --all
         rm -f /opt/cpanel/ea-podman/bin/ea-podman
     fi
+    rm -f /opt/cpanel/ea-podman/user-manager-mask.lock
+    rm -f /opt/cpanel/ea-podman/user-manager-mask.state
+
+    # Removal only, never an upgrade: leaving an enabled unit behind whose
+    # ExecStart is about to be deleted would fail every boot. (EA4-319)
+    if [ -d /run/systemd/system ]; then
+        systemctl disable --now ea-podman-user-managers.service
+    fi
 else
     if [ -e "/opt/cpanel/ea-podman/registered-containers.json" ]; then
         # This is an upgrade, we need to preserve /opt/cpanel/ea-podman/registered-containers.json

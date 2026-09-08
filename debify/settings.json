@@ -3,7 +3,8 @@
     "dont_override_config" : true,
     "dont_relativise_ontar" : 1,
     "remove_from_install" : [
-        "^debian/tmp/usr/local/cpanel/scripts/ea-podman$"
+        "^debian/tmp/usr/local/cpanel/scripts/ea-podman$",
+        "^debian/tmp/opt/cpanel/ea-podman/user-manager-mask\\.(?:lock|state)$"
     ],
     "remove_from_requires" : [
         "gcc",

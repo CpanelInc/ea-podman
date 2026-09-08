@@ -44,6 +44,197 @@ as well as v2 (AlmaLinux 9/10 and Ubuntu 24.04, which default to v2).
 | `ea-memcached16-cli-live.t` | A **normal** account uses the `ea-podman` CLI directly (`install <PKG>` mode) to install a real EA4 container-based package, `ea-memcached16`. | A live cPanel VM (cgroup v1 or v2), with `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
 | `ea-memcached16-cagefs-cli-live.t` | Sister to the above, but the account is **CageFS**-enabled: the CLI is driven through a real CageFS login, exercising the CPANEL-54672 fallback to the UAPI bridge. | CloudLinux (cgroup v1 or v2), with CageFS installed + initialized, and `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
 
+### EA4-319 in the two cagefs `.t` files
+
+Both cagefs tests carry the `user@.service` mask checks: the mask is recorded
+before install and must come back at the same path afterward, with the manager
+started inside the window still running through the remask, no in-progress state
+file left behind, and the account still working after `cagefsctl --hook-install`
+re-applies the mask.
+
+Their "survives a reboot" step goes through `ea-podman-user-managers.service`
+rather than restarting the manager directly. It used to be one
+`systemctl restart user@<uid>.service`, which is **not** a reboot proxy on a
+masked host: systemd refuses the start half and leaves the running manager
+alone, so the socket never disappeared and the checks passed having restarted
+nothing (this is the mask-poc's stage-4 finding — masking refuses new starts, it
+does not stop a running instance). They now stop the manager for real and bring
+it back the way boot does: the sweep unit where the template is masked, plain
+`systemctl start` where it is not. They also check the unit is enabled and that
+its `ExecStart` runs the sweep verb, and that `ea-podman ensure_user_sessions`
+no-ops (reports `ok`, opens no window) on an account that is already healthy.
+
+That is as close as a `.t` gets. Only a real reboot proves the fix end to end —
+`ea4-319-mask-poc.sh` stage 6, below, owns that.
+
+## `ea4-319-mask-poc.sh` — the CageFS `user@.service` mask
+
+Not a `.t` file and not part of the suite: a standalone, self-narrating shell
+POC for EA4-319. It uses **only podman, `systemctl` and `loginctl`** — no
+ea-podman code — so it validates the underlying mechanism independently of our
+implementation.
+
+**It does not need CageFS.** `cagefsctl --hook-install` masks the template with
+literally `systemctl mask user@.service`, so masking it by hand on a plain box
+produces the identical host state. That is what this script does.
+
+```sh
+./ea4-319-mask-poc.sh status                  # inspect, changes nothing
+./ea4-319-mask-poc.sh --yes run [USER]        # stages 0-4
+./ea4-319-mask-poc.sh --yes pre-reboot        # arm stage 5 (the gap), then reboot
+./ea4-319-mask-poc.sh --yes pre-reboot-fixed  # arm stage 6 (the fix), then reboot
+./ea4-319-mask-poc.sh post-reboot             # check whichever was armed
+./ea4-319-mask-poc.sh cleanup                 # remove the container, restore state
+```
+
+Each stage prints why it exists, every command it runs with its output, and a
+PASS/FAIL verdict saying what to conclude. What it demonstrates:
+
+0. rootless podman under `systemctl --user` works normally
+1. with the template masked, **neither** `/run/user/<uid>` **nor** the bus appears
+2. `loginctl enable-linger` alone cannot repair an already-lingering account
+3. unmask → start the manager → remask ("the sandwich") repairs it
+4. the manager and its container **survive** the remask — the load-bearing claim
+5. (needs a reboot) containers do **not** come back on their own — measured and
+   confirmed on a masked host
+6. (needs a reboot) with `ea-podman-user-managers.service` installed, they **do**
+
+Stage 1 is worth reading carefully. EA4-319 open question 2 predicted the
+runtime directory would survive, since `user-runtime-dir@.service` is not itself
+masked. Measured on systemd 239, that is wrong: `user@.service` carries
+`Requires=user-runtime-dir@%i.service`, so masking `user@` fails the whole job
+and the runtime directory is never created either — with or without a login
+session. Both of ea-podman's readiness errors therefore name the mask.
+
+**Stage 6 is the odd one out.** Stages 0–5 involve no ea-podman code at all;
+stage 6 does, because it is the only test that can prove the fix — the fix is a
+systemd unit that runs at boot, so no unit test reaches it. It works from
+ea-podman's own container registry, so the account needs a container ea-podman
+knows about (`ea-podman install <PKG>`); the hand-made container stage 0 creates
+is deliberately not in the registry, and `pre-reboot-fixed` refuses to arm rather
+than pass vacuously. It also checks the unit is installed and enabled first.
+
+Safety: masking `user@.service` is **host-wide** — while masked, no account on
+the box can get a per-user systemd manager. The script records the mask state at
+startup and restores exactly that on exit, including via an `EXIT`/`INT`/`TERM`
+trap, so a CageFS-applied mask is put back as found. Throwaway VM only.
+
+The one exception is `pre-reboot` and `pre-reboot-fixed`, which disarm that trap
+on purpose: leaving the mask in place across the reboot *is* the test. Until you
+run `post-reboot` or `cleanup`, the box boots with no per-user systemd manager
+for any account.
+
+It drives the test account over **ssh to localhost** (setting up and removing its
+own key), not `su`: `su` leaves the caller's cwd in place, which the cpuser often
+cannot enter — the same trap `ea_podman::util::ensure_su_login()` works around at
+`util.pm:107-115`. It also sets `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS`
+explicitly, because an ssh login does not necessarily create a logind session,
+which is why `ensure_su_login()` sets them by hand too.
+
+## `ea4-319-verify-boot-fix.sh` — the boot-time fix, end to end
+
+The manual verification runbook for `ea-podman-user-managers.service` as a
+script. Where `ea4-319-mask-poc.sh` proves the *mechanism* with no ea-podman
+code, this one drives ea-podman itself.
+
+```sh
+./ea4-319-verify-boot-fix.sh local              # repo checks only, safe anywhere
+./ea4-319-verify-boot-fix.sh --yes run [USER]   # stages 1-5 on this box
+./ea4-319-verify-boot-fix.sh register [USER]    # give USER a registered container
+./ea4-319-verify-boot-fix.sh --yes pre-reboot [USER]   # arm stage 6, then reboot
+./ea4-319-verify-boot-fix.sh post-reboot        # check stage 6
+./ea4-319-verify-boot-fix.sh cleanup            # undo the reboot state
+./ea4-319-verify-boot-fix.sh pkg                # check a built RPM instead
+```
+
+1. **local** — the test suite, perl/bash syntax, that the spec still parses and
+   ships the unit, and that systemd accepts the unit file. Changes nothing, so it
+   runs anywhere including a dev checkout.
+2. **deploy** — installs the changed `subids.pm`/`util.pm`/`ea-podman.pl` over
+   the installed ea-podman, recompiles the CLI, and enables the unit. Lets a box
+   be tested without waiting on an OBS build; it is deliberately *not* a test of
+   packaging, which is what the `pkg` stage is for.
+3. **smoke** — the verb is registered, is refused to non-root, and no-ops on a
+   healthy host.
+4. **masked** — the load-bearing one: with the template masked and root's manager
+   stopped, the sweep starts it and puts the mask back, so `is-enabled` says
+   `masked` and `is-active` says `active` at the same time.
+5. **unit** — runs the systemd unit itself and shows its journal, since that is
+   what actually fires at boot.
+6. **reboot** — hands off to `ea4-319-mask-poc.sh` stage 6, which owns the reboot
+   harness. The only test that proves containers come back.
+
+The `register` stage needs an EA4 **container-based package** on the host, since
+`ea-podman install <PKG>` installs a container *from* one and cannot fetch the
+package itself. It defaults to `ea-redis62`; on a host without it, it names the
+package-manager command and offers to run it (`--yes` accepts). `EAPODMAN_TEST_PKG`
+picks a different package and `ea-podman avail` lists the candidates — the same
+convention `ea-memcached16-cli-live.t` uses.
+
+Stage 4 masks `user@.service` host-wide for a few seconds and restores the state
+it found on every exit path, trap included; stage 2 overwrites the installed
+ea-podman; `register` may install an EA4 package. Throwaway VM only.
+
+## `ea4-319-ab-verify.sh` — does the fix actually fix it?
+
+Its sister. Where `ea4-319-mask-poc.sh` proves the **mechanism** with no
+ea-podman code involved, this one proves the **implementation**: on a host masked
+exactly as `cagefsctl --hook-install` masks it, it runs one identical
+rootless-podman operation twice and expects opposite results.
+
+```sh
+./ea4-319-ab-verify.sh status              # inspect, changes nothing
+./ea4-319-ab-verify.sh --yes run [USER]    # the A/B run
+./ea4-319-ab-verify.sh cleanup             # remove the container, restore state
+```
+
+- **A** bootstraps the account the way ea-podman did *before* EA4-319 and must
+  **fail**. It is `SOURCES/subids.pm` at the newest revision in this repo's
+  history that does not yet carry `with_user_manager_unmasked`, recovered with
+  `git show` — real old code rather than a strawman.
+- **B** bootstraps it with `SOURCES/subids.pm` from the working tree and must
+  **pass**. Nothing else differs — same host, same mask, same account, same op.
+
+Both sides come out of the checkout, never out of whatever ea-podman happens to
+be installed on the box: an installed module may be anything, including a build
+that already carries the fix, which would make A mean something different from
+host to host and on an up-to-date box quietly stop testing the old behaviour at
+all. Only when there is no usable history — a shallow clone, or the script copied
+out on its own — does A fall back to an inline transcription of that code
+(`loginctl enable-linger` plus the same 10s bus poll, and nothing else), and it
+says which of the two it used. Both produce the same failure verbatim.
+
+The op is podman and `systemctl` only, in the shape ea-podman itself uses:
+`podman create`, `podman generate systemd --restart-policy on-failure --name`
+into `~/.config/systemd/user`, then `enable` + `start` through the account's own
+manager. It runs the account's commands under `runuser -u` with
+`XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` set by hand — no login shell, no
+logind session — because that is the context ea-podman's privileged callers
+(cpsrvd/UAPI, account hooks, root `su -`) actually hand it.
+
+A baseline stage runs the op unmasked first, so an A failure cannot be blamed on
+the environment, and it also warms the image in the *account's own* store so
+neither side needs the network. After B it checks the things that make the
+approach legitimate rather than merely effective: the mask is back at the same
+path, no in-progress-window state file is left behind, the manager is still
+running *through* the remask, and a second bootstrap on the now-healthy account
+opens no window at all.
+
+The one thing it does take from the system is `/usr/local/cpanel/3rdparty/bin/perl`
+(override with `EAPODMAN_PERL`), because the module needs `Cpanel::OS` and
+`Path::Tiny`. It also creates `/opt/cpanel/ea-podman` if ea-podman is not
+installed, since that is where `ea_podman::subids` writes its lock and state
+file, and removes it again at cleanup.
+
+Verified on AlmaLinux 8.10, systemd 239, podman 4.4.1, cgroup v1, both A paths:
+all checks pass, with A dying on `The directory "/run/user/<uid>" is missing` and
+its op hitting `Error: creating events dirs: mkdir /run/user/<uid>: permission
+denied` and `Failed to connect to bus`, while B's identical op reaches `active`.
+
+Same safety story as the POC — the mask is host-wide while it is on, and the
+startup state is restored on every exit path including the trap. Throwaway VM
+only.
+
 ## Running
 
 As root, on the target VM. Each test is self-contained — copy just the one

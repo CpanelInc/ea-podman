@@ -205,6 +205,148 @@ What the verb accounts for:
 - **Exit semantics.** The container command's exit code is surfaced in
   `data.exit_code`, distinct from the UAPI call's own success/failure.
 
+### CageFS 7.6.39+ masks `user@.service`
+
+Independent of the three walls above, a current CageFS host actively prevents the
+per-user systemd manager that ea-podman's whole rootless model rests on.
+
+CageFS 7.6.39 (released 2026-06-16) masks the `user@.service` **template**:
+
+```
+/etc/systemd/system/user@.service -> /dev/null
+```
+
+Three things about it matter:
+
+- **It is deliberate**, from CloudLinux security report **CLOS-4517**: a caged
+  account put a unit in `~/.config/systemd/user/`, had the per-user systemd
+  instance start it, and so ran code outside its cage with a view of the real
+  filesystem. CloudLinux considered running the per-user manager *inside* the
+  cage and rejected it — it would have meant mounting `/run/systemd/system`, the
+  notify socket and the system bus into every cage.
+- **It is re-applied on every cagefs install and upgrade**, by
+  `cagefsctl --hook-install`. Any manual `systemctl unmask` is reverted by the
+  next cagefs update, so a persistent unmask is not a fix.
+- **It applies to every account on the server**, caged or not — it is the
+  template that is masked, not a per-user unit.
+
+With it masked no per-user manager can start, so `/run/user/<uid>/bus` never
+appears and rootless podman has nothing to talk to.
+
+It is tempting to reason that `user-runtime-dir@.service` is *not* masked, so
+`/run/user/<uid>` should still appear and only the bus should be missing. That
+is what EA4-319's open question 2 assumed, and **it is wrong.** `user@.service`
+carries `Requires=user-runtime-dir@%i.service`, so masking `user@` fails the
+whole job and the runtime directory never gets created either. Measured on
+systemd 239, with and without a login session:
+
+| `user@.service` masked | `/run/user/<uid>` | `/run/user/<uid>/bus` |
+|---|---|---|
+| lingering, no login session | missing | missing |
+| after a real login (`pam_systemd`) | missing | missing |
+
+So a masked host loses the directory *and* the bus, which means the original
+"the runtime directory did not become available" report was accurate rather than
+misleading, and both of ea-podman's readiness errors name the mask.
+
+**What ea-podman does about it.** `ea_podman::subids::with_user_manager_unmasked()`
+lifts the mask, starts the account's manager, and puts the mask straight back:
+
+```
+                       ┌─ loginctl enable-linger <user>   (persistence)
+unmask user@.service ──┤                                            ──> remask
+                       └─ systemctl start user@<uid>.service (up now)
+
+then, outside the window:  poll for /run/user/<uid>/bus
+```
+
+Those are two different jobs. `enable-linger` owns *persistence* — the
+`/var/lib/systemd/linger` marker, so the account's containers survive logout and
+reboot. The explicit `systemctl start` owns *up right now*, which
+`enable-linger` cannot do: for an account that already lingers, logind will not
+retry a manager it believes it already handled, which is exactly the
+post-reboot state on a CageFS host (marker present, `/run/user/<uid>` present,
+bus missing).
+
+The readiness poll is deliberately **outside** the window. The mask only refuses
+new *starts* of `user@.service`; waiting for a socket to appear under
+`/run/user/<uid>` touches nothing it gates. Polling inside would hold both the
+host-wide unmask window and the lock for up to the full 10s ceiling,
+serialising every other account behind one slow bootstrap.
+
+This works because **masking a unit does not stop an instance that is already
+running** — only new starts are refused. The manager started inside the window
+keeps running after the mask is back, which is what the account's containers
+need. (It is also why early field reports on EA4-319 contradicted each other:
+whoever unmasked, deployed, and remasked kept working, because their manager was
+still up, while an account that had never had one failed.)
+
+Properties worth knowing:
+
+- **Off a CageFS host it does nothing at all** — not masked means a pure
+  pass-through, no `daemon-reload`, no lock.
+- **It is on the cold path only.** `ensure_user_session()` returns early whenever
+  `/run/user/<uid>/bus` is already there, so the window opens once per cold
+  account, not once per command.
+- **Only the manager *start* needs it.** `systemctl --user` calls
+  (`ea_podman::util::sysctl`, `_systemctl_quiet`) talk to the account's
+  already-running manager over its own bus, where the template mask is
+  irrelevant.
+- **The window is host-wide while open**, not per-user: any account whose manager
+  happens to start during it keeps that manager. The window is short and
+  `flock`-serialized, but it cannot be made per-user without leaving a persistent
+  per-account carve-out on disk, which is the thing being avoided.
+- **The mask is restored on every exit path** — normal return, a `die` from
+  either the unmask or the wrapped work, or a handled signal. A `kill -9` is the
+  one case nothing in-process can cover, so the recorded state at
+  `/opt/cpanel/ea-podman/user-manager-mask.state` (one line: the path the mask
+  was in) lets the next run put the mask back. If a restore ever fails,
+  ea-podman warns loudly and keeps that record so the host is not silently left
+  unmasked.
+- **A `/run` mask stays a `/run` mask.** ea-podman unlinks and recreates the
+  symlink itself rather than calling `systemctl unmask`/`mask`, because
+  `--runtime` cannot be combined with `unmask`, so a round trip through
+  `systemctl` would silently relocate a runtime mask into `/etc`. An
+  admin-created *empty* unit file is normalised to the canonical
+  symlink-to-`/dev/null` on restore — still masked, and still exactly what
+  `systemctl mask` writes.
+
+**Reboot.** At boot the mask is already in place, so logind cannot start
+`user@<uid>.service` for a lingering account and its containers would not come
+back on their own — the bypass lives inside ea-podman, and nothing else runs at
+boot. Measured on a real masked host: confirmed, the manager does not return.
+
+The trigger for it is `ea-podman-user-managers.service`, a `oneshot` unit run at
+boot that calls the root-only `ea-podman ensure_user_sessions`. That sweeps every
+account the container registry says has containers and does for each one what
+`ensure_user_session()` does for a single account.
+
+It is not a loop over `ensure_user_session()`, because at boot the scale changes
+which shape is affordable:
+
+- **One window for the whole host.** `$_in_window` already makes a nested call
+  reuse an open window, so the sweep gets one unmask/remask pair and two
+  `daemon-reload`s instead of 2N.
+- **But the readiness poll stays outside it.** That poll's ceiling is ~10s *per
+  account*; letting the sweep nest inside one window would hold the host-wide
+  unmask open for the entire sweep, which is exactly backwards. So the phases are
+  split by hand: every `systemctl start` happens in one window (each blocks until
+  its job settles, which is what keeps the window short), then the window closes
+  and the buses are polled together — one ceiling for the sweep, not one per
+  account.
+
+It warns and carries on per account, so one account that cannot start its manager
+costs only itself and cannot abort the sweep with the mask half-restored. On a
+host that is not masked it is a no-op: logind has already started those managers
+by the time it runs, every account takes the "already up" early return, and no
+window is ever opened.
+
+An account's *next* ea-podman command still repairs it too, exactly as before —
+the boot sweep is a second, proactive path to the same repair, not a replacement.
+
+Proving it needs a real reboot, so it is a live test rather than a unit test:
+`t/LiveTests/ea4-319-mask-poc.sh --yes pre-reboot-fixed` (stage 6). See EA4-319.
+
 ### `bash` on a `hidepid` host
 
 The interactive `bash` verb (direct CLI only — root and unrestricted shells; it
@@ -228,6 +370,13 @@ that delegation and therefore does work on a `hidepid` host.
   CageFS cannot — its cage is entered per-uid at the PAM layer, independent of the
   shell. The only outside-the-cage route is a root-only, non-PAM setuid drop, and
   it still cannot be exposed over UAPI.
+- **CageFS 7.6.39+ masks `user@.service`** (CloudLinux CLOS-4517), which stops
+  the per-user systemd manager rootless podman needs. ea-podman unmasks, starts
+  the manager, and remasks immediately; the manager survives the remask because
+  masking does not stop a running instance. Logind cannot start those managers
+  itself at boot while the template is masked, so
+  `ea-podman-user-managers.service` runs the same repair then for every account
+  the registry says has containers.
 - A **non-interactive** "run a command in the container" verb sidesteps all three
   walls; it is implemented as the `cmd` UAPI verb (CPANEL-54360), entering the
   container with `nsenter` as root (necessary because `hidepid=2` hides the

@@ -1,0 +1,37 @@
+[Unit]
+# Rootless podman drives containers through each account's own systemd manager
+# (user@<uid>.service). Normally logind starts those at boot for every lingering
+# account and nothing here is needed. On a host where `user@.service` is masked
+# — CageFS 7.6.39+ does this deliberately, CloudLinux CLOS-4517 — logind cannot,
+# so a lingering account comes up with no manager and its containers stay down
+# until somebody happens to run an ea-podman command. This unit is that trigger.
+# See EA4-319 and docs/container-shell-access.md.
+Description=Start the per-user systemd managers ea-podman containers need
+Documentation=https://webpros.atlassian.net/browse/EA4-319
+
+# logind owns the linger markers this reads and the managers it starts, so it
+# has to be up first. Ordering only: a box without logind has nothing to fix.
+After=systemd-logind.service systemd-user-sessions.service
+Wants=systemd-logind.service
+
+# The CLI is compiled at install time (bin/compile.sh, run from %post), so on a
+# half-installed box there is nothing to run.
+ConditionPathExists=/opt/cpanel/ea-podman/bin/ea-podman
+
+[Service]
+Type=oneshot
+
+# So `systemctl status` still shows the sweep ran, and it is not re-run on every
+# `daemon-reload`.
+RemainAfterExit=yes
+
+ExecStart=/opt/cpanel/ea-podman/bin/ea-podman ensure_user_sessions --quiet
+
+# A single account whose manager will not start must not hold the boot open: the
+# sweep polls for at most ~10s in total, so anything near this ceiling means
+# systemd itself is wedged, and failing is better than waiting forever. Nothing
+# is ordered after this unit, so a failure here costs only the containers.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
