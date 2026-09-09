@@ -29,7 +29,7 @@ fi
 # containers would otherwise stay down until its next ea-podman command; a cheap
 # no-op everywhere else. Enabled, not started: there is nothing to repair right
 # now on a box that has not just rebooted. (EA4-319)
-if [ -d /run/systemd/system ]; then
+if [ -d /run/systemd/system ] && [ -e /usr/lib/systemd/system/ea-podman-user-managers.service ]; then
     systemctl daemon-reload
     systemctl enable ea-podman-user-managers.service
 fi
