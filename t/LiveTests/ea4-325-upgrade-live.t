@@ -85,6 +85,14 @@
 # stopped doing anything; the repair even still returned 0. That is the
 # same hazard CPANEL-56732 exists to prevent in the webapp plugin.
 #
+# VERIFIED ON BOTH PACKAGE FORMATS AND TWO PODMAN MAJORS:
+#   AlmaLinux 9.8, podman 5.8.2, ea-podman 1.0-28 RPM  -- 20/20
+#   Ubuntu 24.04.4, podman 4.9.3, ea-podman 1.0-28 deb -- 20/20
+# The gate reads `podman image inspect --format '{{.Id}}'` against
+# `podman inspect --format '{{.Image}}'`, and the rollback reads
+# `{{.ImageName}}`; all three behave identically on 4.9 and 5.8, and
+# resolve the same image to the same ID.
+#
 # Run ON A LIVE cPanel VM, as root, with podman installed and an
 # ea-podman build carrying the EA4-325 changes:
 #
