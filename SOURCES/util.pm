@@ -65,6 +65,7 @@ use Cpanel::AdminBin::Call ();
 use Cpanel::Time           ();
 use File::Path::Tiny       ();
 use Cwd                    ();
+use Time::HiRes            ();
 
 use Path::Tiny 'path';
 
@@ -500,6 +501,18 @@ sub get_container_service_name {
     return "container-$container_name.service";
 }
 
+# Its own named sub so tests have a seam that does not need podman — a bare
+# backtick has none, which is why get_containers() had no real test. Chomps here,
+# once, rather than letting the newline ride along inside every caller's image
+# name: split() with a limit of 2 lets the second field absorb it, so `image` used
+# to end in "\n". Harmless in `list`, silently fatal to any comparison built on
+# that field. (EA4-325)
+sub _podman_ps_names_and_images {
+    my @lines = `podman ps --no-trunc --format "{{.Names}} {{.Image}}"`;
+    chomp @lines;
+    return @lines;
+}
+
 sub get_containers {
     my %containers;
 
@@ -509,7 +522,7 @@ sub get_containers {
     # containers is no longer given one (CPANEL-55309).
     return \%containers if $> != 0 && !-d "/run/user/$>";
 
-    for my $line (`podman ps --no-trunc --format "{{.Names}} {{.Image}}"`) {
+    for my $line ( _podman_ps_names_and_images() ) {
         my ( $name, $image ) = split( " ", $line, 2 );
         $containers{$name} = { image => $image, ports => [ _get_current_ports($name) ] };    # empty list == no ports
     }
@@ -605,6 +618,27 @@ sub _add_container_unit_directives {
     return join( "\n", @out );
 }
 
+# The fully-qualified image a container was created from, e.g.
+# "docker.io/library/httpd:2.4". Its own named sub so tests have a seam that does
+# not need podman.
+#
+# `podman inspect`, not `podman ps`: ps omits a stopped container, and upgrading a
+# stopped container is legal. This is the only place the previous image is
+# knowable — the registry keeps just the basename (see the $image_name computed in
+# _ensure_latest_container), which is enough to display and not enough to recreate
+# from. Returns undef when podman cannot say, which callers must treat as
+# “unknown”, never as an image. (EA4-325)
+sub _get_container_image_ref {
+    my ($container_name) = @_;
+    validate_user_container_name($container_name);
+
+    my $container_name_qx = quotemeta($container_name);
+    chomp( my $ref = `podman inspect --format '{{.ImageName}}' $container_name_qx 2> /dev/null` );
+
+    return if $? != 0 || !length($ref);
+    return $ref;
+}
+
 # Its own sub so tests have a seam that does not need podman.
 sub _podman_generate_systemd {
     my ($container_name) = @_;
@@ -650,6 +684,201 @@ sub _systemctl_quiet {
 sub reset_container_unit_failure {
     my ($container_name) = @_;
     return _systemctl_quiet( "reset-failed", get_container_service_name($container_name) );
+}
+
+
+# Capturing sibling of _systemctl_quiet(): the value of one unit property.
+# _systemctl_quiet() throws stdout away, so it cannot read one. Its own named sub
+# so tests have a seam — a bare backtick has none. Returns "" when systemctl
+# could not answer at all (unknown unit, no user manager), which callers must
+# treat as “we do not know”, never as a state. (EA4-325)
+sub _systemctl_show {
+    my ( $unit, @properties ) = @_;
+
+    my $unit_qx = quotemeta($unit);
+    my $prop_qx = join( " ", map { "-p " . quotemeta($_) } @properties );
+
+    my $out = `systemctl --user show $unit_qx $prop_qx 2> /dev/null`;
+    return {} if $? != 0;
+
+    my %value;
+    for my $line ( split( m/\n/, $out ) ) {
+        $value{$1} = $2 if $line =~ m/^(\w+)=(.*)$/;
+    }
+
+    return \%value;
+}
+
+# The start-verdict poll, as package variables so a test can exercise the
+# timeout and the confirmation without actually sleeping for them.
+our $unit_poll_interval_sec = 0.25;
+our $unit_poll_sleeper      = sub { Time::HiRes::usleep(250_000) };    # 0.25s
+
+# How long an `active` sighting must persist before it counts. A crash-looping
+# unit is genuinely `active` for the moment the container runs on each attempt —
+# measured on a live box, a window ≤0.25s wide — so a single sample can land on
+# one and report a crash loop as a success. 0.5s is the same value, for the same
+# hazard, that Cpanel::WebApps::Podman::is_running() uses as $CONFIRM_DELAY.
+# Deliberately short: the assertion is that it started, not that it stays up, and
+# every successful upgrade pays this. (EA4-325)
+our $unit_active_confirm_sec = 0.5;
+
+# Headroom over the restart budget for the container's own run time per attempt.
+our $unit_settle_slack_sec = 10;
+
+# One directive's value out of %container_unit_directives, whichever section it
+# is written under. undef when we do not write that directive at all.
+sub _container_unit_directive {
+    my ($name) = @_;
+
+    for my $section ( sort keys %container_unit_directives ) {
+        for my $directive ( @{ $container_unit_directives{$section} } ) {
+            return $1 if $directive =~ m/^\s*\Q$name\E\s*=\s*(.*?)\s*$/i;
+        }
+    }
+
+    return undef;
+}
+
+# Enough of a systemd timespan parser for the directives we write ourselves.
+# Returns undef on anything it does not recognise, so a malformed directive
+# falls back to a default rather than being fatal to an upgrade.
+sub _systemd_timespan_to_sec {
+    my ($span) = @_;
+
+    return undef if !defined $span;
+    $span =~ s/\s+//g;
+    return undef if $span !~ m/^([0-9]+(?:\.[0-9]+)?)(us|ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes)?$/i;
+
+    my ( $num, $unit ) = ( $1, lc( $2 // "s" ) );
+    my %mult = (
+        us => 1 / 1_000_000,
+        ms => 1 / 1_000,
+        ( map { $_ => 1 } qw(s sec secs second seconds) ),
+        ( map { $_ => 60 } qw(m min mins minute minutes) ),
+    );
+
+    return $num * $mult{$unit};
+}
+
+# How long a just-started container unit may take to reach a terminal state.
+# Derived from the directives we write into the unit ourselves
+# (%container_unit_directives) plus the generator's `--restart-policy
+# on-failure`: systemd waits RestartSec between attempts and gives up after
+# StartLimitBurst of them, so no verdict can arrive later than
+# RestartSec × StartLimitBurst, plus the container's own run time each attempt.
+# Derived rather than a constant so retuning either directive moves the ceiling
+# with it.
+#
+# Only valid because reset_container_unit_failure() runs immediately before the
+# start: `reset-failed` clears the rate-limit counter, so the full
+# StartLimitBurst budget is actually available. Without that,
+# StartLimitIntervalSec=300 could leave far less of it.
+#
+# Measured against a live box at the default 5 × 3: a crash-looping unit reached
+# `failed` 15.8s after a clean start. (EA4-325)
+sub container_unit_settle_ceiling_sec {
+    my $restart_sec = _systemd_timespan_to_sec( _container_unit_directive("RestartSec") ) // 5;
+
+    my $burst = _container_unit_directive("StartLimitBurst") // 3;
+    $burst = 3 if $burst !~ m/^[0-9]+$/ || $burst < 1;
+
+    return ( $restart_sec * $burst ) + $unit_settle_slack_sec;
+}
+
+# Poll a just-started container's unit to a terminal verdict. Returns one of:
+#
+#   active   — up, and still up $unit_active_confirm_sec later
+#   failed   — systemd gave up on it
+#   crashed  — settled inactive after a non-zero exit
+#   stopped  — settled inactive cleanly (a deliberate stop, or an unreachable
+#              session: both look like this, which is why the die says so)
+#   unknown  — systemctl could not answer at all
+#   timeout  — never left activating inside the ceiling
+#
+# ActiveState alone is not enough. `inactive` covers a clean stop, a container
+# that is gone, and a session we cannot see; Result is what separates them.
+sub wait_for_container_unit_verdict {
+    my ($container_name) = @_;
+
+    my $unit       = get_container_service_name($container_name);
+    my $ceiling    = container_unit_settle_ceiling_sec() + $unit_active_confirm_sec;
+    my $iterations = int( $ceiling / $unit_poll_interval_sec ) + 1;
+    my $confirms   = int( $unit_active_confirm_sec / $unit_poll_interval_sec ) + 1;
+
+    my $active_run = 0;
+
+    for ( 1 .. $iterations ) {
+        my $show   = _systemctl_show( $unit, "ActiveState", "Result" );
+        my $state  = $show->{ActiveState} // "";
+        my $result = $show->{Result}      // "";
+
+        if ( $state eq "active" ) {
+
+            # Provisional, not a verdict — see $unit_active_confirm_sec.
+            return "active" if ++$active_run >= $confirms;
+        }
+        elsif ( $state eq "activating" || $state eq "reloading" || $state eq "deactivating" ) {
+
+            # Includes SubState=auto-restart, the RestartSec backoff between
+            # attempts, which is where a failing container spends most of the
+            # window before systemd gives up on it.
+            $active_run = 0;
+        }
+        elsif ( $state eq "failed" ) {
+            return "failed";
+        }
+        elsif ( $state eq "inactive" ) {
+            return $result eq "success" ? "stopped" : "crashed";
+        }
+        else {
+            return "unknown";    # includes "" — systemctl told us nothing
+        }
+
+        $unit_poll_sleeper->();
+    }
+
+    return "timeout";
+}
+
+# The verdict, as a die. Split from the poll so the poll stays a pure state
+# reporter and each half can be tested on its own.
+#
+# `lead` and `note` let a caller that is not an upgrade say so — the EAPodman
+# UAPI's start/restart use the same poll, and telling someone their `start`
+# "was upgraded" would be nonsense.
+sub verify_container_started {
+    my ( $container_name, %opts ) = @_;
+
+    my $verdict = wait_for_container_unit_verdict($container_name);
+    return 1 if $verdict eq "active";
+
+    my $unit    = get_container_service_name($container_name);
+    my $user    = scalar getpwuid($>);
+    my $ceiling = container_unit_settle_ceiling_sec() + $unit_active_confirm_sec;
+
+    my %what = (
+        failed  => "its service “$unit” failed",
+        crashed => "its service “$unit” started and then exited",
+        stopped => "its service “$unit” is not running",
+        unknown => "the user systemd manager for “$user” could not be asked about “$unit”",
+        timeout => "its service “$unit” was still trying to start ${ceiling}s later and never settled",
+    );
+
+    my $hint = "";
+    $hint = "That account's systemd user session may not be up. As root, `ea-podman ensure_user_sessions` starts the managers every account with containers needs.\n"
+      if $verdict eq "unknown" || $verdict eq "stopped";
+
+    my $lead = $opts{lead} // "“$container_name” was upgraded, but it did not come back up";
+    my $note = defined $opts{note}
+      ? $opts{note}
+      : "The upgrade itself completed — the container was recreated from the image its configuration names — so this is the container declining to run, not a half-applied upgrade. The previous container is gone either way.\n";
+
+    die "$lead: $what{$verdict}.\n"
+      . $note
+      . $hint
+      . "Find out why with `systemctl --user status $unit`, `journalctl --user -u $unit`, and the container's own output, `podman logs $container_name` (as root: `su - $user -c '…'`).\n"
+      . "Once the cause is fixed, `ea-podman upgrade $container_name` runs the whole thing again, or `systemctl --user start $unit` just starts it.\n";
 }
 
 # Install-time hook for the cpanel-webapp-plugin (--webapp-dir). Package
@@ -904,8 +1133,26 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     # another server never had one), so it comes from the backup file instead.
     my $webapp = defined $webapp_source_dir ? 1 : $isrestore ? ( $opts->{webapp} ? 1 : 0 ) : 0;
 
+    # Captured before uninstall_container() tears the container down, because that
+    # is the last moment the previous image is knowable — it is what the rollback
+    # below pins back. Nothing else needs capturing: the upgrade path never
+    # touches the ports (_get_current_ports is read-only) or $container_dir, and
+    # the registry entry is left true by deferring the write below. (EA4-325)
+    my $prev_image_ref = $isupgrade ? _get_container_image_ref($container_name) : undef;
+
     uninstall_container($container_name) if $isupgrade || $isrestore;    # avoid spurious warnings on install
-    register_container( $container_name, $isupgrade || $isrestore, $image_name, $webapp );    # register before create just in case
+
+    # Install and restore register before the create, so a crash in between leaves
+    # a registry entry with no container — recoverable, and still visible to the
+    # account-removal hooks — rather than a container with no entry, which is
+    # invisible and leaks its ports. That is what "just in case" was guarding.
+    #
+    # An upgrade has the opposite need. Its entry already exists and is true, and
+    # overwriting it with the new image and pkg_version *before* the create is
+    # exactly what made a failed upgrade unrecoverable: the previous values then
+    # survived nowhere. So an upgrade registers only once the new container
+    # exists — see below the create. (EA4-325)
+    register_container( $container_name, $isrestore, $image_name, $webapp ) if !$isupgrade;
 
     # Move the staged web application into the container dir (as webapp/).
     # Unlike a package's local-dir-setup hook this one is load-bearing — the
@@ -923,7 +1170,24 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     }
 
     if ( !create_user_container( $container_name, @start_args ) ) {
-        if ( !$isupgrade ) {
+
+        # Three operations, three different right answers. This used to be one
+        # `if ( !$isupgrade )`, which meant restore took the install cleanup —
+        # deregistering and deleting the directory perform_user_restore() had just
+        # extracted from the user's backup, their only copy of it. (EA4-325)
+        if ($isupgrade) {
+            my $rollback = _rollback_failed_upgrade( $container_name, $prev_image_ref, \@start_args );
+            die _failed_upgrade_message( $container_name, $container_dir, $prev_image_ref, $rollback );
+        }
+        elsif ($isrestore) {
+
+            # Never deregister and never remove $container_dir here: it holds the
+            # data just extracted from the backup, and perform_user_restore()
+            # removed ~/ea-podman.d before the tarball went in, so there is no
+            # other copy.
+            die _failed_restore_message( $container_name, $container_dir );
+        }
+        else {
             deregister_container($container_name);
 
             # The moved web application is the user's only copy of their
@@ -940,19 +1204,133 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             # safe cwd and don't let cleanup mask the real create failure.
             chdir("/");
             eval { File::Path::Tiny::rm($container_dir) };
-        }
 
-        die "Failed to create container\n";
+            die "Failed to create container\n";
+        }
     }
+
+    # Deferred from before the create — see the register_container() above.
+    register_container( $container_name, 1, $image_name, $webapp ) if $isupgrade;
 
     generate_container_service($container_name);
 
     if ( !$no_start ) {
 
         # else an upgrade of a container that used up its restarts cannot start it
+        # (and see container_unit_settle_ceiling_sec(), whose budget this clears)
         reset_container_unit_failure($container_name);
+
+        # Deliberately not the verdict, and deliberately not fatal here.
+        #
+        # Not the verdict: `systemctl start` returns success for a container that
+        # starts and then dies — measured — so its boolean is necessary but not
+        # sufficient. A failed start leaves the unit non-active either way, which
+        # is what verify_container_started() reports.
+        #
+        # Not fatal: this tail is shared by install, upgrade and restore. Only
+        # upgrade_container() raises on the outcome (EA4-325); install and restore
+        # keep today's behaviour so a multi-container restore is not abandoned
+        # partway through.
         sysctl( start => get_container_service_name($container_name) );
     }
+
+    return 1;
+}
+
+# A failed `podman create` on upgrade has already cost the container its unit
+# file and its podman record — uninstall_container() ran before the create — so
+# the failure path has to put those back. "Recreate, do not deregister"
+# (EA4-325).
+#
+# The registry is deliberately not involved: an upgrade's register_container() is
+# deferred until after a successful create, so on this path the entry still
+# describes the container being recreated and is correct untouched.
+#
+# The recreate pins the image back to $prev_image_ref, the fully-qualified
+# reference the container was actually running. That is the whole of what this can
+# fix. Every other start arg is rebuilt from the same $container_dir/ea-podman.json
+# (and, for a package, /opt/cpanel/$pkg/ea-podman.json) that a retry would read,
+# so a failure which is not the image pin recurs here. It also cannot undo
+# $pkg_dir/ea-podman-local-dir-upgrade, which ran earlier and has no reverse step.
+#
+# Reports what it achieved rather than deciding what to say about it, and never
+# dies — a rollback that dies is a rollback that reports nothing.
+sub _rollback_failed_upgrade {
+    my ( $container_name, $prev_image_ref, $start_args_ar ) = @_;
+
+    my %status = ( created => 0, enabled => 0, started => 0 );
+
+    my @args = @{$start_args_ar};
+    $args[-1] = $prev_image_ref if defined $prev_image_ref;
+
+    # The failed create can leave the name taken; `rm --ignore` is a no-op when it
+    # did not.
+    remove_user_container($container_name);
+
+    return \%status if !create_user_container( $container_name, @args );
+    $status{created} = 1;
+
+    # generate_container_service() dies if `systemctl --user enable` fails, and it
+    # needs the container to exist — so it is never reached when the recreate
+    # failed.
+    local $@;
+    $status{enabled} = eval { generate_container_service($container_name); 1 } ? 1 : 0;
+    return \%status if !$status{enabled};
+
+    reset_container_unit_failure($container_name);
+    $status{started} = sysctl( start => get_container_service_name($container_name) ) ? 1 : 0;
+
+    return \%status;
+}
+
+# Kept argument-pure (names and what the rollback achieved in, string out) so it
+# is unit-testable. House style: name the condition, then name the recovery.
+sub _failed_upgrade_message {
+    my ( $container_name, $container_dir, $prev_image_ref, $status ) = @_;
+
+    my $pinned =
+      defined $prev_image_ref
+      ? "“$prev_image_ref” (the image it had been running)"
+      : "the image its configuration names — podman could not report what the container had been running, so there was nothing to pin back";
+
+    my $intact =
+        "Nothing was deregistered and nothing was deleted: “$container_name” is still registered at the version it was on, its assigned ports are still held, and “$container_dir” is untouched.\n"
+      . "Re-run once the cause of the create failure is fixed:  ea-podman upgrade $container_name\n";
+
+    my $head = "Failed to upgrade “$container_name”: the new container could not be created.\n";
+
+    return $head
+      . "The previous container could not be recreated from $pinned either, so “$container_name” is not running and has no systemd unit.\n"
+      . $intact
+      if !$status->{created};
+
+    return $head
+      . "The previous container was recreated from $pinned, but its systemd unit could not be enabled, so it will not start now or at boot.\n"
+      . $intact
+      if !$status->{enabled};
+
+    return $head
+      . "The previous container was recreated from $pinned and its unit is enabled, but the unit did not start. Check `systemctl --user status "
+      . get_container_service_name($container_name) . "`.\n"
+      . $intact
+      if !$status->{started};
+
+    return $head
+      . "The previous container was recreated from $pinned and is running again, so service is restored — but the upgrade did not happen.\n"
+      . "“$container_dir” was NOT rolled back: a package's ea-podman-local-dir-upgrade hook runs before the container is created and has no reverse step, so any changes it made remain.\n"
+      . $intact;
+}
+
+# Kept argument-pure so it is unit-testable.
+sub _failed_restore_message {
+    my ( $container_name, $container_dir ) = @_;
+
+    return
+        "Failed to restore “$container_name”: the container could not be created.\n"
+      . "“$container_dir” was left in place. It holds the data just extracted from the backup and is the only copy of it, so a failed restore never removes it. “$container_name” also stays registered, so it remains visible to `ea-podman containers` and to the account-removal hooks.\n"
+      . "Ports were assigned to “$container_name” for this restore and are still held. `ea-podman restore` takes a fresh set every run, so retry with `upgrade` rather than re-running the restore, or the old reservations are stranded.\n"
+      . "To retry in place:  ea-podman upgrade $container_name   (recreates it from “$container_dir/ea-podman.json” using the ports already assigned)\n"
+      . "To give up on it:   ea-podman uninstall $container_name  (releases the ports, deregisters it, and moves “$container_dir” aside to “$container_dir.bak”)\n";
 }
 
 # Validate a --webapp-dir value: the absolute path of the staged directory
@@ -1168,10 +1546,25 @@ sub upgrade_container {
     my ($container_name) = @_;
     validate_user_container_name($container_name);
     _ensure_latest_container( $container_name, { op => "upgrade" } );
+
+    # An upgrade that leaves the application down must not exit 0 (EA4-325).
+    #
+    # Here rather than in _ensure_latest_container()'s start tail because that
+    # tail is shared with install and restore: a die there would abandon the rest
+    # of a multi-container restore. Every caller this is for comes through this
+    # sub — the `upgrade` verb, the upgrade_containers sweep, the EAPodman UAPI,
+    # and the webapp plugin's redeploy. No opt-out: the plugin path is the one
+    # most users actually hit, so exempting it would leave the lie where it does
+    # the most harm.
+    verify_container_started($container_name);
+
+    return 1;
 }
 
 sub restore_containers_for_user {
     my (@containers) = @_;
+
+    my @failed;
 
     foreach my $container (@containers) {
         my $container_name = $container->{container_name};
@@ -1180,9 +1573,26 @@ sub restore_containers_for_user {
 
         validate_user_container_name($container_name);
 
+        # One container that will not come back is no reason to leave the rest
+        # unattempted. Before EA4-325 aborting here was defensible — a failed
+        # restore had already destroyed the container dir, so there was nothing
+        # to come back to. Now the failure is recoverable in place, so aborting
+        # would turn one recoverable failure into N unattempted ones.
+        #
         # The backup file is the only surviving record that this was a WebApp.
-        _ensure_latest_container( $container_name, { op => "restore", webapp => $container->{webapp} ? 1 : 0 } );
+        local $@;
+        eval { _ensure_latest_container( $container_name, { op => "restore", webapp => $container->{webapp} ? 1 : 0 } ); 1 } or do {
+            warn( $@ || "unknown error\n" );
+            push @failed, $container_name;
+        };
     }
+
+    if (@failed) {
+        die "Could not restore " . scalar(@failed) . " of " . scalar(@containers) . " container(s): " . join( ", ", map { "“$_”" } @failed ) . "\n"
+          . "Each one's error is above, and each is recoverable in place with `ea-podman upgrade <CONTAINER_NAME>`.\n";
+    }
+
+    return 1;
 }
 
 sub move_container_dir {
@@ -1491,11 +1901,30 @@ sub upgrade_containers_for_a_user {
         die "upgrade_users_containers: Containers listed must be for all the same user" if ( $c_user ne $user );
     }
 
+    my @failed;
     foreach my $container (@containers) {
-        upgrade_container( $container->{container_name} );
+        my $name = $container->{container_name};
+
+        local $@;
+        eval { upgrade_container($name); 1 } or do {
+            my $err = $@ || "unknown error\n";
+            warn "ea-podman: could not upgrade “$name”: $err";
+            push @failed, $name;
+        };
     }
 
-    return;
+    # Thrown, not returned. The root sweep calls this inside
+    # Cpanel::AccessIds::do_as_user_with_exception(), across a privilege boundary
+    # a return value does not survive but an exception does. The eval above is
+    # what stops one bad container abandoning the rest; this is what stops that
+    # turning into a silent success — which would re-create the very defect
+    # EA4-325 exists to kill. (EA4-325)
+    if (@failed) {
+        die "Failed to upgrade " . scalar(@failed) . " of " . scalar(@containers) . " container(s) for “$user”: " . join( ", ", @failed ) . "\n"
+          . "Each failure is reported above. Once its cause is fixed, re-run a single one with `ea-podman upgrade <CONTAINER_NAME>`.\n";
+    }
+
+    return 1;
 }
 
 sub register_container {

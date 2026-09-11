@@ -670,11 +670,18 @@ This is intended to make it easier for a user to purge their ea-podman based con
             help     => qq{Upgrade ea-podman registered containers by EA4 package, an arbitrary non-package name, or all via `--all`.
     - as non-root will only affect only the user
     - as root this will effect all users
+
+One account's or one container's failure no longer stops the sweep: the rest are still attempted, each failure is reported as it happens, and the command exits non-zero if anything failed.
             },
             code => sub {
                 my ( $app, $pkg ) = @_;
 
                 die "Please provide a package name or the flag `--all`\n" if ( !$pkg );
+
+                # Before the registry read, as remove_containers does. Without it
+                # the root branch below reaches upgrade_containers_for_a_user()
+                # having never run check_proc()/ensure_user()/ensure_su_login().
+                ea_podman::util::init_user();
 
                 my $user          = getpwuid($>);
                 my $containers_hr = ea_podman::util::load_known_containers();
@@ -697,6 +704,8 @@ This is intended to make it easier for a user to purge their ea-podman based con
                     exit 0;
                 }
 
+                my @failed;
+
                 if ( $user eq "root" ) {
                     my %user_breakdown;
 
@@ -705,31 +714,80 @@ This is intended to make it easier for a user to purge their ea-podman based con
                         push( @{ $user_breakdown{$c_user} }, $container );
                     }
 
-                    foreach my $c_user ( keys %user_breakdown ) {
-                        if ( $c_user eq "root" ) {
-                            ea_podman::util::upgrade_containers_for_a_user( @{ $user_breakdown{$c_user} } );
-                        }
-                        else {
-                            Cpanel::AccessIds::do_as_user_with_exception(
-                                $c_user,
-                                sub {
-                                    my $homedir = ( getpwuid($>) )[7];
-                                    local $ENV{HOME} = $homedir;
-                                    local $ENV{USER} = $c_user;
+                    # `sort` matters. @containers is sorted above, but building
+                    # %user_breakdown throws that order away and bare `keys` is
+                    # randomised per process — so which accounts a mid-sweep
+                    # failure skipped used to vary run to run, making the failure
+                    # list unreproducible. (EA4-325)
+                    foreach my $c_user ( sort keys %user_breakdown ) {
+                        my @c_containers = @{ $user_breakdown{$c_user} };
 
-                                    chdir($homedir);
+                        try {
+                            if ( $c_user eq "root" ) {
+                                ea_podman::util::upgrade_containers_for_a_user(@c_containers);
+                            }
+                            else {
+                                Cpanel::AccessIds::do_as_user_with_exception(
+                                    $c_user,
+                                    sub {
+                                        my $homedir = ( getpwuid($>) )[7];
+                                        local $ENV{HOME} = $homedir;
+                                        local $ENV{USER} = $c_user;
 
-                                    ea_podman::util::init_user();
-                                    ea_podman::util::upgrade_containers_for_a_user( @{ $user_breakdown{$c_user} } );
-                                }
-                            );
+                                        chdir($homedir);
+
+                                        ea_podman::util::init_user();
+                                        ea_podman::util::upgrade_containers_for_a_user(@c_containers);
+                                    }
+                                );
+                            }
                         }
+                        catch {
+                            my $err = $_;
+
+                            # ref() first: unlike remove_containers, what arrives
+                            # here can be a plain string — the aggregate die from
+                            # upgrade_containers_for_a_user() — and ->isa on a
+                            # string is a trap waiting to be sprung.
+                            if ( ref($err) && eval { $err->isa("Cpanel::Exception::UserNotFound") } ) {
+
+                                # No deleted-user fallback of the kind
+                                # remove_containers has (ZC-10958): there is
+                                # nothing to upgrade for an account that is gone,
+                                # and an upgrade sweep must never deregister
+                                # anything — that is remove's job, and doing it
+                                # here would make `upgrade` silently destructive.
+                                # Skipped, but counted: a registry entry for a
+                                # vanished account is a real problem and must not
+                                # exit 0.
+                                warn "ea-podman: skipping “$c_user”: the account no longer exists, so its registered containers ("
+                                  . join( ", ", map { $_->{container_name} } @c_containers )
+                                  . ") cannot be upgraded.\n"
+                                  . "They are still registered. Clean them up as root with `ea-podman remove_containers --all`, which handles containers whose account was deleted uncleanly.\n";
+                            }
+                            else {
+                                warn "ea-podman: upgrading containers for “$c_user” failed: $err";
+                            }
+
+                            push @failed, $c_user;
+                        };
                     }
                 }
                 else {
-                    ea_podman::util::init_user();
-                    ea_podman::util::upgrade_containers_for_a_user(@containers);
+                    try { ea_podman::util::upgrade_containers_for_a_user(@containers) }
+                    catch { warn "ea-podman: $_"; push @failed, $user };
                 }
+
+                # Survive a bad account or a bad container, but never silently.
+                # Accumulating without this exit would re-create the defect the
+                # rest of EA4-325 exists to kill. Shape follows
+                # ensure_user_sessions below.
+                if (@failed) {
+                    warn "ea-podman: upgrade_containers did not complete for: " . join( ", ", sort @failed ) . "\n";
+                    exit 1;
+                }
+
+                return 1;
             },
         },
         backup => {

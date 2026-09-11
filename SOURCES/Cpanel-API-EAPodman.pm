@@ -290,6 +290,30 @@ sub _lifecycle ( $args, $action ) {
             my $rv = ea_podman::util::sysctl( $action => $service );
             ea_podman::util::reset_container_unit_failure($container_name) if $stopping;
 
+            # Asymmetric on purpose (EA4-325). $rv used to be returned here and
+            # then thrown away by the unconditional `return 1` below, so every
+            # verb reported success whatever systemd did.
+            #
+            # A bring-up that did not happen is a failure the caller has to know
+            # about. A `stop` that returns non-zero is not the same thing: an
+            # already-stopped unit, a unit file that is gone, a container that has
+            # already been removed all land here, and all of them mean the thing
+            # the caller asked for is true. Raising on those would break teardown
+            # paths for no gain — the same reasoning as the reset_failed above.
+            if ( !$stopping ) {
+                die "Failed to $action “$container_name”: systemd refused the job. Check `systemctl --user status $service`.\n" if !$rv;
+
+                # $rv on its own is not enough, and this is the trap the CLI hit
+                # too: `systemctl start` reports success for a container that
+                # starts and then dies, so a bring-up that leaves the application
+                # down still looked like a win. Same poll the upgrade path uses.
+                ea_podman::util::verify_container_started(
+                    $container_name,
+                    lead => "“$container_name” did not $action",
+                    note => "",
+                );
+            }
+
             return $rv;
         }
     );

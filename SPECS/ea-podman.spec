@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 27
+%define release_prefix 28
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -165,6 +165,19 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
+* Thu Sep 11 2026 Julian Brown <julian.brown@webpros.com> - 1.0-28
+- EA4-325: Make `ea-podman upgrade` report a container that did not come back up,
+  instead of exiting 0 with the application down
+- EA4-325: Recreate the previous container when an upgrade's create fails, and
+  never deregister it or release its ports
+- EA4-325: Stop a failed `ea-podman restore` deleting the container directory it
+  had just extracted from the user's backup
+- EA4-325: Let `upgrade_containers` survive a deleted account or a single failed
+  container, reporting each and exiting non-zero
+- EA4-325: Fix the trailing newline on the image name `ea-podman list` reports
+- EA4-325: Make the EAPodman UAPI report a failed `start` or `restart` rather
+  than always reporting success
+
 * Tue Sep 03 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-27
 - EA4-319: Add compatibility for cagefs 7.6.39
 
