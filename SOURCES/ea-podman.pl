@@ -402,14 +402,31 @@ sub get_dispatch_args {
             },
         },
         upgrade => {
-            clue     => "upgrade <CONTAINER_NAME>",
+            clue     => "upgrade <CONTAINER_NAME> [--force]",
             abstract => "Upgrade a container",
-            help     => "Upgrade the container named CONTAINER_NAME",
+            help     => qq{Upgrade the container named CONTAINER_NAME.
+
+Pulls the image the container's configuration names, and recreates the container only if something actually moved — a newer image for the tag it tracks, or, for an EasyApache 4 package, a newer version of the package. When nothing has changed this does nothing at all: the container is not torn down, recreated, or restarted.
+
+A container that is not running is recreated and LEFT not running, because a stop cannot be told from a crash and starting it would override a deliberate stop.
+
+--force skips the comparison and recreates unconditionally, and starts the container afterwards. Use it to re-apply a configuration change that does not move the image, or to rebuild from the locally cached image when the registry cannot be reached.
+
+If the pull fails, this reports the failure and leaves the container untouched rather than guessing; --force falls back to the cached image instead.},
             code     => sub {
-                my ( $app, $container_name ) = @_;
+                my ( $app, @args ) = @_;
+
+                my ( $container_name, $force );
+                for my $arg (@args) {
+                    if    ( $arg eq '--force' ) { $force = 1 }
+                    elsif ( !defined $container_name ) { $container_name = $arg }
+                    else                        { die "Unknown argument “$arg”\n" }
+                }
+
+                die "Please provide the name of the container to upgrade.\n" if !defined $container_name;
 
                 ea_podman::util::init_user();
-                ea_podman::util::upgrade_container($container_name);
+                ea_podman::util::upgrade_container( $container_name, force => $force );
             },
         },
         uninstall => {
@@ -665,16 +682,25 @@ This is intended to make it easier for a user to purge their ea-podman based con
             },
         },
         upgrade_containers => {
-            clue     => "upgrade_containers [<PKG|NON-PKG-NAME>|--all]",
+            clue     => "upgrade_containers [<PKG|NON-PKG-NAME>|--all] [--force]",
             abstract => "Upgrade containers",
             help     => qq{Upgrade ea-podman registered containers by EA4 package, an arbitrary non-package name, or all via `--all`.
     - as non-root will only affect only the user
     - as root this will effect all users
 
 One account's or one container's failure no longer stops the sweep: the rest are still attempted, each failure is reported as it happens, and the command exits non-zero if anything failed.
+
+Each container is only recreated if something actually moved; see `ea-podman help upgrade`. --force recreates every one of them unconditionally, which on a large server means restarting every application it touches.
             },
             code => sub {
-                my ( $app, $pkg ) = @_;
+                my ( $app, @args ) = @_;
+
+                my ( $pkg, $force );
+                for my $arg (@args) {
+                    if    ( $arg eq '--force' )  { $force = 1 }
+                    elsif ( !defined $pkg )      { $pkg   = $arg }
+                    else                         { die "Unknown argument “$arg”\n" }
+                }
 
                 die "Please provide a package name or the flag `--all`\n" if ( !$pkg );
 
@@ -724,7 +750,7 @@ One account's or one container's failure no longer stops the sweep: the rest are
 
                         try {
                             if ( $c_user eq "root" ) {
-                                ea_podman::util::upgrade_containers_for_a_user(@c_containers);
+                                ea_podman::util::upgrade_containers_for_a_user( $force, @c_containers );
                             }
                             else {
                                 Cpanel::AccessIds::do_as_user_with_exception(
@@ -737,7 +763,7 @@ One account's or one container's failure no longer stops the sweep: the rest are
                                         chdir($homedir);
 
                                         ea_podman::util::init_user();
-                                        ea_podman::util::upgrade_containers_for_a_user(@c_containers);
+                                        ea_podman::util::upgrade_containers_for_a_user( $force, @c_containers );
                                     }
                                 );
                             }
@@ -774,7 +800,7 @@ One account's or one container's failure no longer stops the sweep: the rest are
                     }
                 }
                 else {
-                    try { ea_podman::util::upgrade_containers_for_a_user(@containers) }
+                    try { ea_podman::util::upgrade_containers_for_a_user( $force, @containers ) }
                     catch { warn "ea-podman: $_"; push @failed, $user };
                 }
 

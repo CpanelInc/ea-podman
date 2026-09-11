@@ -179,6 +179,10 @@ rm -rf %{buildroot}
   than always reporting success
 - EA4-325: Correct `ea-podman backup`/`restore` help, which named a manifest file
   that does not survive the run instead of the tarball restore actually wants
+- EA4-325: `ea-podman upgrade` now pulls the image and only recreates the
+  container when something actually moved, so it no longer restarts every
+  application every run while never fetching anything; `--force` recreates
+  unconditionally
 
 * Tue Sep 03 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-27
 - EA4-319: Add compatibility for cagefs 7.6.39

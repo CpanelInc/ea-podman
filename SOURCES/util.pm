@@ -618,6 +618,100 @@ sub _add_container_unit_directives {
     return join( "\n", @out );
 }
 
+# Does this upgrade have anything to do?
+#
+# Returns 1 when the container must be recreated, 0 when nothing moved. The
+# answer differs by container kind, because what "changed" means differs
+# (EA4-325 B2, B8):
+#
+#   arbitrary image  the image ID the reference now resolves to, against the ID
+#                    the container was created from.
+#
+#   EA4 package      the RPM owns BOTH the image pin and the start args, so the
+#                    image alone is the wrong question -- a package update can
+#                    change `startup` flags while pinning the same image, and an
+#                    image-only gate would silently not apply it. Gate on the
+#                    package version, OR the image, so a re-pushed upstream tag
+#                    is still picked up. Never on the image alone.
+#
+# Cannot-tell is treated as "needed". Guessing "not needed" from missing
+# information is how a container silently stops being updated.
+sub _upgrade_is_needed {
+    my ( $container_name, $image_ref, $pkg, $force ) = @_;
+
+    return 1 if $force;    # force never asks
+
+    my $image_moved = sub {
+        my $current  = _get_container_image_id($container_name);
+        my $resolved = defined $image_ref ? _get_image_id($image_ref) : undef;
+        return 1 if !defined $current || !defined $resolved;
+        return $current ne $resolved ? 1 : 0;
+    };
+
+    if ( length( $pkg // '' ) ) {
+        my ( $container_ver, $package_ver ) = eval { get_pkg_versions( $container_name => $pkg ) };
+        return 1 if $@;    # cannot tell
+        return 1 if !defined $container_ver || $container_ver ne $package_ver;
+        return $image_moved->();
+    }
+
+    return $image_moved->();
+}
+
+# Pull an image reference, so "has it changed?" is a question with a real answer.
+#
+# Without this the comparison below is vacuous: `podman create` inherits
+# --pull=missing, so the local image for a tag stays whatever was cached when the
+# container was installed, and comparing that to the container's own image always
+# matches. Safe mode would then no-op forever and nothing would ever update.
+#
+# Memoized for the life of the process, which is exactly one `ea-podman` run: an
+# `upgrade_containers --all` sweep across many containers on the same image pulls
+# it once, not once each (EA4-325 B5). Never dies -- a pull failure is a decision
+# for the caller, and the two paths want opposite answers (B4).
+our %_pulled;    # image reference => success boolean
+
+sub _podman_pull {
+    my ($image_ref) = @_;
+
+    return $_pulled{$image_ref} if exists $_pulled{$image_ref};
+
+    my $image_qx = quotemeta($image_ref);
+    `podman pull $image_qx 2>&1`;
+
+    return $_pulled{$image_ref} = ( $? == 0 ? 1 : 0 );
+}
+
+# The local image ID a reference currently resolves to, or undef when podman has
+# no such image.
+#
+# The ID, deliberately, not the registry digest (EA4-325 B6). They live in
+# different namespaces -- measured on a live box, the same image reports
+# Id=17aba4293f3b… and RepoDigest=sha256:570743f3…, so a digest comparison would
+# differ forever and recreate on every run.
+sub _get_image_id {
+    my ($image_ref) = @_;
+
+    my $image_qx = quotemeta($image_ref);
+    chomp( my $id = `podman image inspect --format '{{.Id}}' $image_qx 2> /dev/null` );
+
+    return if $? != 0 || !length($id);
+    return $id;
+}
+
+# The image ID a container was created from -- the other half of the comparison.
+# Its own sub so tests have a seam that does not need podman.
+sub _get_container_image_id {
+    my ($container_name) = @_;
+    validate_user_container_name($container_name);
+
+    my $container_name_qx = quotemeta($container_name);
+    chomp( my $id = `podman inspect --format '{{.Image}}' $container_name_qx 2> /dev/null` );
+
+    return if $? != 0 || !length($id);
+    return $id;
+}
+
 # The fully-qualified image a container was created from, e.g.
 # "docker.io/library/httpd:2.4". Its own named sub so tests have a seam that does
 # not need podman.
@@ -1133,6 +1227,56 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     # another server never had one), so it comes from the backup file instead.
     my $webapp = defined $webapp_source_dir ? 1 : $isrestore ? ( $opts->{webapp} ? 1 : 0 ) : 0;
 
+    # EA4-325 B1-B4 and B7. Everything here happens BEFORE anything is torn down,
+    # because the whole point is to be able to decide not to.
+    my $force = $opts->{force} ? 1 : 0;
+    if ($isupgrade) {
+
+        # Pull first, or the comparison is vacuous -- see _podman_pull.
+        if ( !_podman_pull($image_arg) ) {
+
+            # B4: the two paths want opposite answers, and deliberately so.
+            #
+            # Conditional: we cannot tell whether the image moved, so acting
+            # would mean tearing a working container down on a guess. Abort with
+            # it untouched.
+            #
+            # Force: the caller asked for a recreate, not for an update. The
+            # webapp plugin's Redeploy is the force caller (CPANEL-56732), and a
+            # Docker Hub outage or a rate limit must not break Redeploy, so warn
+            # and carry on from the cached image.
+            die "Could not pull “$image_arg”, so there is no way to tell whether “$container_name” is out of date.\n"
+              . "It has NOT been touched and is still running whatever it was running.\n"
+              . "Retry when the registry is reachable, or force the recreate from the image already cached locally:  ea-podman upgrade --force $container_name\n"
+              if !$force;
+
+            warn "Could not pull “$image_arg”; recreating “$container_name” from the image already cached locally.\n";
+        }
+
+        # scalar(): get_pkg_from_container_name() does a bare `return` for a
+        # non-package name, which flattens to an EMPTY LIST here and would shift
+        # $force into the $pkg slot -- silently sending every arbitrary-image
+        # container down the packaged branch, where it always reports "needed".
+        my $gate_pkg = scalar get_pkg_from_container_name($container_name);
+
+        if ( !_upgrade_is_needed( $container_name, $image_arg, $gate_pkg, $force ) ) {
+            print "“$container_name” is already up to date; nothing to do.\n";
+
+            # The early return B2 asks for: no teardown, no recreate, no restart,
+            # no registry write. A container that is deliberately stopped stays
+            # stopped, and one that is running is not bounced.
+            return { recreated => 0, started => 0 };
+        }
+
+        # B7: the conditional path preserves run state. An upgrade the operator
+        # did not explicitly ask to start must not start a container the user
+        # stopped -- and we cannot tell a deliberate stop from a crash, so the
+        # only rule that never overrides the user is "was down, stays down".
+        # Force still starts, as it always has: the plugin's redeploy branch has
+        # no start of its own and relies on it.
+        $no_start = 1 if !$force && !is_user_container_name_running($container_name);
+    }
+
     # Captured before uninstall_container() tears the container down, because that
     # is the last moment the previous image is knowable — it is what the rollback
     # below pins back. Nothing else needs capturing: the upgrade path never
@@ -1234,7 +1378,7 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
         sysctl( start => get_container_service_name($container_name) );
     }
 
-    return 1;
+    return { recreated => 1, started => $no_start ? 0 : 1 };
 }
 
 # A failed `podman create` on upgrade has already cost the container its unit
@@ -1543,9 +1687,10 @@ sub install_container {
 }
 
 sub upgrade_container {
-    my ($container_name) = @_;
+    my ( $container_name, %opts ) = @_;
     validate_user_container_name($container_name);
-    _ensure_latest_container( $container_name, { op => "upgrade" } );
+
+    my $did = _ensure_latest_container( $container_name, { op => "upgrade", force => $opts{force} } );
 
     # An upgrade that leaves the application down must not exit 0 (EA4-325).
     #
@@ -1556,7 +1701,14 @@ sub upgrade_container {
     # and the webapp plugin's redeploy. No opt-out: the plugin path is the one
     # most users actually hit, so exempting it would leave the lie where it does
     # the most harm.
-    verify_container_started($container_name);
+    #
+    # Gated on having actually started something, which matters once the upgrade
+    # is conditional: the no-op path touched nothing, and the conditional path
+    # deliberately leaves a stopped container stopped (B7). Verifying either
+    # would report a container as failed for being in the state we just decided
+    # to leave it in — and would make `upgrade_containers --all` exit non-zero
+    # for every stopped container on the server.
+    verify_container_started($container_name) if $did->{recreated} && $did->{started};
 
     return 1;
 }
@@ -1887,7 +2039,7 @@ sub _release_deleted_user_session {
 }
 
 sub upgrade_containers_for_a_user {
-    my (@containers) = @_;
+    my ( $force, @containers ) = @_;
 
     # They should be for all the same user
     my $user;
@@ -1906,7 +2058,7 @@ sub upgrade_containers_for_a_user {
         my $name = $container->{container_name};
 
         local $@;
-        eval { upgrade_container($name); 1 } or do {
+        eval { upgrade_container( $name, force => $force ); 1 } or do {
             my $err = $@ || "unknown error\n";
             warn "ea-podman: could not upgrade “$name”: $err";
             push @failed, $name;

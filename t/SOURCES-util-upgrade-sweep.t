@@ -36,7 +36,7 @@ sub _containers {
 subtest "one container's failure does not abandon the rest" => sub {
     my @attempted;
     local *ea_podman::util::upgrade_container = sub {
-        my ($name) = @_;
+        my ( $name, %opts ) = @_;
         push @attempted, $name;
         die "boom for $name\n" if $name eq "second.bob.02";
         return 1;
@@ -44,7 +44,7 @@ subtest "one container's failure does not abandon the rest" => sub {
 
     my @c = _containers(qw(first.bob.01 second.bob.02 third.bob.03 fourth.bob.04));
 
-    my $err = do { local $@; eval { ea_podman::util::upgrade_containers_for_a_user(@c) }; $@ };
+    my $err = do { local $@; eval { ea_podman::util::upgrade_containers_for_a_user( 0, @c ) }; $@ };
 
     is_deeply(
         \@attempted,
@@ -56,13 +56,13 @@ subtest "one container's failure does not abandon the rest" => sub {
 
 subtest 'the failures are aggregated into a die that names each one' => sub {
     local *ea_podman::util::upgrade_container = sub {
-        my ($name) = @_;
+        my ( $name, %opts ) = @_;
         die "boom\n" if $name =~ m/^(second|fourth)/;
         return 1;
     };
 
     my @c = _containers(qw(first.bob.01 second.bob.02 third.bob.03 fourth.bob.04));
-    my $err = do { local $@; eval { ea_podman::util::upgrade_containers_for_a_user(@c) }; $@ };
+    my $err = do { local $@; eval { ea_podman::util::upgrade_containers_for_a_user( 0, @c ) }; $@ };
 
     like( $err, qr/Failed to upgrade 2 of 4 container\(s\)/, "counts both the failures and the total" );
     like( $err, qr/second\.bob\.02/, "names the first failure" );
@@ -76,7 +76,7 @@ subtest 'a clean sweep returns true and does not die' => sub {
     local *ea_podman::util::upgrade_container = sub { push @attempted, $_[0]; return 1 };
 
     my @c = _containers(qw(first.bob.01 second.bob.02));
-    my $rv = do { local $@; eval { ea_podman::util::upgrade_containers_for_a_user(@c) } };
+    my $rv = do { local $@; eval { ea_podman::util::upgrade_containers_for_a_user( 0, @c ) } };
 
     is( $rv, 1, "returns true" );
     is( scalar @attempted, 2, "both attempted" );
@@ -86,7 +86,7 @@ subtest 'containers belonging to more than one user are still rejected' => sub {
     local *ea_podman::util::upgrade_container = sub { return 1 };
 
     my @c = ( { container_name => "a.bob.01", user => "bob" }, { container_name => "b.sue.01", user => "sue" } );
-    my $err = do { local $@; eval { ea_podman::util::upgrade_containers_for_a_user(@c) }; $@ };
+    my $err = do { local $@; eval { ea_podman::util::upgrade_containers_for_a_user( 0, @c ) }; $@ };
 
     like( $err, qr/must be for all the same user/, "the pre-existing guard still fires" );
 };

@@ -201,7 +201,7 @@ subtest 'verify_container_started is quiet on success' => sub {
 # The whole point: upgrade_container must not report success it has not earned.
 subtest 'upgrade_container verifies the container actually came back up' => sub {
     my @verified;
-    local *ea_podman::util::_ensure_latest_container = sub { return 1 };
+    local *ea_podman::util::_ensure_latest_container = sub { return { recreated => 1, started => 1 } };
     local *ea_podman::util::verify_container_started = sub { push @verified, $_[0]; return 1 };
 
     is( ea_podman::util::upgrade_container("app.bob.01"), 1, "a good upgrade returns true" );
@@ -212,23 +212,47 @@ subtest 'upgrade_container verifies the container actually came back up' => sub 
     is( $err, "it did not come back up\n", "a failed verdict propagates out of upgrade_container" );
 };
 
-# CPANEL-56732 depends on this, and nothing else pins it. The webapp plugin's
-# redeploy passes `force => 1` and must be able to ship BEFORE the ea-podman that
-# understands it, so an upgrade_container that predates the force handling has to
-# ignore the extra arguments rather than choke on them. That only holds while this
-# sub slurps @_ with no subroutine signature — add one and the plugin breaks
-# silently, on a version pairing nobody tests together.
-subtest 'upgrade_container tolerates arguments it does not understand yet' => sub {
+# Once the upgrade is conditional, verifying unconditionally is wrong in two
+# ways, and both would report a container as failed for being in exactly the
+# state we just decided to leave it in. On `upgrade_containers --all` that would
+# mean a non-zero exit for every stopped container on the server. (EA4-325 B2/B7)
+subtest 'a no-op upgrade is not asked whether the container came back up' => sub {
+    my $verified = 0;
+    local *ea_podman::util::verify_container_started = sub { $verified++; return 1 };
+
+    local *ea_podman::util::_ensure_latest_container = sub { return { recreated => 0, started => 0 } };
+    is( ea_podman::util::upgrade_container("app.bob.01"), 1, "the no-op still succeeds" );
+    is( $verified, 0, "and nothing was verified, because nothing was touched" );
+
+    # The conditional path recreates a stopped container and leaves it stopped.
+    local *ea_podman::util::_ensure_latest_container = sub { return { recreated => 1, started => 0 } };
+    is( ea_podman::util::upgrade_container("app.bob.01"), 1, "recreating without starting still succeeds" );
+    is( $verified, 0, "and a container deliberately left down is not reported as failed" );
+};
+
+# CPANEL-56732 has the webapp plugin's redeploy call this as
+# `upgrade_container( $name, force => 1 )`. Two halves to the contract, and only
+# one of them can be tested from here:
+#
+#   * This build must understand that shape and route force through. Tested.
+#   * A build PREDATING Increment B must ignore the extra arguments rather than
+#     choke, which is what let the plugin ship first. That holds only while this
+#     sub takes @_ with no subroutine signature -- add one and the plugin breaks
+#     silently on a version pairing nobody tests together. Not testable here (this
+#     build reads them), so it is a review contract: do not give this a signature.
+subtest 'upgrade_container understands the shape the webapp plugin calls with' => sub {
     my @called;
-    local *ea_podman::util::_ensure_latest_container = sub { push @called, [@_]; return 1 };
+    local *ea_podman::util::_ensure_latest_container = sub { push @called, $_[1]; return { recreated => 1, started => 1 } };
     local *ea_podman::util::verify_container_started = sub { return 1 };
 
-    is( ea_podman::util::upgrade_container("app.bob.01"), 1, "the one-argument call still works" );
+    is( ea_podman::util::upgrade_container("app.bob.01"), 1, "the plain call works" );
+    ok( !$called[0]{force}, "and does not force" );
 
-    is( ea_podman::util::upgrade_container( "app.bob.01", force => 1 ), 1, "and so does one carrying a force option it has no handling for" );
+    is( ea_podman::util::upgrade_container( "app.bob.01", force => 1 ), 1, "the plugin's call works" );
+    ok( $called[1]{force}, "and forces" );
 
-    is( scalar @called, 2, "both reached the work" );
-    is_deeply( $called[0], $called[1], "and the extra arguments changed nothing about what was done" );
+    is( $called[0]{op}, "upgrade", "both are upgrades" );
+    is( $called[1]{op}, "upgrade", "both are upgrades" );
 };
 
 done_testing();
