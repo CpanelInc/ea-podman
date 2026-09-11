@@ -43,6 +43,7 @@ as well as v2 (AlmaLinux 9/10 and Ubuntu 24.04, which default to v2).
 | `cagefs-podman-live.t` | A **CloudLinux CageFS**-enabled account manages containers via UAPI. | CloudLinux (cgroup v1 or v2), with CageFS installed + initialized. |
 | `ea-memcached16-cli-live.t` | A **normal** account uses the `ea-podman` CLI directly (`install <PKG>` mode) to install a real EA4 container-based package, `ea-memcached16`. | A live cPanel VM (cgroup v1 or v2), with `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
 | `ea-memcached16-cagefs-cli-live.t` | Sister to the above, but the account is **CageFS**-enabled: the CLI is driven through a real CageFS login, exercising the CPANEL-54672 fallback to the UAPI bridge. | CloudLinux (cgroup v1 or v2), with CageFS installed + initialized, and `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
+| `ea4-325-upgrade-live.t` | `ea-podman upgrade` reports a container that did not come back up, recreates the previous one when a create fails, and no longer lets a failed `restore` delete the directory it just extracted. Also covers `upgrade_containers --all` surviving a deleted account, and the EAPodman UAPI's `start`/`stop`. | A live cPanel VM (cgroup v1 or v2), with an ea-podman build carrying EA4-325 **recompiled** (see below). `ea-memcached16` optional — the packaged-container subtest skips without it. |
 
 ### EA4-319 in the two cagefs `.t` files
 
@@ -235,6 +236,24 @@ Same safety story as the POC — the mask is host-wide while it is on, and the
 startup state is restored on every exit path including the trap. Throwaway VM
 only.
 
+## Installing a build to test (the `ea-podman` binary embeds `util.pm`)
+
+`/opt/cpanel/ea-podman/bin/ea-podman` is a **compiled** binary that embeds its
+own copy of `util.pm`. Copying `SOURCES/util.pm` over
+`/opt/cpanel/ea-podman/lib/ea_podman/util.pm` therefore changes nothing the CLI
+runs — the library copy is what other consumers `require`, not what the binary
+uses. Copy, then recompile:
+
+```sh
+scp SOURCES/util.pm            root@VM:/opt/cpanel/ea-podman/lib/ea_podman/
+scp SOURCES/ea-podman.pl       root@VM:/opt/cpanel/ea-podman/bin/
+scp SOURCES/Cpanel-API-EAPodman.pm root@VM:/usr/local/cpanel/Cpanel/API/EAPodman.pm
+ssh root@VM 'bash /opt/cpanel/ea-podman/bin/compile.sh'
+```
+
+`ea4-325-upgrade-live.t` checks both the library and the compiled binary and
+skips with a specific message if only the library was updated.
+
 ## Running
 
 As root, on the target VM. Each test is self-contained — copy just the one
@@ -250,6 +269,8 @@ EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl cagefs-podman-live.t
 # install a real EA4 container-based package (ea-memcached16) via the CLI
 # (ea-memcached16 must already be installed locally, e.g. `yum install -y ea-memcached16`):
 EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea-memcached16-cli-live.t
+# EA4-325: upgrade/restore truthfulness and the failed-create recreate.
+EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea4-325-upgrade-live.t
 # same, but for a CageFS-enabled account (CloudLinux only):
 EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea-memcached16-cagefs-cli-live.t
 ```
