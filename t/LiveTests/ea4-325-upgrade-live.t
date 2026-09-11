@@ -86,8 +86,8 @@
 # same hazard CPANEL-56732 exists to prevent in the webapp plugin.
 #
 # VERIFIED ON BOTH PACKAGE FORMATS AND TWO PODMAN MAJORS:
-#   AlmaLinux 9.8, podman 5.8.2, ea-podman 1.0-28 RPM  -- 20/20
-#   Ubuntu 24.04.4, podman 4.9.3, ea-podman 1.0-28 deb -- 20/20
+#   AlmaLinux 9.8, podman 5.8.2, ea-podman 1.0-28 RPM  -- 24/24
+#   Ubuntu 24.04.4, podman 4.9.3, ea-podman 1.0-28 deb -- 24/24
 # The gate reads `podman image inspect --format '{{.Id}}'` against
 # `podman inspect --format '{{.Image}}'`, and the rollback reads
 # `{{.ImageName}}`; all three behave identically on 4.9 and 5.8, and
@@ -117,6 +117,10 @@
 #   EAPODMAN_TEST_PKG    EA4 container package for the packaged-path
 #                        subtests (default: ea-memcached16). Skipped when
 #                        it is not installed.
+#   Increment C (`ea-podman clean`) is covered too: the ctime-not-mtime
+#   rule, the name-still-claimed guard, and that a hand-made directory is
+#   never touched.
+#
 #   EAPODMAN_TEST_ALT_IMAGE  a second, different image used to prove the
 #                        gate fires on a real change (default:
 #                        httpd:2.4-alpine).
@@ -857,6 +861,118 @@ SKIP: {
         return;
     };
 }
+
+#---------------------------------------------------------------------
+# Increment C — `ea-podman clean` for leftover <container>.bak
+#---------------------------------------------------------------------
+
+subtest 'C: clean lists a backup, warns about it, and removes it only when asked' => sub {
+    # Make a real one the way a real one is made.
+    my ( $irc, $iout ) = run_as_user( $USER, _sh($CLI) . " install cleanme --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
+    my ($cn) = $iout =~ m/Done, installed:\s*(\S+)/;
+    ok( $cn, "installed a container to make a backup from" ) or do { diag($iout); return };
+
+    run_as_user( $USER, _sh($CLI) . " uninstall " . _sh($cn) . " --verify" );
+    my $bak = container_dir( $USER, $cn ) . ".bak";
+    ok( -d $bak, "uninstall left a .bak behind" ) or return;
+
+    # A brand new backup must survive the default threshold.
+    my ( $drc, $dout ) = run_as_user( $USER, _sh($CLI) . " clean" );
+    is( $drc, 0, "a default clean succeeds" );
+    ok( -d $bak, "and a backup made seconds ago is not touched" );
+
+    # C8: the warning belongs in the DEFAULT listing, while the operator is
+    # still deciding -- `--run` is the only safeguard there is.
+    like( $dout, qr/only copy/, "the default listing warns what a .bak can hold" );
+    like( $dout, qr/Listing only/, "and says it is only listing" );
+
+    # In scope now, but still only listed.
+    my ( $lrc, $lout ) = run_as_user( $USER, _sh($CLI) . " clean --days=0" );
+    like( $lout, qr/\Q$bak\E/, "with a lowered threshold it is listed" );
+    like( $lout, qr/could be removed/, "as something that could be removed" );
+    ok( -d $bak, "but listing still does not remove it" );
+
+    my ( $rrc, $rout ) = run_as_user( $USER, _sh($CLI) . " clean --run --days=0" );
+    is( $rrc, 0, "clean --run succeeds" ) or diag($rout);
+    like( $rout, qr/REMOVED/, "and reports the removal" );
+    ok( !-d $bak, "the backup is gone" );
+
+    return;
+};
+
+# C2, and the reason the ticket calls it out. Renaming a directory moves its
+# ctime and leaves mtime alone, so a `.bak` made one second ago still carries
+# the mtime of its last deploy -- an mtime rule would delete backups made
+# moments earlier, which is the exact opposite of the intent. Only a real
+# filesystem can demonstrate the difference.
+subtest 'C: a brand new backup with an ancient mtime is still too recent' => sub {
+    my ( $irc, $iout ) = run_as_user( $USER, _sh($CLI) . " install ctimeprobe --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
+    my ($cn) = $iout =~ m/Done, installed:\s*(\S+)/;
+    ok( $cn, "installed a container" ) or do { diag($iout); return };
+
+    run_as_user( $USER, _sh($CLI) . " uninstall " . _sh($cn) . " --verify" );
+    my $bak = container_dir( $USER, $cn ) . ".bak";
+    ok( -d $bak, "with a .bak" ) or return;
+
+    # A year old by mtime. Seconds old by ctime, which is what counts.
+    run_cmd( 'touch', '-d', '1 year ago', $bak );
+
+    my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " clean --run" );
+
+    ok( -d $bak, "the backup survives a default clean" );
+    unlike( $out, qr/REMOVED/, "and nothing was removed" );
+
+    run_as_user( $USER, _sh($CLI) . " clean --run --days=0" );
+    ok( !-d $bak, "it is reachable once the threshold is lowered, so this was the age rule and not an accident" );
+
+    return;
+};
+
+# C5. get_next_available_container_name() checks only the container directory --
+# not podman, not the ports, not the unit -- so freeing a name still claimed
+# elsewhere hands it to the next install with stale state attached.
+subtest 'C: a backup whose name is still claimed is kept, and says by what' => sub {
+    my ( $irc, $iout ) = run_as_user( $USER, _sh($CLI) . " install stillheld --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
+    my ($cn) = $iout =~ m/Done, installed:\s*(\S+)/;
+    ok( $cn, "installed a LIVE container" ) or do { diag($iout); return };
+
+    # A .bak carrying the same name as something that still exists.
+    my $bak = container_dir( $USER, $cn ) . ".bak";
+    run_cmd( 'mkdir', '-p', $bak );
+    my ( $uid, $gid ) = ( getpwnam($USER) )[ 2, 3 ];
+    chown $uid, $gid, $bak;
+
+    my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " clean --run --days=0" );
+
+    ok( -d $bak, "the backup is kept" );
+    like( $out, qr/still in use/, "and the reason is reported" );
+    like( $out, qr/orphan-reconciliation/, "pointing at EA4-320 rather than bulldozing it" );
+
+    # The live container is untouched by any of this.
+    is( unit_prop( $USER, $cn, 'ActiveState' ), 'active', "and its live container is still running" );
+
+    run_as_user( $USER, _sh($CLI) . " uninstall " . _sh($cn) . " --verify" );
+    run_as_user( $USER, _sh($CLI) . " clean --run --days=0" );
+
+    return;
+};
+
+# C6. A hand-made directory is excluded by its NAME, not by a guess about what
+# is inside it.
+subtest 'C: a directory that is not a container backup is never touched' => sub {
+    my $home     = ( getpwnam($USER) )[7];
+    my $handmade = "$home/ea-podman.d/just-my-stuff.bak";
+    run_cmd( 'mkdir', '-p', $handmade );
+    my ( $uid, $gid ) = ( getpwnam($USER) )[ 2, 3 ];
+    chown $uid, $gid, $handmade;
+
+    my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " clean --run --days=0" );
+
+    ok( -d $handmade, "a directory whose name is not <name>.<user>.<NN> is left alone" );
+
+    run_cmd( 'rm', '-rf', $handmade );
+    return;
+};
 
 #---------------------------------------------------------------------
 # A3 — the sweep survives a dead account, and still fails loudly
