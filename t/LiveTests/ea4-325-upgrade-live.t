@@ -47,6 +47,44 @@
 # unconditionally: start/restart now report a bring-up that did not
 # happen, while stop stays permissive so teardown paths keep working.
 #
+# INCREMENT B — pull, compare, and do nothing when nothing moved.
+#
+#   `upgrade` never pulled (podman create inherits --pull=missing) and
+#   recreated unconditionally, so a nightly `upgrade_containers --all`
+#   restarted every application on the server and still fetched nothing.
+#   Now it pulls, compares LOCAL IMAGE IDS (never registry digests -- the
+#   two live in different namespaces and would differ forever), and
+#   returns before any teardown when nothing changed.
+#
+#   Only a real podman can prove the no-op: the assertion is that the
+#   container's instance ID and StartedAt are UNCHANGED, which no mock
+#   can demonstrate.
+#
+#   Two behaviours here are easy to get subtly wrong and are asserted
+#   explicitly:
+#     * a failed pull ABORTS the conditional path with the container
+#       untouched, but WARNS and falls back to the cached image under
+#       --force, so a registry outage cannot break the plugin's Redeploy;
+#     * the conditional path recreates a stopped container and LEAVES it
+#       stopped, since a deliberate stop cannot be told from a crash.
+#
+#   An EA4 packaged container is gated on its PACKAGE VERSION as well as
+#   its image: the RPM owns both the image pin and the start args, so a
+#   package update can change `startup` flags with an identical image.
+#
+#   And the interaction between the increments: a sweep over a stopped
+#   container must exit 0. If A's start verdict were not gated on having
+#   actually started something, `--all` would exit non-zero for every
+#   stopped container on a server.
+#
+# NOTE FOR ANYONE EDITING THIS FILE. Since Increment B, a plain `upgrade`
+# does NOTHING when the image has not moved -- and editing a container's
+# persisted start_args does not move its image. So any step that changes
+# start_args and expects the container to follow MUST pass --force. Three
+# subtests and one repair step here were written before B and silently
+# stopped doing anything; the repair even still returned 0. That is the
+# same hazard CPANEL-56732 exists to prevent in the webapp plugin.
+#
 # Run ON A LIVE cPanel VM, as root, with podman installed and an
 # ea-podman build carrying the EA4-325 changes:
 #
@@ -71,6 +109,9 @@
 #   EAPODMAN_TEST_PKG    EA4 container package for the packaged-path
 #                        subtests (default: ea-memcached16). Skipped when
 #                        it is not installed.
+#   EAPODMAN_TEST_ALT_IMAGE  a second, different image used to prove the
+#                        gate fires on a real change (default:
+#                        httpd:2.4-alpine).
 #   EAPODMAN_KEEP=1      skip teardown.
 #######################################################################
 
@@ -206,6 +247,37 @@ sub ports_held {
     my $n = 0;
     $n++ while $out =~ m/\Q$container\E/g;
     return $n;
+}
+
+sub container_field {
+    my ( $user, $container, $format ) = @_;
+    my ( $rc, $out ) = run_as_user( $user, "podman inspect --format " . _sh($format) . " " . _sh($container) );
+    chomp $out;
+    return $rc == 0 ? $out : '';
+}
+
+sub slurp_file {
+    my ($path) = @_;
+    open my $fh, '<', $path or return '';
+    local $/;
+    my $c = <$fh>;
+    close $fh;
+    return $c;
+}
+
+sub spew_file {
+    my ( $path, $content ) = @_;
+    open my $fh, '>', $path or die "Could not write $path: $!";
+    print {$fh} $content;
+    close $fh;
+    return 1;
+}
+
+sub skip_rest {
+    my ( $why, $detail ) = @_;
+    diag("SKIP: $why");
+    diag($detail) if defined $detail;
+    return;
 }
 
 sub container_dir {
@@ -388,7 +460,14 @@ subtest 'A1: an upgrade that leaves the container down exits non-zero' => sub {
         }
     );
 
-    my ( $rc, $out, $secs ) = cli_upgrade( $USER, $container );
+    # --force, and this is the whole reason CPANEL-56732 exists. Since Increment
+    # B a plain `upgrade` compares images and does nothing when none moved -- and
+    # editing start args does not move the image, so the break above would never
+    # reach the container. Anything applying a configuration change has to force,
+    # which is exactly what the webapp plugin's Redeploy now does.
+    my $t0 = Time::HiRes::time();
+    my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
+    my $secs = Time::HiRes::time() - $t0;
 
     # THE defect. Before EA4-325 this was exit 0 in ~2.5s with the application
     # down, because sysctl( start => ... )'s return was never looked at.
@@ -434,8 +513,14 @@ subtest 'UAPI start reports a bring-up that did not happen' => sub {
             @{$args} = grep { $_ ne '--entrypoint' && $_ ne $BAD_ENTRYPOINT } @{$args};
         }
     );
-    my ( $rc, $out ) = cli_upgrade( $USER, $container );
+
+    # --force, or this repair silently does nothing: removing the entrypoint does
+    # not move the image, so since Increment B a plain upgrade is a no-op here and
+    # returns 0 while leaving the container just as broken. Assert the container is
+    # actually up rather than trusting the exit code, which is what hid it.
+    my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
     is( $rc, 0, "the container is repaired for the remaining subtests" ) or diag($out);
+    is( unit_prop( $USER, $container, 'ActiveState' ), 'active', "and is genuinely running again" );
 }
 
 subtest 'UAPI stop stays permissive, so teardown paths keep working' => sub {
@@ -464,7 +549,12 @@ subtest 'A2: a failed upgrade recreates the previous container' => sub {
         sub { my ($args) = @_; $args->[-1] = $BAD_IMAGE; }
     );
 
-    my ( $rc, $out ) = cli_upgrade( $USER, $container );
+    # --force for a second Increment B reason: on the conditional path an
+    # unpullable image now aborts BEFORE anything is torn down (B4), so the
+    # failed-CREATE rollback this subtest exists for is unreachable. Force warns
+    # about the pull, carries on to the create from cache, and the create is what
+    # fails -- which is the state Increment A has to recover from.
+    my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
 
     # Before EA4-325: exit 125 with the container AND its unit destroyed, the
     # registry asserting a container that did not exist, and the ports still
@@ -482,9 +572,10 @@ subtest 'A2: a failed upgrade recreates the previous container' => sub {
     like( $out, qr/the upgrade did not happen/,           "but is explicit the upgrade did not happen" );
     like( $out, qr/Nothing was deregistered and nothing was deleted/, "and promises nothing was destroyed" );
 
-    # Repair for what follows.
+    # Repair for what follows -- force, since the image is back to where it was
+    # and a conditional upgrade would rightly call that a no-op.
     patch_start_args( $USER, $container, sub { my ($args) = @_; $args->[-1] = $IMAGE; } );
-    cli_upgrade( $USER, $container );
+    run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
 };
 
 #---------------------------------------------------------------------
@@ -579,6 +670,187 @@ subtest 'A2: a failed restore keeps the directory it just extracted' => sub {
 };
 
 #---------------------------------------------------------------------
+# Increment B — pull, compare, and do nothing when nothing moved
+#---------------------------------------------------------------------
+
+# The assertion that matters most, and the one a mock cannot make: an upgrade
+# with nothing to do must not touch the container at all. Before B this tore the
+# container down and recreated it every single time -- and never pulled, because
+# `podman create` inherits --pull=missing -- so a nightly sweep restarted every
+# application on the server and still fetched nothing.
+subtest 'B: an upgrade with nothing to do does not touch the container' => sub {
+    my $id_before      = container_field( $USER, $container, '{{.Id}}' );
+    my $started_before = container_field( $USER, $container, '{{.State.StartedAt}}' );
+
+    my ( $rc, $out, $secs ) = cli_upgrade( $USER, $container );
+
+    is( $rc, 0, "the upgrade succeeds" ) or diag($out);
+    like( $out, qr/already up to date/, "and says it had nothing to do" );
+
+    # Identity is the proof. A recreate mints a new container instance, so an
+    # unchanged instance ID means no teardown happened at all.
+    is( container_field( $USER, $container, '{{.Id}}' ),               $id_before,      "the container instance is the same one" );
+    is( container_field( $USER, $container, '{{.State.StartedAt}}' ),  $started_before, "and it was never restarted" );
+
+    return;
+};
+
+subtest 'B: --force recreates even when nothing moved' => sub {
+    my $id_before = container_field( $USER, $container, '{{.Id}}' );
+
+    my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
+
+    is( $rc, 0, "the forced upgrade succeeds" ) or diag($out);
+    isnt( container_field( $USER, $container, '{{.Id}}' ), $id_before, "and the container really was recreated" );
+    is( unit_prop( $USER, $container, 'ActiveState' ), 'active', "and is running" );
+
+    return;
+};
+
+# "The image moved" without controlling a registry: install from one tag, then
+# point the container's persisted start args at another. The configured
+# reference now resolves to an image ID that is not the one the container was
+# created from, which is exactly the real-world condition.
+subtest 'B: a container whose configured image now resolves elsewhere is recreated' => sub {
+    my $alt = $ENV{EAPODMAN_TEST_ALT_IMAGE} || 'docker.io/library/httpd:2.4-alpine';
+
+    my ( $prc, $pout ) = run_as_user( $USER, "podman pull " . _sh($alt) );
+    skip_rest( "could not pull the alternate image $alt", $pout ), return if $prc != 0;
+
+    my $id_before = container_field( $USER, $container, '{{.Id}}' );
+    patch_start_args( $USER, $container, sub { my ($args) = @_; $args->[-1] = $alt } );
+
+    my ( $rc, $out ) = cli_upgrade( $USER, $container );
+
+    is( $rc, 0, "the upgrade succeeds" ) or diag($out);
+    unlike( $out, qr/already up to date/, "it did not consider this a no-op" );
+    isnt( container_field( $USER, $container, '{{.Id}}' ), $id_before, "the container was recreated" );
+
+    # Put it back, and prove the gate is symmetric rather than just always-yes.
+    patch_start_args( $USER, $container, sub { my ($args) = @_; $args->[-1] = $IMAGE } );
+    cli_upgrade( $USER, $container );
+    my ( $rc2, $out2 ) = cli_upgrade( $USER, $container );
+    like( $out2, qr/already up to date/, "and settles back to a no-op once it matches again" );
+
+    return;
+};
+
+# B4. The two paths want opposite answers from the same failure.
+subtest 'B: a failed pull leaves the container untouched, unless forced' => sub {
+    my $id_before = container_field( $USER, $container, '{{.Id}}' );
+
+    patch_start_args( $USER, $container, sub { my ($args) = @_; $args->[-1] = $BAD_IMAGE } );
+
+    my ( $rc, $out ) = cli_upgrade( $USER, $container );
+
+    isnt( $rc, 0, "the upgrade refuses rather than guessing" );
+    like( $out, qr/Could not pull/,       "and says why" );
+    like( $out, qr/has NOT been touched/, "and that the container is unharmed" );
+
+    # The whole point: a working container is not torn down on a guess.
+    is( container_field( $USER, $container, '{{.Id}}' ), $id_before, "the container really was left alone" );
+    is( unit_prop( $USER, $container, 'ActiveState' ), 'active', "and is still running" );
+
+    patch_start_args( $USER, $container, sub { my ($args) = @_; $args->[-1] = $IMAGE } );
+    return;
+};
+
+# An image that exists locally but in no registry: the pull fails, the cached
+# copy is there, and force must carry on from it. This is the shape of a Docker
+# Hub outage or a rate limit, which must never break the plugin's Redeploy.
+subtest 'B: force falls back to the cached image when the pull fails' => sub {
+    my $local_only = 'localhost/ea4325-cached-only:1';
+    run_as_user( $USER, "podman tag " . _sh($IMAGE) . " " . _sh($local_only) );
+
+    patch_start_args( $USER, $container, sub { my ($args) = @_; $args->[-1] = $local_only } );
+
+    my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
+
+    is( $rc, 0, "the forced upgrade still succeeds" ) or diag($out);
+    like( $out, qr/already cached locally/, "and reports the fallback rather than swallowing it" );
+    is( unit_prop( $USER, $container, 'ActiveState' ), 'active', "the application is up" );
+
+    patch_start_args( $USER, $container, sub { my ($args) = @_; $args->[-1] = $IMAGE } );
+    run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
+    return;
+};
+
+# B7. A deliberate stop cannot be told from a crash, so the conditional path
+# must never start something the user stopped.
+subtest 'B: a stopped container is recreated but left stopped' => sub {
+    my $alt = $ENV{EAPODMAN_TEST_ALT_IMAGE} || 'docker.io/library/httpd:2.4-alpine';
+
+    run_as_user( $USER, "systemctl --user stop container-$container.service" );
+    is( unit_prop( $USER, $container, 'ActiveState' ), 'inactive', "the container is stopped to begin with" );
+
+    patch_start_args( $USER, $container, sub { my ($args) = @_; $args->[-1] = $alt } );
+    my ( $rc, $out ) = cli_upgrade( $USER, $container );
+
+    is( $rc, 0, "the upgrade succeeds" ) or diag($out);
+    is( unit_prop( $USER, $container, 'ActiveState' ), 'inactive', "and the container it recreated is still stopped" );
+
+    # Force is the deliberate exception -- the plugin's redeploy branch has no
+    # start of its own and relies on it.
+    my ( $frc, $fout ) = run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
+    is( $frc, 0, "a forced upgrade succeeds" ) or diag($fout);
+    is( unit_prop( $USER, $container, 'ActiveState' ), 'active', "and brings it back up" );
+
+    patch_start_args( $USER, $container, sub { my ($args) = @_; $args->[-1] = $IMAGE } );
+    run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
+    return;
+};
+
+# The interaction between the two increments, and the one most likely to be
+# wrong: Increment A raises when a container did not come back up. If that
+# verdict is not gated on having actually started something, a sweep across a
+# server with one deliberately stopped container exits non-zero -- inverting the
+# trustworthy exit code A exists to provide.
+subtest 'B x A: a sweep over a stopped container still exits 0' => sub {
+    run_as_user( $USER, "systemctl --user stop container-$container.service" );
+    is( unit_prop( $USER, $container, 'ActiveState' ), 'inactive', "the container is stopped" );
+
+    my ( $rc, $out ) = run_cmd( $CLI, 'upgrade_containers', '--all' );
+
+    is( $rc, 0, "the sweep exits 0 -- a container it correctly left alone is not a failure" ) or diag($out);
+    is( unit_prop( $USER, $container, 'ActiveState' ), 'inactive', "and it stayed stopped" );
+
+    run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
+    return;
+};
+
+# B8, as decided: an EA4 package owns both the image pin and the start args, so
+# the package version is the question -- an image-only gate would silently skip
+# a package update that changed `startup` flags with the same image.
+SKIP: {
+    my $pkg_ver = "/opt/cpanel/$PKG/pkg-version";
+    skip "$PKG is not installed (packaged gate not covered)", 1 if !-e $pkg_ver;
+
+    subtest "B: a packaged container is gated on its package version" => sub {
+        my ( $irc, $iout ) = run_as_user( $USER, _sh($CLI) . " install " . _sh($PKG) );
+        my ($pc) = $iout =~ m/Done, installed:\s*(\S+)/;
+        ok( $pc, "installed a $PKG container" ) or do { diag($iout); return };
+
+        my ( $rc, $out ) = cli_upgrade( $USER, $pc );
+        like( $out, qr/already up to date/, "nothing changed, so nothing is done" );
+
+        my $id_before = container_field( $USER, $pc, '{{.Id}}' );
+
+        # Same image, newer package: the case an image-only gate gets wrong.
+        my $orig = slurp_file($pkg_ver);
+        spew_file( $pkg_ver, "999.999.999" );
+
+        my ( $urc, $uout ) = cli_upgrade( $USER, $pc );
+        is( $urc, 0, "the upgrade succeeds" ) or diag($uout);
+        unlike( $uout, qr/already up to date/, "a newer package version is not a no-op" );
+        isnt( container_field( $USER, $pc, '{{.Id}}' ), $id_before, "the container was recreated for the package change alone" );
+
+        spew_file( $pkg_ver, $orig );
+        run_as_user( $USER, _sh($CLI) . " uninstall " . _sh($pc) . " --verify" );
+        return;
+    };
+}
+
+#---------------------------------------------------------------------
 # A3 — the sweep survives a dead account, and still fails loudly
 #---------------------------------------------------------------------
 subtest 'A3: upgrade_containers --all survives a deleted account' => sub {
@@ -605,8 +877,6 @@ subtest 'A3: upgrade_containers --all survives a deleted account' => sub {
     ok( !defined getpwnam($DEAD_USER), "the account is gone" );
     ok( registry()->{$dead_container}, "but its container is still registered" );
 
-    my $before = unit_prop( $USER, $container, 'ActiveEnterTimestamp' );
-
     my ( $rc, $out ) = run_cmd( $CLI, 'upgrade_containers', '--all' );
 
     # Surviving must not mean going quiet: a registry entry for a vanished
@@ -617,8 +887,12 @@ subtest 'A3: upgrade_containers --all survives a deleted account' => sub {
     like( $out, qr/did not complete for:.*\Q$DEAD_USER\E/, "and summarises the failure" );
 
     # The point of the fix: the accounts after the dead one are still processed.
-    my $after = unit_prop( $USER, $container, 'ActiveEnterTimestamp' );
-    isnt( $after, $before, "the live account sorted after it was still upgraded" );
+    #
+    # Since Increment B, "processed" no longer means "restarted" -- a live
+    # account whose images have not moved is correctly a no-op, so a changed
+    # ActiveEnterTimestamp would now be evidence of a BUG rather than of the
+    # sweep working. The sweep's own report is the proof instead.
+    like( $out, qr/\Q$container\E.*already up to date|already up to date/, "the live account sorted after the dead one was still reached" );
     is( unit_prop( $USER, $container, 'ActiveState' ), 'active', "and is still up" );
 
     # `remove_containers --all` is what the message recommends; prove it works.
