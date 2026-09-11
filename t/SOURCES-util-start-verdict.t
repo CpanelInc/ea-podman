@@ -212,4 +212,23 @@ subtest 'upgrade_container verifies the container actually came back up' => sub 
     is( $err, "it did not come back up\n", "a failed verdict propagates out of upgrade_container" );
 };
 
+# CPANEL-56732 depends on this, and nothing else pins it. The webapp plugin's
+# redeploy passes `force => 1` and must be able to ship BEFORE the ea-podman that
+# understands it, so an upgrade_container that predates the force handling has to
+# ignore the extra arguments rather than choke on them. That only holds while this
+# sub slurps @_ with no subroutine signature — add one and the plugin breaks
+# silently, on a version pairing nobody tests together.
+subtest 'upgrade_container tolerates arguments it does not understand yet' => sub {
+    my @called;
+    local *ea_podman::util::_ensure_latest_container = sub { push @called, [@_]; return 1 };
+    local *ea_podman::util::verify_container_started = sub { return 1 };
+
+    is( ea_podman::util::upgrade_container("app.bob.01"), 1, "the one-argument call still works" );
+
+    is( ea_podman::util::upgrade_container( "app.bob.01", force => 1 ), 1, "and so does one carrying a force option it has no handling for" );
+
+    is( scalar @called, 2, "both reached the work" );
+    is_deeply( $called[0], $called[1], "and the extra arguments changed nothing about what was done" );
+};
+
 done_testing();
