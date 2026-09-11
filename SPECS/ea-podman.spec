@@ -183,6 +183,9 @@ rm -rf %{buildroot}
   container when something actually moved, so it no longer restarts every
   application every run while never fetching anything; `--force` recreates
   unconditionally
+- EA4-325: New `ea-podman clean` lists the `<container>.bak` directories left
+  behind when a container is removed, with their age and size, and removes them
+  with `--run`
 
 * Tue Sep 03 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-27
 - EA4-319: Add compatibility for cagefs 7.6.39

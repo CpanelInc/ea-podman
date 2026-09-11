@@ -1759,6 +1759,168 @@ sub move_container_dir {
     return;
 }
 
+# Matches CPANEL-56733's default for the webapp plugin's own sweep, so an
+# operator holds one number rather than two.
+our $backup_max_age_default = 30 * 24 * 60 * 60;
+
+# The clock, and whether the account's rootless session is reachable. Package
+# variables so a test can age a directory without waiting a month, and can be a
+# sessionless account without actually becoming one -- while the ctime read
+# itself stays real, which is the part worth testing.
+our $now                   = sub { return time() };
+our $user_session_reachable = sub { return $> == 0 || -d "/run/user/$>" ? 1 : 0 };
+
+# Does podman know this name at all, running or not? `ps -a`, not `ps`: a
+# stopped container still owns its name, and handing that name out again is
+# exactly what this guards against. Its own sub so tests have a seam.
+sub _podman_container_exists {
+    my ($container_name) = @_;
+
+    my $name_qx = quotemeta($container_name);
+    `podman ps -a --no-trunc --format "{{.Names}}" 2> /dev/null | grep --quiet ^$name_qx\$`;
+
+    return $? == 0 ? 1 : 0;
+}
+
+# Bytes on disk under $path. Its own sub so tests have a seam, and so the
+# listing can say how much a `.bak` is actually costing.
+sub _dir_size {
+    my ($path) = @_;
+
+    my $name_qx = quotemeta($path);
+    chomp( my $out = `du -sb $name_qx 2> /dev/null` );
+    my ($bytes) = $out =~ m/^([0-9]+)/;
+
+    return $bytes // 0;
+}
+
+# Is this the `.bak` of a container that is genuinely gone, or the wreckage of
+# one that still half-exists?
+#
+# Freeing the name early is the hazard. get_next_available_container_name()
+# checks only the container directory -- not podman, not the ports, not the unit
+# -- so removing a `.bak` whose name is still claimed elsewhere hands that name
+# to the next install with stale state attached to it. Anything still holding on
+# is an EA4-320 reconciliation matter, not something `clean` should bulldoze.
+# (EA4-325 C5)
+sub _backup_name_is_free {
+    my ( $container_name, $user ) = @_;
+
+    return "registered" if load_known_containers()->{$container_name};
+    return "container"  if _podman_container_exists($container_name);
+    return "ports"      if scalar _get_current_ports($container_name);
+
+    my $homedir = ( getpwuid($>) )[7];
+    return "unit" if -e "$homedir/.config/systemd/user/" . get_container_service_name($container_name);
+
+    return;
+}
+
+# `<name>.<user>.<NN>`, with the owner segment matching whose home this is.
+# A hand-made directory is out by construction rather than by a guess about its
+# contents. (EA4-325 C6)
+sub _backup_belongs_to {
+    my ( $container_name, $user ) = @_;
+
+    my @seg = split( m/\./, $container_name );
+    return 0 if @seg < 3;
+    return 0 if $seg[-1] !~ m/\A[0-9][0-9]\z/;
+    return 0 if $seg[-2] ne $user;
+
+    return 1;
+}
+
+=head2 clean_backups(%opts)
+
+Report -- or, with C<run>, remove -- the C<< <container>.bak >> directories left
+under the current account's container root by C<ea-podman uninstall> and
+C<remove_containers>. Returns a hashref:
+
+    {
+        user      => the account swept,
+        ran       => 0 | 1,
+        unknown   => 1            (only when the account's session is unreachable)
+        removable => [ { path, name, age, size }, ... ],
+        skipped   => [ { path, name, reason }, ... ],
+    }
+
+Options: C<run> to act (default is to list only), C<max_age> in seconds
+(default C<$backup_max_age_default>, 30 days).
+
+=cut
+
+sub clean_backups {
+    my (%opts) = @_;
+
+    my $run     = $opts{run} ? 1 : 0;
+    my $max_age = $opts{max_age} // $backup_max_age_default;
+    my $user    = scalar getpwuid($>);
+
+    my %result = ( user => $user, ran => $run, removable => [], skipped => [] );
+
+    # An account whose rootless session is not up cannot be asked about its
+    # containers -- get_containers() returns empty for exactly this reason. Read
+    # as "nothing here" that would look like every `.bak` is free to delete, so
+    # say UNKNOWN and touch nothing. (EA4-325 C7)
+    if ( !$user_session_reachable->() ) {
+        $result{unknown} = 1;
+        return \%result;
+    }
+
+    my $root = _get_container_root();
+    return \%result if !-d $root;
+
+    opendir( my $dh, $root ) or return \%result;
+    my @entries = sort grep { $_ ne '.' && $_ ne '..' } readdir($dh);
+    closedir $dh;
+
+    for my $entry (@entries) {
+        next if $entry !~ m/\.bak\z/;
+
+        my $path = "$root/$entry";
+        next if !-d $path;
+
+        ( my $name = $entry ) =~ s/\.bak\z//;
+
+        if ( !_backup_belongs_to( $name, $user ) ) {
+            push @{ $result{skipped} }, { path => $path, name => $name, reason => "not_a_container_backup" };
+            next;
+        }
+
+        if ( my $held = _backup_name_is_free( $name, $user ) ) {
+            push @{ $result{skipped} }, { path => $path, name => $name, reason => $held };
+            next;
+        }
+
+        # ctime, NOT mtime (EA4-325 C2). Renaming a directory moves its ctime and
+        # leaves mtime alone, so a `.bak` made one second ago still reports the
+        # mtime of its last deploy -- an mtime rule would delete backups made
+        # moments earlier. ctime IS the moment it became a `.bak`.
+        my $ctime = ( stat($path) )[10];
+        my $age   = defined $ctime ? $now->() - $ctime : 0;
+
+        if ( $age < $max_age ) {
+            push @{ $result{skipped} }, { path => $path, name => $name, reason => "too_recent" };
+            next;
+        }
+
+        my $entry_hr = { path => $path, name => $name, age => $age, size => _dir_size($path) };
+
+        if ($run) {
+            local $@;
+            if ( !eval { File::Path::Tiny::rm($path); 1 } ) {
+                push @{ $result{skipped} }, { path => $path, name => $name, reason => "remove_failed" };
+                warn "ea-podman: could not remove “$path”: $@";
+                next;
+            }
+        }
+
+        push @{ $result{removable} }, $entry_hr;
+    }
+
+    return \%result;
+}
+
 sub remove_port_authority_ports {
     my ($container_name) = @_;
     if ( $> == 0 ) {

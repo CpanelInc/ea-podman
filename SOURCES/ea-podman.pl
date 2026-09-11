@@ -118,6 +118,20 @@ sub run {
     return App::CmdDispatch->new( get_dispatch_args() )->run(@args);
 }
 
+sub _age_str {
+    my ($secs) = @_;
+    my $days = int( $secs / 86400 );
+    return $days >= 1 ? "$days day" . ( $days == 1 ? "" : "s" ) : "less than a day";
+}
+
+sub _size_str {
+    my ($bytes) = @_;
+    return sprintf( "%.1f GiB", $bytes / ( 1024**3 ) ) if $bytes >= 1024**3;
+    return sprintf( "%.1f MiB", $bytes / ( 1024**2 ) ) if $bytes >= 1024**2;
+    return sprintf( "%.1f KiB", $bytes / 1024 )        if $bytes >= 1024;
+    return "$bytes bytes";
+}
+
 sub _has_unrestricted_shell {
     my ($user) = @_;
     if ( defined &Whostmgr::Accounts::Shell::has_unrestricted_shell ) {
@@ -811,6 +825,114 @@ Each container is only recreated if something actually moved; see `ea-podman hel
                 if (@failed) {
                     warn "ea-podman: upgrade_containers did not complete for: " . join( ", ", sort @failed ) . "\n";
                     exit 1;
+                }
+
+                return 1;
+            },
+        },
+        clean => {
+            clue     => "clean [--run] [--days=N]",
+            abstract => "List (or remove) leftover <CONTAINER_NAME>.bak directories",
+            help     => qq{List the `<CONTAINER_NAME>.bak` directories left behind under ~/ea-podman.d/ when a container is uninstalled or removed.
+
+Lists only, with each one's age and size, unless you pass `--run`. `--run` removes them.
+
+    - as non-root this covers only your own account
+    - as root it covers every account the container registry knows about
+
+A `.bak` is only removed when its container name is otherwise COMPLETELY gone: no registry entry, nothing in `podman ps -a`, no port still assigned to it, and no systemd unit. Anything still holding the name is reported and left alone -- freeing the name early would hand it to the next install with stale state attached.
+
+Age is measured from when the directory BECAME a `.bak`, not from when its contents were last written, so a backup made moments ago is never mistaken for an old one. Default is 30 days; `--days=N` uses a different threshold, and `--days=0` considers every one of them.
+
+WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains that container's read-write /app directory -- runtime state such as SQLite files, uploads and generated content, its `.env`, and for a zip-sourced application the entire source. Nothing reads a `.bak`, but nothing else keeps a copy either. Read the listing before you pass `--run`.},
+            code     => sub {
+                my ( $app, @args ) = @_;
+
+                my $run  = 0;
+                my $days = undef;
+                for my $arg (@args) {
+                    if    ( $arg eq '--run' )              { $run  = 1 }
+                    elsif ( $arg =~ m/^--days=([0-9]+)$/ ) { $days = $1 }
+                    else                                   { die "Unknown argument “$arg”\n" }
+                }
+
+                my %age = defined $days ? ( max_age => $days * 24 * 60 * 60 ) : ();
+
+                my $user = getpwuid($>);
+
+                # Warned in the DEFAULT listing, not only under --run (EA4-325
+                # C8). `--run` is the only safeguard, so the warning has to be in
+                # front of the operator while they are still deciding.
+                print "Note: a “.bak” can hold the only copy of an application's runtime state, its .env, and a zip-sourced application's entire source.\n";
+                print "Considering backups older than " . ( defined $days ? "$days day" . ( $days == 1 ? "" : "s" ) : "30 days" ) . ".\n";
+                print $run ? "Removing.\n\n" : "Listing only. Pass `--run` to remove.\n\n";
+
+                my @reports;
+                if ( $user eq "root" ) {
+                    ea_podman::util::init_user();
+                    push @reports, ea_podman::util::clean_backups( run => $run, %age );
+
+                    # Same house pattern remove_containers uses: root drops into
+                    # each account rather than reaching into its home from
+                    # outside. Sorted so a failure list is reproducible.
+                    my $containers_hr = ea_podman::util::load_known_containers();
+                    my %users         = map { $_->{user} => 1 } grep { ( $_->{user} // '' ) ne 'root' } values %{$containers_hr};
+
+                    for my $c_user ( sort keys %users ) {
+                        try {
+                            Cpanel::AccessIds::do_as_user_with_exception(
+                                $c_user,
+                                sub {
+                                    my $homedir = ( getpwuid($>) )[7];
+                                    local $ENV{HOME} = $homedir;
+                                    local $ENV{USER} = $c_user;
+
+                                    chdir($homedir);
+                                    ea_podman::util::init_user();
+                                    push @reports, ea_podman::util::clean_backups( run => $run, %age );
+                                }
+                            );
+                        }
+                        catch {
+                            my $err = $_;
+                            warn "ea-podman: could not clean up for “$c_user”: $err";
+                            push @reports, { user => $c_user, unreachable => 1, removable => [], skipped => [] };
+                        };
+                    }
+                }
+                else {
+                    ea_podman::util::init_user();
+                    push @reports, ea_podman::util::clean_backups( run => $run, %age );
+                }
+
+                my $total = 0;
+                my $bytes = 0;
+                for my $r (@reports) {
+                    if ( $r->{unreachable} ) {
+                        print "$r->{user}: UNKNOWN — the account could not be reached, so nothing was examined.\n";
+                        next;
+                    }
+                    if ( $r->{unknown} ) {
+                        print "$r->{user}: UNKNOWN — the account's rootless session is not up, so its containers cannot be asked about. Nothing was touched.\n";
+                        next;
+                    }
+
+                    for my $b ( @{ $r->{removable} } ) {
+                        printf( "%s: %s  (%s old, %s)%s\n", $r->{user}, $b->{path}, _age_str( $b->{age} ), _size_str( $b->{size} ), $run ? " — REMOVED" : "" );
+                        $total++;
+                        $bytes += $b->{size};
+                    }
+                    for my $sk ( @{ $r->{skipped} } ) {
+                        next if $sk->{reason} eq 'too_recent' || $sk->{reason} eq 'not_a_container_backup';
+                        print "$r->{user}: $sk->{path} — kept, the name is still in use ($sk->{reason}); that is an orphan-reconciliation matter, not a cleanup one.\n";
+                    }
+                }
+
+                if ( !$total ) {
+                    print "Nothing to clean up.\n";
+                }
+                else {
+                    printf( "\n%d backup director%s%s, %s.\n", $total, ( $total == 1 ? "y" : "ies" ), ( $run ? " removed" : " could be removed" ), _size_str($bytes) );
                 }
 
                 return 1;
