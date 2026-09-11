@@ -793,9 +793,13 @@ One account's or one container's failure no longer stops the sweep: the rest are
         backup => {
             clue     => "backup",
             abstract => "Backup containers",
-            help     => qq{Backup all ea-podman registered containers for a user.
+            help     => qq{Backup all ea-podman registered containers for a user. Cannot be run as root.
 
-                  Outputs a file ea_podman_backup_<USER>.json
+Writes ~/ea-podman-backups/backup-<YYYYMMDDHHMMSS>.tar.gz, holding each container's directory plus a manifest of its registry entry. That tarball is the path to hand to `ea-podman restore` — list them newest first with `ls -t ~/ea-podman-backups/`.
+
+Only the newest 3 are kept; older ones are removed on each run. pkgacct takes a backup too, so an automatic run can age out one you meant to keep — copy it elsewhere if it matters.
+
+The ~/ea_podman_backup_<USER>.json manifest is written, tarred, and then removed, so it does not survive the run and is not what `restore` wants.
             },
             code => sub {
                 my ($app) = @_;
@@ -805,15 +809,18 @@ One account's or one container's failure no longer stops the sweep: the rest are
             },
         },
         restore => {
-            clue     => "restore <BACKUP_FILE_PATH> [--verify]",
+            clue     => "restore <BACKUP_TARBALL> [--verify]",
             abstract => "Restore containers that have been backed up.",
-            help     => qq{Will restore containers that bave been backed up.
+            help     => qq{Will restore containers that have been backed up. Cannot be run as root.
 
-                  NOTE:
+BACKUP_TARBALL is a tarball written by `ea-podman backup`, e.g. ~/ea-podman-backups/backup-20260803120000.tar.gz — not the ea_podman_backup_<USER>.json manifest, which only ever exists inside that tarball.
 
-                  * Will remove existing containers
-                  * Will destroy the ea-podman.d directory
-                  * This is a destructive operation, you are required to pass ”--verify”
+NOTE:
+
+    * Will remove existing containers
+    * Will destroy the ea-podman.d directory
+    * This is a destructive operation, you are required to pass ”--verify”
+    * Restored containers get a NEW set of ports, so anything pointing at the old ones needs updating
             },
             code => sub {
                 my ( $app, $backup_file, $verify ) = @_;

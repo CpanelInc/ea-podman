@@ -177,6 +177,8 @@ rm -rf %{buildroot}
 - EA4-325: Fix the trailing newline on the image name `ea-podman list` reports
 - EA4-325: Make the EAPodman UAPI report a failed `start` or `restart` rather
   than always reporting success
+- EA4-325: Correct `ea-podman backup`/`restore` help, which named a manifest file
+  that does not survive the run instead of the tarball restore actually wants
 
 * Tue Sep 03 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-27
 - EA4-319: Add compatibility for cagefs 7.6.39
