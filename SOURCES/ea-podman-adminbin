@@ -147,7 +147,8 @@ sub REGISTER {
 
     _die_with_message("Must provide a container name") if !defined $container_name;
 
-    _die_with_message("That container name does not belong to this account") if $container_name !~ m/\.\Q$cpuser\E\.[0-9][0-9]$/;
+    _die_with_message("That container name does not belong to this account")
+        if !ea_podman::util::container_name_belongs_to_user( $container_name, $cpuser );
 
     eval { ea_podman::util::register_container_as_root( $container_name, $cpuser, $isupgrade, $image, $webapp ); };
 

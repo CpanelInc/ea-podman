@@ -555,6 +555,19 @@ sub get_pkg_from_container_name {
     return $container_name;
 }
 
+# Single source of truth for the "<stem>.<owner>.<NN>" container-name ownership
+# rule (CPANEL-55337). The owner segment is the literal account name followed by
+# a two-digit counter; keep this check in one place so the adminbin REGISTER guard
+# and the util-layer can never drift. (The generic shape lives above in
+# $container_name_suffix_regexp; this one additionally binds the owner segment to
+# a specific account.)
+sub container_name_belongs_to_user {
+    my ( $container_name, $user ) = @_;
+
+    return 0 if !defined $container_name || !defined $user;
+    return $container_name =~ m/\.\Q$user\E\.[0-9][0-9]$/ ? 1 : 0;
+}
+
 # What `podman generate systemd` leaves to systemd's defaults: 5 restarts 100ms
 # apart, so a container that crashes on start is failed forever half a second
 # in. 137 is left out of SuccessExitStatus — that is also an OOM kill.
