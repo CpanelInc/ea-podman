@@ -491,10 +491,6 @@ describe "ea-podman-adminbin" => sub {
             is_deeply( \@registered, [ [ 'container.cptest1.01', 'cptest1', 0, 'redis:7', 0 ] ] );
         };
 
-        # CPANEL-55337: `isupgrade` is caller-supplied and bypasses the
-        # duplicate guard, so re-REGISTERing another account’s container used
-        # to rewrite the entry’s `user` to the caller — which then passed the
-        # DEREGISTER ownership check.
         it "should die on another account’s container instead of taking it over" => sub {
             no warnings qw(redefine once);
 
