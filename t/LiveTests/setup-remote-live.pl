@@ -173,9 +173,18 @@ if ( $opt{'check-clean'} ) {
     my $cli = in_path('ea-podman') || "$EAP_ROOT/bin/ea-podman";
     if ( -x $cli ) {
         my ( $rc, $out ) = run( $cli, 'containers' );
-        my @lines = grep { m/\S/ && !m/\Ano containers/i } split /\n/, ( $out // '' );
-        if ( $rc == 0 && @lines > 1 ) {
-            warn_( scalar(@lines) . ' line(s) of registered containers still present' );
+
+        # Count REGISTRY ENTRIES, not output lines. `ea-podman containers` emits
+        # a multi-line hidepid advisory before its JSON on a stock box, and
+        # counting lines reported thirteen phantom containers against an empty
+        # registry -- sending the reader to clean up nothing.
+        my $json = $out // '';
+        $json =~ s/\A.*?(?=^\{)//sm;    # drop everything before the first line starting with {
+        my $registry = eval { require Cpanel::JSON; Cpanel::JSON::Load($json) };
+        my $count = ref $registry eq 'HASH' ? scalar keys %{$registry} : 0;
+
+        if ( $rc == 0 && $count ) {
+            warn_( "$count registered container(s) still present" );
             note('A suite that reaches every account will destroy these.');
             note('Clear with: ea-podman remove_containers --all   (SERVER-WIDE)');
             $dirty++;
