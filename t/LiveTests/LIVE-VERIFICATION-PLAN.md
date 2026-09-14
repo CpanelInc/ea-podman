@@ -71,11 +71,21 @@ it in the repo, not by re-deploying.
 ### Run the unit suites here too
 
 CI does not run ea-podman's — the spec has no `%check` — so the VM is the only
-place they run against a real install:
+place they run against a real install.
+
+**Unlike the live tests, these need CPAN.** A cPanel *development* build ships
+`Test::Spec` in `cpanel-lib`; a release build does not, so four pre-existing
+test files die at BEGIN on a fresh VM. The preflight reports this now; install
+what it names:
 
 ```sh
+/usr/local/cpanel/3rdparty/perl/542/bin/cpanm --notest Test::Spec Test::Mock::Cmd
 cd /root/ea-podman && /usr/local/cpanel/3rdparty/bin/prove -l t/     # 425 tests
 ```
+
+The four affected files — `PodmanHooks-backup`, `ea-podman-adminbin`, `subids`,
+`webapp-dir-setup` — are all outside EA4-325's surface, so skipping them blocks
+nothing if you would rather not add CPAN modules to the box.
 
 They should take about 6 seconds. If they take minutes, something is reaching
 the network that should not be — that regression has happened once already.

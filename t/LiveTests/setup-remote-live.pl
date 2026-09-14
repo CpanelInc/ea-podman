@@ -245,6 +245,13 @@ my @CPANEL_MODS = qw(
   Cpanel::JSON Cpanel::AccessIds Cpanel::PwCache Cpanel::Config::Users
 );
 
+# The UNIT suites are a different matter, and this caught me out: they DO need
+# CPAN. A cPanel DEVELOPMENT build ships Test::Spec in cpanel-lib, so a dev
+# sandbox runs `prove -l t/` green and tells you nothing about a release box,
+# where those four test files die at BEGIN. Advisory only -- the live tests do
+# not need any of it.
+my @UNIT_MODS = qw( Test::Spec Test::Mock::Cmd Test::MockModule Test::MockFile );
+
 my @missing;
 for my $mod ( @CORE_MODS, @CPANEL_MODS ) {
     my ( $rc, undef ) = run( $PERL, "-I$ULC", "-M$mod", '-e1' );
@@ -257,7 +264,25 @@ if (@missing) {
     note('install rather than something this script should install.');
 }
 else {
-    ok( scalar(@CORE_MODS) + scalar(@CPANEL_MODS) . ' modules present (core + cPanel)' );
+    ok( scalar(@CORE_MODS) + scalar(@CPANEL_MODS) . ' modules present (core + cPanel) -- the live tests need nothing else' );
+}
+
+{
+    my @unit_missing;
+    for my $mod (@UNIT_MODS) {
+        my ( $rc, undef ) = run( $PERL, "-I$ULC", '-e', "require $mod" );
+        push @unit_missing, $mod if $rc != 0;
+    }
+
+    if (@unit_missing) {
+        warn_( 'unit-test modules missing: ' . join( ', ', @unit_missing ) );
+        note('The LIVE tests are unaffected. `prove -l t/` in the ea-podman repo');
+        note('will fail at BEGIN for the files that use them. Install with:');
+        note( '  /usr/local/cpanel/3rdparty/perl/542/bin/cpanm --notest ' . join( ' ', @unit_missing ) );
+    }
+    else {
+        ok( scalar(@UNIT_MODS) . ' unit-test modules present (`prove -l t/` will run)' );
+    }
 }
 
 #---------------------------------------------------------------------
