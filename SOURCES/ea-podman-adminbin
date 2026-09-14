@@ -147,6 +147,24 @@ sub REGISTER {
 
     _die_with_message("Must provide a container name") if !defined $container_name;
 
+    # Ownership: a container name is generated as <name>.<user>.<NN>
+    # (util.pm get_next_available_container_name), so a name outside this
+    # account’s own namespace is never this account’s to register
+    # (CPANEL-55337).
+    #
+    # `isupgrade` is caller-supplied and bypasses the duplicate guard in
+    # register_container_as_root(), so without this any account could
+    # re-register another account’s container with isupgrade=1 and have the
+    # entry’s `user` rewritten to itself — which then satisfies the ownership
+    # check DEREGISTER gained for this same case, handing the attacker the
+    # takeover that check exists to prevent. It also stops an account squatting
+    # an as-yet-unused name in another account’s namespace, which would
+    # sabotage that account’s next install.
+    #
+    # This looks only at the name, never at the registry, so the outcome cannot
+    # be used to probe for other accounts’ container names.
+    _die_with_message("That container name does not belong to this account") if $container_name !~ m/\.\Q$cpuser\E\.[0-9][0-9]$/;
+
     eval { ea_podman::util::register_container_as_root( $container_name, $cpuser, $isupgrade, $image, $webapp ); };
 
     _die_with_message("Unable to add to known_containers: $@") if ($@);

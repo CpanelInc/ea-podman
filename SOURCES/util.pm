@@ -1324,17 +1324,32 @@ sub register_container_as_root {
         sub {
             my ($containers_hr) = @_;
 
-            if ( exists $containers_hr->{$container_name} && !$isupgrade ) {
+            # Multi-tenant guard (CPANEL-55337): a name already registered to
+            # another account is never ours to (re)write. `isupgrade` is
+            # caller-controlled all the way from the REGISTER adminbin action,
+            # so without this an account could re-register another account’s
+            # container with isupgrade=1, slip past the duplicate guard below,
+            # and have the entry’s `user` rewritten to itself — which then
+            # satisfies the ownership check in deregister_container_as_root(),
+            # handing it the very takeover that check exists to prevent.
+            # Same shape as that check: warn, write nothing, leave the entry be.
+            my $entry = $containers_hr->{$container_name};
+            if ( $entry && ( $entry->{user} // '' ) ne $user ) {
+                warn "$container_name does not belong to $user";
+                return 0;
+            }
+
+            if ( $entry && !$isupgrade ) {
                 warn "$container_name is already registered";
                 return 0;
             }
-            elsif ( !exists $containers_hr->{$container_name} && $isupgrade ) {
+            elsif ( !$entry && $isupgrade ) {
                 warn "$container_name is not registered, registering now …\n";
             }
 
             # `webapp` is established at install time only (--webapp-dir given); an
             # upgrade/restore keeps the value already recorded in this root-owned file.
-            my $webapp_value = $isupgrade && exists $containers_hr->{$container_name} ? $containers_hr->{$container_name}{webapp} : $webapp;
+            my $webapp_value = $isupgrade && $entry ? $entry->{webapp} : $webapp;
 
             $containers_hr->{$container_name} = {
                 container_name => $container_name,

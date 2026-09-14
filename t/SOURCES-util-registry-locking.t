@@ -155,6 +155,38 @@ subtest 'deregister_container_as_root enforces the optional owner check' => sub 
     ok( !exists ea_podman::util::load_known_containers_as_root()->{"mine.alice.01"}, "the real owner can still deregister it" );
 };
 
+# CPANEL-55337: … and must only ever be (re)written by its owner. `isupgrade`
+# is caller-supplied all the way from the REGISTER adminbin action, so without
+# this guard an account could re-register another account’s container, have
+# the entry’s `user` rewritten to itself, and then pass the ownership check
+# above.
+subtest 'register_container_as_root will not rewrite another account’s entry' => sub {
+    my $tmp = File::Temp->newdir();
+    local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";
+
+    ea_podman::util::register_container_as_root( "mine.alice.01", "alice", 0, "node:22", 0 );
+
+    for my $isupgrade ( 0, 1 ) {
+        my @warnings;
+        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+        ea_podman::util::register_container_as_root( "mine.alice.01", "mallory", $isupgrade, "evil:1", 1 );
+        is( scalar @warnings, 1, "a mismatched owner warns instead of dying (isupgrade=$isupgrade)" );
+    }
+
+    my $entry = ea_podman::util::load_known_containers_as_root()->{"mine.alice.01"};
+    is( $entry->{user},  "alice",   "the entry still belongs to its owner" );
+    is( $entry->{image}, "node:22", "and none of the rest of it was rewritten either" );
+
+    # The owner’s own upgrade still goes through.
+    ea_podman::util::register_container_as_root( "mine.alice.01", "alice", 1, "node:23", 0 );
+    is( ea_podman::util::load_known_containers_as_root()->{"mine.alice.01"}{image}, "node:23", "the real owner can still re-register it" );
+
+    # A mismatch declines to write rather than deleting, so the owner can still
+    # deregister what is theirs afterward.
+    ea_podman::util::deregister_container_as_root( "mine.alice.01", "alice" );
+    ok( !exists ea_podman::util::load_known_containers_as_root()->{"mine.alice.01"}, "and can still remove it" );
+};
+
 subtest 'the registry stays root-only' => sub {
     my $tmp = File::Temp->newdir();
     local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";

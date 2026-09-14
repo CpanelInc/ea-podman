@@ -455,6 +455,101 @@ describe "ea-podman-adminbin" => sub {
             ok( $@ =~ m/Must provide a container name/ );
         };
     };
+
+    describe "REGISTER" => sub {
+        share my %mi;
+        around {
+            %mi = %conf;
+
+            # Cannot use Test::MockModule for this one
+            local *bin::admin::Cpanel::ea_podman::new = sub {
+                my ($class) = @_;
+                return bless {}, $class;
+            };
+
+            local *bin::admin::Cpanel::ea_podman::get_caller_username = sub {
+                return 'cptest1';
+            };
+
+            $mi{mocks}->{object} = bin::admin::Cpanel::ea_podman->new();
+
+            yield;
+        };
+
+        it "should register a container in the caller’s own namespace" => sub {
+            no warnings qw(redefine once);
+
+            my @registered;
+            local *ea_podman::util::register_container_as_root = sub {
+                push @registered, [@_];
+                return 1;
+            };
+
+            my $ret = $mi{mocks}->{object}->REGISTER( 'container.cptest1.01', 0, 'redis:7', 0 );
+
+            is( $ret, 1 );
+            is_deeply( \@registered, [ [ 'container.cptest1.01', 'cptest1', 0, 'redis:7', 0 ] ] );
+        };
+
+        # CPANEL-55337: `isupgrade` is caller-supplied and bypasses the
+        # duplicate guard, so re-REGISTERing another account’s container used
+        # to rewrite the entry’s `user` to the caller — which then passed the
+        # DEREGISTER ownership check.
+        it "should die on another account’s container instead of taking it over" => sub {
+            no warnings qw(redefine once);
+
+            my @registered;
+            local *ea_podman::util::register_container_as_root = sub {
+                push @registered, [@_];
+                return 1;
+            };
+
+            local $@;
+            eval { $mi{mocks}->{object}->REGISTER( 'container.otheruser.01', 1, 'redis:7', 0 ); };
+
+            ok( $@ =~ m/does not belong to this account/ );
+            is_deeply( \@registered, [], "the other account’s entry was never touched" );
+        };
+
+        it "should die on an unused name in another account’s namespace" => sub {
+            no warnings qw(redefine once);
+
+            my @registered;
+            local *ea_podman::util::register_container_as_root = sub {
+                push @registered, [@_];
+                return 1;
+            };
+
+            local $@;
+            eval { $mi{mocks}->{object}->REGISTER( 'never-registered.otheruser.42', 0, 'redis:7', 0 ); };
+
+            ok( $@ =~ m/does not belong to this account/ );
+            is_deeply( \@registered, [], "no squatting in another account’s namespace" );
+        };
+
+        it "should not be fooled by a name that merely contains the caller’s name" => sub {
+            no warnings qw(redefine once);
+
+            my @registered;
+            local *ea_podman::util::register_container_as_root = sub {
+                push @registered, [@_];
+                return 1;
+            };
+
+            local $@;
+            eval { $mi{mocks}->{object}->REGISTER( 'cptest1.otheruser.01', 1, 'redis:7', 0 ); };
+
+            ok( $@ =~ m/does not belong to this account/ );
+            is_deeply( \@registered, [] );
+        };
+
+        it "should die if no container name is provided" => sub {
+            local $@;
+            eval { $mi{mocks}->{object}->REGISTER(); };
+
+            ok( $@ =~ m/Must provide a container name/ );
+        };
+    };
 };
 
 runtests unless caller;
