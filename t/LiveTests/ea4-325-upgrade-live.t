@@ -1280,6 +1280,11 @@ sub skip_all_in_subtest {
 # that happens the failures are scattered and misleading: the forced paths keep
 # passing from cache (B4) while the conditional ones abort (B4), so it reads like
 # a logic bug in the gate. Say so plainly instead of leaving it to be rediscovered.
+#
+# Note this pull is ITSELF a metered manifest request -- it spends one unit of the
+# budget it is reporting on. That is the only way to ask the question, and one
+# request at the very end of a suite that has already spent dozens is a fair
+# trade. Do not "improve" this into anything that pulls more often.
 {
     my ( $prc, $pout ) = run_cmd( 'podman', 'pull', '-q', $IMAGE );
     diag( "\n"
