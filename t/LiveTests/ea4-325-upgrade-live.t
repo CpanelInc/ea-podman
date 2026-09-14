@@ -372,6 +372,21 @@ $CLI_PATHS[0] = $CLI;
       if $rc != 0;
 }
 
+# Increment B made `upgrade` PULL on every run, so this suite now consumes Docker
+# Hub pulls at a rate the pre-B one never did -- roughly one per upgrade, across
+# thirty subtests. An anonymous box has ~100 per 6h, and a second full run on the
+# same IP will hit it.
+#
+# Checked up front because the failure is otherwise deeply confusing: the FORCED
+# paths keep working (B4: force warns and falls back to the cached image) while
+# the CONDITIONAL ones fail (B4: abort, container untouched), so a rate-limited
+# box fails a scattered handful of subtests for reasons that look like logic bugs.
+{
+    my ( $prc, $pout ) = run_cmd( 'podman', 'pull', '-q', $IMAGE );
+    plan skip_all => "Docker Hub rate limit reached on this host -- `podman login`, use a pull-through cache, or wait. Running anyway would fail the conditional-path subtests for an environmental reason:\n$pout"
+      if $pout =~ m/toomanyrequests|rate limit/i;
+}
+
 my $CGROUP = -e '/sys/fs/cgroup/cgroup.controllers' ? 'v2' : 'v1';
 
 #---------------------------------------------------------------------
@@ -382,6 +397,8 @@ our $CREATED_USER = 0;
 our $ORIG_SHELL;
 our $DEAD_USER;          # A3: deleted uncleanly while still registered
 our $DEAD_CREATED = 0;
+our $CLEAN_USER;         # root-side clean: an account with no registered containers
+our $CLEAN_CREATED = 0;
 
 sub make_account {
     my ( $name, $domain ) = @_;
@@ -975,6 +992,220 @@ subtest 'C: a directory that is not a container backup is never touched' => sub 
 };
 
 #---------------------------------------------------------------------
+# Two error paths live coverage had been missing
+#---------------------------------------------------------------------
+
+# The verdict poll's `inactive` branch splits on Result, and neither half was
+# exercised live. SuccessExitStatus=143 classifies a SIGTERM-style exit as clean,
+# so Restart=on-failure does not retry it: the unit settles inactive/success and
+# the verdict is `stopped`, not `failed`. This is also the only test that proves
+# that directive does anything.
+#
+# The exit must be IMMEDIATE. Anything that lives longer than the 0.5s
+# confirmation window lets the poll see a settled `active` and the subtest passes
+# for the wrong reason.
+subtest 'the verdict tells a clean stop from a crash' => sub {
+    my ( $irc, $iout ) = run_as_user( $USER, _sh($CLI) . " install stopprobe --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
+    my ($c) = $iout =~ m/Done, installed:\s*(\S+)/;
+    ok( $c, "installed a container of its own" ) or do { diag($iout); return };
+
+    patch_start_args(
+        $USER, $c,
+        sub {
+            my ($args) = @_;
+            my $image = pop @{$args};
+            push @{$args}, '--entrypoint', '["/bin/sh","-c","exit 143"]', $image;
+        }
+    );
+
+    my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($c) . " --force" );
+
+    isnt( $rc, 0, "the upgrade reports failure" );
+    is( unit_prop( $USER, $c, 'ActiveState' ), 'inactive', "the unit settled inactive rather than failed" );
+    is( unit_prop( $USER, $c, 'Result' ),      'success',  "and systemd called the exit clean, per SuccessExitStatus=143" );
+
+    # The pair that distinguishes `stopped` from `failed` unambiguously: this
+    # wording and the session hint are emitted only for stopped/unknown.
+    like( $out, qr/is not running/,        "reported as not running rather than failed" );
+    like( $out, qr/ensure_user_sessions/,  "with the session hint the two share" );
+
+    run_as_user( $USER, _sh($CLI) . " uninstall " . _sh($c) . " --verify" );
+    run_as_user( $USER, _sh($CLI) . " clean --run --days=0" );
+    return;
+};
+
+# Live only ever saw the rollback SUCCEED. This is the bottom rung: the
+# rollback's own create fails too, so the container is gone and has no unit --
+# and the message has to promise, truthfully, that nothing was destroyed.
+#
+# The lever is a bogus start ARG, not a bogus image: _rollback_failed_upgrade
+# replaces only $args[-1], so a bad flag survives into the retry and both creates
+# fail. That is exactly what the code comment claims -- "a failure which is not
+# the image pin recurs here" -- and nothing asserted it.
+subtest 'a rollback that cannot recreate either says so, and still destroys nothing' => sub {
+    my ( $irc, $iout ) = run_as_user( $USER, _sh($CLI) . " install rbprobe --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
+    my ($c) = $iout =~ m/Done, installed:\s*(\S+)/;
+    ok( $c, "installed a container of its own" ) or do { diag($iout); return };
+
+    my $cdir              = container_dir( $USER, $c );
+    my $registry_before   = slurp($REGISTRY);
+    my $ports_before      = ports_held( $USER, $c );
+
+    patch_start_args(
+        $USER, $c,
+        sub {
+            my ($args) = @_;
+            my $image = pop @{$args};
+            push @{$args}, '--ea4325-not-a-flag', $image;
+        }
+    );
+
+    my ( $rc, $out ) = run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($c) . " --force" );
+
+    isnt( $rc, 0, "the upgrade reports failure" );
+    like( $out, qr/could not be recreated from/,            "the message reaches the bottom rung" );
+    like( $out, qr/is not running and has no systemd unit/, "and is honest that the container is gone" );
+
+    # The promise the message makes, asserted rather than taken on trust.
+    like( $out, qr/Nothing was deregistered and nothing was deleted/, "it promises nothing was destroyed" );
+    is( slurp($REGISTRY), $registry_before, "and the registry really is byte-identical" );
+    is( ports_held( $USER, $c ), $ports_before, "the ports are still held" );
+    ok( -d $cdir, "and the container directory survives" );
+
+    # `upgrade` is the documented in-place retry, even with no container left.
+    patch_start_args( $USER, $c, sub { my ($args) = @_; @{$args} = grep { $_ ne '--ea4325-not-a-flag' } @{$args} } );
+    my ( $frc, $fout ) = run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($c) . " --force" );
+    is( $frc, 0, "and it recovers in place once the cause is fixed" ) or diag($fout);
+    is( unit_prop( $USER, $c, 'ActiveState' ), 'active', "with the container running again" );
+
+    run_as_user( $USER, _sh($CLI) . " uninstall " . _sh($c) . " --verify" );
+    run_as_user( $USER, _sh($CLI) . " clean --run --days=0" );
+    return;
+};
+
+#---------------------------------------------------------------------
+# Root-side and UAPI paths that nothing else reaches
+#---------------------------------------------------------------------
+
+# THE subtest that catches the bug this file existed to look for.
+#
+# Root's `clean` used to build its account list from the container registry. But
+# a `.bak` exists BECAUSE a container was removed, and removing one deregisters
+# it -- so an account that removed all of its containers has no registry entries
+# and was never visited. `remove_containers --all` is exactly how a pile of
+# backups appears, so the accounts most likely to need cleaning were the ones
+# silently skipped.
+subtest 'root: clean reaches an account with no registered containers left' => sub {
+    $CLEAN_USER = 'cln' . substr( time, -5 );
+    if ( !make_account( $CLEAN_USER, "$CLEAN_USER.ea4325.test" ) ) {
+        $CLEAN_USER = undef;
+        return fail("could not create the second account");
+    }
+    $CLEAN_CREATED = 1;
+    run_cmd( '/usr/sbin/usermod', '-s', $BASH, $CLEAN_USER );
+
+    my ( $irc, $iout ) = run_as_user( $CLEAN_USER, _sh($CLI) . " install lonely --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
+    my ($cn) = $iout =~ m/Done, installed:\s*(\S+)/;
+    ok( $cn, "the second account has a container" ) or do { diag($iout); return };
+
+    # Remove ALL of its containers: the .bak survives, the registry entry does not.
+    run_as_user( $CLEAN_USER, _sh($CLI) . " remove_containers --all" );
+
+    my $home = ( getpwnam($CLEAN_USER) )[7];
+    my $bak  = "$home/ea-podman.d/$cn.bak";
+    ok( -d $bak, "which left a .bak behind" ) or return;
+    ok( !registry()->{$cn}, "and no registry entry at all" );
+
+    # Root sweeps every account, not just the ones the registry still lists.
+    my ( $rc, $out ) = run_cmd( $CLI, 'clean', '--run', '--days=0' );
+
+    is( $rc, 0, "root's clean succeeds" ) or diag($out);
+    ok( !-d $bak, "and it reached an account the registry no longer knows about" );
+    like( $out, qr/\Q$CLEAN_USER\E/, "naming that account in its report" );
+
+    return;
+};
+
+# The UAPI's force plumbing had no test of any kind -- not unit, not live.
+subtest 'UAPI upgrade accepts force and recreates when nothing moved' => sub {
+    my $id_before = container_field( $USER, $container, '{{.Id}}' );
+
+    # No force first: the UAPI inherits safe mode, so this must be a no-op.
+    my $plain = uapi( $USER, 'upgrade', "container_name=$container" );
+    ok( $plain->{status}, "a plain UAPI upgrade succeeds" );
+    is( container_field( $USER, $container, '{{.Id}}' ), $id_before, "and changes nothing, because nothing moved" );
+
+    my $forced = uapi( $USER, 'upgrade', "container_name=$container", 'force=1' );
+    ok( $forced->{status}, "a forced UAPI upgrade succeeds" );
+    isnt( container_field( $USER, $container, '{{.Id}}' ), $id_before, "and really does recreate the container" );
+
+    return;
+};
+
+subtest 'UAPI restart reports a bring-up that did not happen' => sub {
+    # _lifecycle backs start, stop and restart; restart shares the raise-on-failure
+    # path but was never exercised.
+    my $ok = uapi( $USER, 'restart', "container_name=$container" );
+    ok( $ok->{status}, "restarting a healthy container succeeds" );
+    is( unit_prop( $USER, $container, 'ActiveState' ), 'active', "and it is up" );
+
+    patch_start_args(
+        $USER, $container,
+        sub {
+            my ($args) = @_;
+            my $image = pop @{$args};
+            push @{$args}, '--entrypoint', $BAD_ENTRYPOINT, $image;
+        }
+    );
+    run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
+
+    my $bad = uapi( $USER, 'restart', "container_name=$container" );
+    ok( !$bad->{status}, "restarting a container that will not start reports failure" );
+
+    patch_start_args(
+        $USER, $container,
+        sub {
+            my ($args) = @_;
+            @{$args} = grep { $_ ne '--entrypoint' && $_ ne $BAD_ENTRYPOINT } @{$args};
+        }
+    );
+    run_as_user( $USER, _sh($CLI) . " upgrade " . _sh($container) . " --force" );
+    is( unit_prop( $USER, $container, 'ActiveState' ), 'active', "and the container is healthy again" );
+
+    return;
+};
+
+# B5's --force on the sweep, and the per-user loop surviving one bad container.
+subtest 'upgrade_containers --all --force recreates everything, and survives one failure' => sub {
+    my ( $irc, $iout ) = run_as_user( $USER, _sh($CLI) . " install second --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
+    my ($second) = $iout =~ m/Done, installed:\s*(\S+)/;
+    ok( $second, "a second container for the same account" ) or do { diag($iout); return };
+
+    my %before = map { $_ => container_field( $USER, $_, '{{.Id}}' ) } ( $container, $second );
+
+    my ( $rc, $out ) = run_cmd( $CLI, 'upgrade_containers', '--all', '--force' );
+    is( $rc, 0, "the forced sweep succeeds" ) or diag($out);
+
+    for my $c ( $container, $second ) {
+        isnt( container_field( $USER, $c, '{{.Id}}' ), $before{$c}, "$c was recreated even though no image moved" );
+    }
+
+    # One container's failure must not abandon the rest of that account's, and
+    # must still surface as a non-zero exit.
+    patch_start_args( $USER, $second, sub { my ($args) = @_; $args->[-1] = $BAD_IMAGE } );
+    %before = map { $_ => container_field( $USER, $_, '{{.Id}}' ) } ($container);
+
+    my ( $frc, $fout ) = run_cmd( $CLI, 'upgrade_containers', '--all', '--force' );
+
+    isnt( $frc, 0, "a sweep with one broken container exits non-zero" );
+    isnt( container_field( $USER, $container, '{{.Id}}' ), $before{$container}, "but the healthy container was still upgraded" );
+
+    run_as_user( $USER, _sh($CLI) . " uninstall " . _sh($second) . " --verify" );
+    run_as_user( $USER, _sh($CLI) . " clean --run --days=0" );
+    return;
+};
+
+#---------------------------------------------------------------------
 # A3 — the sweep survives a dead account, and still fails loudly
 #---------------------------------------------------------------------
 subtest 'A3: upgrade_containers --all survives a deleted account' => sub {
@@ -1058,5 +1289,9 @@ END {
 
     if ( $DEAD_CREATED && defined $DEAD_USER && defined getpwnam($DEAD_USER) ) {
         run_cmd( $WHMAPI, 'removeacct', "username=$DEAD_USER", 'keepdns=0', '--output=json' );
+    }
+
+    if ( $CLEAN_CREATED && defined $CLEAN_USER && defined getpwnam($CLEAN_USER) ) {
+        run_cmd( $WHMAPI, 'removeacct', "username=$CLEAN_USER", 'keepdns=0', '--output=json' );
     }
 }

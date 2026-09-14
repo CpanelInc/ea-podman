@@ -193,22 +193,67 @@ subtest 'a directory that is not a .bak is invisible to this' => sub {
     is_deeply( $report->{removable}, [], "and never even considered" );
 };
 
-# EA4-325 C7. get_containers() returns empty for an account with no runtime dir,
-# which would read as "nothing holds any of these names" -- i.e. every backup
-# looks free to delete. Say UNKNOWN instead.
-subtest 'an unreachable session reports UNKNOWN and touches nothing' => sub {
+# EA4-325 C7, narrowed. Refusing outright left `clean` unable to do its job:
+# removing the last container drops the account's linger, so the accounts WITH
+# backups to reclaim are exactly the ones with no session.
+subtest 'a session that is down narrows the checks rather than stopping the sweep' => sub {
     my $tmp = _world();
     my $bak = _mk_bak( $tmp, "myapp.bob.01" );
 
     local $ea_podman::util::now = sub { time() + ( 40 * $DAY ) };
-
-    # A non-root account whose /run/user/<uid> is absent.
     local $ea_podman::util::user_session_reachable = sub { return 0 };
+
     my $report = ea_podman::util::clean_backups( run => 1 );
 
-    ok( $report->{unknown}, "reported as UNKNOWN" );
-    ok( -d $bak, "and nothing was removed" );
-    is_deeply( $report->{removable}, [], "nor listed as removable" );
+    ok( $report->{podman_unverifiable}, "the skipped check is reported" );
+    ok( !-d $bak, "and the backup is still reclaimed" );
+};
+
+# The narrowing must not become a free-for-all: the three checks that do NOT
+# need a session still hold a name.
+subtest 'with the session down, the sessionless checks still protect a name' => sub {
+    for my $case (
+        [ "registered", sub { *ea_podman::util::load_known_containers = sub { return { "myapp.bob.01" => {} } } } ],
+        [ "ports",      sub { *ea_podman::util::_get_current_ports    = sub { return (10000) } } ],
+      ) {
+        my ( $reason, $setup ) = @{$case};
+
+        my $tmp = _world();
+        my $bak = _mk_bak( $tmp, "myapp.bob.01" );
+        no warnings 'redefine';
+        $setup->();
+        local $ea_podman::util::now                    = sub { time() + ( 40 * $DAY ) };
+        local $ea_podman::util::user_session_reachable = sub { return 0 };
+
+        my $report = ea_podman::util::clean_backups( run => 1 );
+
+        ok( -d $bak, "kept when the name is held by: $reason" );
+        is( _reason_for( $report, $bak ), $reason, "and reported as $reason" );
+    }
+};
+
+# The one thing the narrowing gives up, stated as a test so it is a decision
+# rather than an accident: with no session, a container that exists ONLY in
+# podman's storage cannot be seen, and its name is treated as free.
+subtest 'the gap the narrowing accepts is exactly one check, and only when the session is down' => sub {
+    my $tmp = _world();
+    my $bak = _mk_bak( $tmp, "myapp.bob.01" );
+
+    no warnings 'redefine';
+    local *ea_podman::util::_podman_container_exists = sub { return 1 };    # a stopped container in storage
+    local $ea_podman::util::now                      = sub { time() + ( 40 * $DAY ) };
+
+    # Session up: podman is asked, and the name is held.
+    local $ea_podman::util::user_session_reachable = sub { return 1 };
+    ea_podman::util::clean_backups( run => 1 );
+    ok( -d $bak, "with a session, podman holds the name" );
+
+    # Session down: podman cannot be asked, so it is reclaimed -- an EA4-320
+    # orphan by definition, since nothing else references it.
+    local $ea_podman::util::user_session_reachable = sub { return 0 };
+    my $report = ea_podman::util::clean_backups( run => 1 );
+    ok( !-d $bak, "without one, it is reclaimed" );
+    ok( $report->{podman_unverifiable}, "and the report says the check was skipped" );
 };
 
 subtest 'the age threshold is an option' => sub {

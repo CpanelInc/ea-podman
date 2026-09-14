@@ -186,6 +186,10 @@ rm -rf %{buildroot}
 - EA4-325: New `ea-podman clean` lists the `<container>.bak` directories left
   behind when a container is removed, with their age and size, and removes them
   with `--run`
+- EA4-325: Fix `ea-podman clean` as root, which reclaimed nothing: it looked only
+  at accounts the container registry still listed, reported nothing back across
+  the privilege boundary, and refused any account whose rootless session was down
+  — which is every account that had just removed its last container
 
 * Tue Sep 03 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-27
 - EA4-319: Add compatibility for cagefs 7.6.39

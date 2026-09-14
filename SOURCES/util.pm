@@ -676,10 +676,20 @@ sub _podman_pull {
 
     return $_pulled{$image_ref} if exists $_pulled{$image_ref};
 
+    return $_pulled{$image_ref} = _podman_pull_once($image_ref);
+}
+
+# The shell-out _podman_pull memoizes around. Its own sub so the memoization is
+# testable: a bare backtick cannot be mocked, so a test that replaced
+# _podman_pull itself would be testing its own reimplementation rather than the
+# cache -- which is exactly what the first version of that test did.
+sub _podman_pull_once {
+    my ($image_ref) = @_;
+
     my $image_qx = quotemeta($image_ref);
     `podman pull $image_qx 2>&1`;
 
-    return $_pulled{$image_ref} = ( $? == 0 ? 1 : 0 );
+    return $? == 0 ? 1 : 0;
 }
 
 # The local image ID a reference currently resolves to, or undef when podman has
@@ -1804,10 +1814,10 @@ sub _dir_size {
 # is an EA4-320 reconciliation matter, not something `clean` should bulldoze.
 # (EA4-325 C5)
 sub _backup_name_is_free {
-    my ( $container_name, $user ) = @_;
+    my ( $container_name, $user, $can_ask_podman ) = @_;
 
     return "registered" if load_known_containers()->{$container_name};
-    return "container"  if _podman_container_exists($container_name);
+    return "container"  if $can_ask_podman && _podman_container_exists($container_name);
     return "ports"      if scalar _get_current_ports($container_name);
 
     my $homedir = ( getpwuid($>) )[7];
@@ -1839,7 +1849,7 @@ C<remove_containers>. Returns a hashref:
     {
         user      => the account swept,
         ran       => 0 | 1,
-        unknown   => 1            (only when the account's session is unreachable)
+        podman_unverifiable => 1   (session down: podman could not be asked)
         removable => [ { path, name, age, size }, ... ],
         skipped   => [ { path, name, reason }, ... ],
     }
@@ -1858,14 +1868,24 @@ sub clean_backups {
 
     my %result = ( user => $user, ran => $run, removable => [], skipped => [] );
 
-    # An account whose rootless session is not up cannot be asked about its
-    # containers -- get_containers() returns empty for exactly this reason. Read
-    # as "nothing here" that would look like every `.bak` is free to delete, so
-    # say UNKNOWN and touch nothing. (EA4-325 C7)
-    if ( !$user_session_reachable->() ) {
-        $result{unknown} = 1;
-        return \%result;
-    }
+    # A `.bak` exists because a container was REMOVED, and removing the last one
+    # correctly drops the account's linger (CPANEL-55309) -- which takes
+    # /run/user/<uid> with it. So the accounts with backups to reclaim are
+    # precisely the ones with no session, and refusing to look at them outright
+    # (as C7 was first written) left `clean` unable to do the one job it has.
+    #
+    # Narrowed instead of abandoned. Of the four checks that decide whether a
+    # name is free, only `podman ps -a` needs a session; the registry, the port
+    # authority and the unit file on disk are all answerable without one. And
+    # with no session a container cannot be RUNNING -- the only thing that can
+    # hide is one sitting stopped in podman's storage, which, having no registry
+    # entry, no ports and no unit, is an orphan by definition and EA4-320's to
+    # reconcile.
+    #
+    # Reported rather than silent: the caller says which check was skipped, so an
+    # operator is never told a name was free when one of the four was unasked.
+    my $can_ask_podman = $user_session_reachable->() ? 1 : 0;
+    $result{podman_unverifiable} = 1 if !$can_ask_podman;
 
     my $root = _get_container_root();
     return \%result if !-d $root;
@@ -1887,7 +1907,7 @@ sub clean_backups {
             next;
         }
 
-        if ( my $held = _backup_name_is_free( $name, $user ) ) {
+        if ( my $held = _backup_name_is_free( $name, $user, $can_ask_podman ) ) {
             push @{ $result{skipped} }, { path => $path, name => $name, reason => $held };
             next;
         }

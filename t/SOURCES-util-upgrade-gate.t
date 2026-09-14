@@ -228,25 +228,9 @@ subtest '_upgrade_is_needed: packaged containers gate on the package version too
     is( ea_podman::util::_upgrade_is_needed( "ea-memcached16.bob.01", "img", "ea-memcached16", 0 ), 1, "same version but a moved image still needs a recreate" );
 };
 
-subtest '_podman_pull pulls each image once per run' => sub {
-    # An upgrade_containers --all sweep across many containers on one image must
-    # not pull it once each. (B5)
-    my $calls = 0;
-    no warnings 'redefine';
-    local %ea_podman::util::_pulled = ();
-
-    # Exercise the memoization by counting through a stubbed shell-out.
-    local *ea_podman::util::_podman_pull = sub {
-        my ($ref) = @_;
-        return $ea_podman::util::_pulled{$ref} if exists $ea_podman::util::_pulled{$ref};
-        $calls++;
-        return $ea_podman::util::_pulled{$ref} = 1;
-    };
-
-    ea_podman::util::_podman_pull("img-a") for 1 .. 3;
-    ea_podman::util::_podman_pull("img-b");
-
-    is( $calls, 2, "two distinct images, two pulls" );
-};
+# The pull memoization is deliberately NOT tested here. _harness() above replaces
+# _podman_pull with a non-local glob assignment, so the real sub is gone for the
+# rest of this file and any test of it would be testing the stub. It lives in
+# t/SOURCES-util-podman-pull.t, which never loads the harness.
 
 done_testing();

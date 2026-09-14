@@ -872,15 +872,31 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
                     ea_podman::util::init_user();
                     push @reports, ea_podman::util::clean_backups( run => $run, %age );
 
-                    # Same house pattern remove_containers uses: root drops into
-                    # each account rather than reaching into its home from
-                    # outside. Sorted so a failure list is reproducible.
-                    my $containers_hr = ea_podman::util::load_known_containers();
-                    my %users         = map { $_->{user} => 1 } grep { ( $_->{user} // '' ) ne 'root' } values %{$containers_hr};
-
-                    for my $c_user ( sort keys %users ) {
+                    # Every cPanel account, NOT the ones the container registry
+                    # knows about.
+                    #
+                    # A `.bak` exists precisely BECAUSE a container was removed,
+                    # and removing one deregisters it. So an account that removed
+                    # all of its containers has no registry entries at all -- and
+                    # `remove_containers --all` is exactly how a pile of backups
+                    # appears. Driving this from the registry would skip the
+                    # accounts most likely to have something to clean, and skip
+                    # them silently.
+                    #
+                    # ensure_user_sessions() does use the registry list, and is
+                    # right to: only an account WITH containers needs a systemd
+                    # manager. This wants the opposite set. Same shape as the
+                    # `check` verb below. Sorted so a failure list is
+                    # reproducible.
+                    for my $c_user ( sort( Cpanel::Config::Users::getcpusers() ) ) {
                         try {
-                            Cpanel::AccessIds::do_as_user_with_exception(
+                            # RETURNED, not pushed. do_as_user_with_exception runs
+                            # the closure in a forked child (Cpanel::ForkSync), so
+                            # anything pushed to a lexical in there dies with the
+                            # child and root reports nothing for the account it
+                            # just swept. ForkSync serialises the return value
+                            # back, so that is the way across.
+                            my $report = Cpanel::AccessIds::do_as_user_with_exception(
                                 $c_user,
                                 sub {
                                     my $homedir = ( getpwuid($>) )[7];
@@ -889,9 +905,11 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
 
                                     chdir($homedir);
                                     ea_podman::util::init_user();
-                                    push @reports, ea_podman::util::clean_backups( run => $run, %age );
+                                    return ea_podman::util::clean_backups( run => $run, %age );
                                 }
                             );
+
+                            push @reports, $report if ref $report eq 'HASH';
                         }
                         catch {
                             my $err = $_;
@@ -912,9 +930,8 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
                         print "$r->{user}: UNKNOWN — the account could not be reached, so nothing was examined.\n";
                         next;
                     }
-                    if ( $r->{unknown} ) {
-                        print "$r->{user}: UNKNOWN — the account's rootless session is not up, so its containers cannot be asked about. Nothing was touched.\n";
-                        next;
+                    if ( $r->{podman_unverifiable} ) {
+                        print "$r->{user}: note — this account's rootless session is not up, so podman could not be asked. A container that exists only in podman's storage, with no registry entry, no ports and no unit, would not be seen here; that is an orphan for `ea-podman orphan` to reconcile.\n";
                     }
 
                     for my $b ( @{ $r->{removable} } ) {
