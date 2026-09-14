@@ -254,6 +254,24 @@ ssh root@VM 'bash /opt/cpanel/ea-podman/bin/compile.sh'
 `ea4-325-upgrade-live.t` checks both the library and the compiled binary and
 skips with a specific message if only the library was updated.
 
+### Or let the setup script do it
+
+`setup-remote-live.pl` does the above — including the recompile and the UAPI
+module — and checks everything else the live tests need before you find out the
+hard way. It is self-contained: no repo checkout, no CPAN, core modules only.
+
+```sh
+scp t/LiveTests/setup-remote-live.pl root@VM:/root/
+ssh root@VM '/usr/local/cpanel/3rdparty/bin/perl /root/setup-remote-live.pl'
+```
+
+Read-only by default — it reports what is present and **which copy of the code
+is actually under test**, then prints the exact command for each live test. Add
+`--deploy` to put the rsynced working trees under test rather than the installed
+packages. It also covers the webapp plugin's live tests (`--plugin=PATH`), whose
+modules have the same hazard in reverse: symlinked into the repo on a
+development box, real files from the package on a VM.
+
 ## Running
 
 As root, on the target VM. Each test is self-contained — copy just the one
