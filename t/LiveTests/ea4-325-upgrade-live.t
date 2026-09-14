@@ -93,6 +93,19 @@
 # `{{.ImageName}}`; all three behave identically on 4.9 and 5.8, and
 # resolve the same image to the same ID.
 #
+# DESTRUCTIVE, AND SERVER-WIDE. Run this only on a disposable box with no
+# ea-podman containers you care about, for two reasons:
+#
+#   * `upgrade_containers --all` and `clean` are server-wide by design, so
+#     ANOTHER account's broken container fails a sweep this file asserts
+#     succeeds -- the failure then looks like a bug in the code under test.
+#   * the A3 subtest runs `remove_containers --all` AS ROOT to clear a
+#     deliberately-deleted account's registry entry. There is no per-account
+#     form of that verb, so it removes EVERY account's containers on the box.
+#
+# Both were learned the hard way: a leftover account from unrelated manual
+# testing made two subtests fail for reasons that had nothing to do with them.
+#
 # Run ON A LIVE cPanel VM, as root, with podman installed and an
 # ea-podman build carrying the EA4-325 changes:
 #
@@ -1262,6 +1275,23 @@ sub skip_all_in_subtest {
     return;
 }
 
+# The startup check cannot catch a limit reached DURING the run, and this suite
+# spends pulls freely -- every install and every conditional upgrade is one. When
+# that happens the failures are scattered and misleading: the forced paths keep
+# passing from cache (B4) while the conditional ones abort (B4), so it reads like
+# a logic bug in the gate. Say so plainly instead of leaving it to be rediscovered.
+{
+    my ( $prc, $pout ) = run_cmd( 'podman', 'pull', '-q', $IMAGE );
+    diag( "\n"
+          . "!! This host is now rate limited by the registry. Any failures above on the\n"
+          . "!! CONDITIONAL paths (a plain `upgrade`, a plain UAPI upgrade, an install) are\n"
+          . "!! environmental, not defects: a failed pull deliberately aborts with the\n"
+          . "!! container untouched. The forced paths fall back to the cached image and\n"
+          . "!! keep passing, which is what makes the pattern confusing.\n"
+          . "!! Re-run once the window clears." )
+      if $pout =~ m/toomanyrequests|rate limit/i;
+}
+
 done_testing();
 
 #---------------------------------------------------------------------
@@ -1287,8 +1317,19 @@ END {
         run_cmd( '/usr/sbin/usermod', '-s', $ORIG_SHELL, $USER );
     }
 
-    if ( $DEAD_CREATED && defined $DEAD_USER && defined getpwnam($DEAD_USER) ) {
-        run_cmd( $WHMAPI, 'removeacct', "username=$DEAD_USER", 'keepdns=0', '--output=json' );
+    if ( $DEAD_CREATED && defined $DEAD_USER ) {
+        if ( defined getpwnam($DEAD_USER) ) {
+            run_cmd( $WHMAPI, 'removeacct', "username=$DEAD_USER", 'keepdns=0', '--output=json' );
+        }
+        else {
+            # A3 deletes this account with `userdel -f` on purpose, which leaves
+            # /var/cpanel/users/<name> behind -- removeacct cannot clean up an
+            # account that is already half gone. Left in place it accumulates one
+            # ghost per run, and root's `clean` enumerates that directory
+            # (getcpusers), so every later run tries to sweep accounts that no
+            # longer exist.
+            unlink "/var/cpanel/users/$DEAD_USER";
+        }
     }
 
     if ( $CLEAN_CREATED && defined $CLEAN_USER && defined getpwnam($CLEAN_USER) ) {

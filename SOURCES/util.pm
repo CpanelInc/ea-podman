@@ -669,7 +669,8 @@ sub _upgrade_is_needed {
 # `upgrade_containers --all` sweep across many containers on the same image pulls
 # it once, not once each (EA4-325 B5). Never dies -- a pull failure is a decision
 # for the caller, and the two paths want opposite answers (B4).
-our %_pulled;    # image reference => success boolean
+our %_pulled;        # image reference => success boolean
+our %_pull_error;    # image reference => what podman said, for the failure message
 
 sub _podman_pull {
     my ($image_ref) = @_;
@@ -687,9 +688,26 @@ sub _podman_pull_once {
     my ($image_ref) = @_;
 
     my $image_qx = quotemeta($image_ref);
-    `podman pull $image_qx 2>&1`;
+    my $out      = `podman pull $image_qx 2>&1`;
+    return 1 if $? == 0;
 
-    return $? == 0 ? 1 : 0;
+    $_pull_error{$image_ref} = $out // '';
+    return 0;
+}
+
+# Why the last pull of this reference failed, as far as we can tell.
+#
+# A registry rate limit is a distinguishable and actionable condition, and it is
+# worth telling apart from a typo'd image or a DNS failure -- the remedies are
+# nothing alike. It also became much easier to hit: since EA4-325 Increment B
+# every `upgrade` pulls, where none did before.
+sub _pull_failure_reason {
+    my ($image_ref) = @_;
+
+    my $out = $_pull_error{$image_ref} // '';
+    return "rate_limit" if $out =~ m/toomanyrequests|rate limit/i;
+
+    return "unknown";
 }
 
 # The local image ID a reference currently resolves to, or undef when podman has
@@ -1255,12 +1273,33 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             # webapp plugin's Redeploy is the force caller (CPANEL-56732), and a
             # Docker Hub outage or a rate limit must not break Redeploy, so warn
             # and carry on from the cached image.
-            die "Could not pull “$image_arg”, so there is no way to tell whether “$container_name” is out of date.\n"
+            my $rate_limited = _pull_failure_reason($image_arg) eq "rate_limit";
+
+            # Deliberately vague when we do not know. A bad image name, a DNS
+            # failure and an auth refusal all land here, and naming the wrong one
+            # is worse than naming none -- the point of this branch is to stop
+            # guessing at causes, not to guess differently.
+            my $why =
+              $rate_limited
+              ? "the registry is rate limiting this server"
+              : "the pull failed";
+
+            # Spelled out because the arithmetic is what an operator needs, and
+            # nothing else tells them: the budget is per IP for an
+            # unauthenticated server, and every upgrade spends from it.
+            my $rate_note =
+              $rate_limited
+              ? "Docker Hub meters manifest requests, and an unauthenticated server shares one budget per IP address. Since every upgrade now checks the image, a sweep costs one request per distinct image — `upgrade_containers --all` over ten containers on one image costs one, not ten.\n"
+              : "";
+
+            die "Could not pull “$image_arg”: $why, so there is no way to tell whether “$container_name” is out of date.\n"
               . "It has NOT been touched and is still running whatever it was running.\n"
-              . "Retry when the registry is reachable, or force the recreate from the image already cached locally:  ea-podman upgrade --force $container_name\n"
+              . $rate_note
+              . ( $rate_limited ? "Retry once that clears" : "Fix that and retry" )
+              . ", or force the recreate from the image already cached locally:  ea-podman upgrade --force $container_name\n"
               if !$force;
 
-            warn "Could not pull “$image_arg”; recreating “$container_name” from the image already cached locally.\n";
+            warn "Could not pull “$image_arg” ($why); recreating “$container_name” from the image already cached locally.\n";
         }
 
         # scalar(): get_pkg_from_container_name() does a bare `return` for a

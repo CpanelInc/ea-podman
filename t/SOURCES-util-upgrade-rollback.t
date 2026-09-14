@@ -80,6 +80,16 @@ sub _harness {
     *ea_podman::util::sysctl                            = sub { $log{started}++; 1 };
     *ea_podman::util::_get_container_image_ref          = sub { $opts{prev_image} };
 
+    # Increment B taught the upgrade path to PULL and then compare image IDs, and
+    # this harness predates it -- so from B until now every run of this "unit"
+    # test shelled out to Docker Hub for real. It passed only because the pull
+    # happened to succeed; on a rate-limited or offline host it dies before the
+    # first assertion. Mock the three seams B added. The IDs differ on purpose:
+    # these subtests are about what happens AFTER the gate says "recreate".
+    *ea_podman::util::_podman_pull                     = sub { 1 };
+    *ea_podman::util::_get_image_id                    = sub { "sha-new" };
+    *ea_podman::util::_get_container_image_id          = sub { "sha-old" };
+
     my @create_results = @{ $opts{creates} || [1] };
     *ea_podman::util::create_user_container = sub {
         my ( $n, @args ) = @_;

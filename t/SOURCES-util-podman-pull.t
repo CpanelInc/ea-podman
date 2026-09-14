@@ -69,4 +69,43 @@ subtest 'the cache is keyed by image reference' => sub {
     is_deeply( \@pulled, [ "good", "bad" ], "each was asked once" );
 };
 
+# A rate limit is a different problem from an unreachable registry, and the
+# remedies are nothing alike -- one is "wait or reduce the cadence", the other is
+# "fix the network or the image name". Since Increment B every upgrade pulls, so
+# this became much easier to hit and much more confusing to diagnose: the forced
+# paths keep working from cache while the conditional ones abort.
+subtest 'a rate limit is told apart from any other pull failure' => sub {
+    no warnings 'redefine';
+    local %ea_podman::util::_pulled     = ();
+    local %ea_podman::util::_pull_error = ();
+
+    # What podman actually prints, from a live box that hit the limit.
+    local *ea_podman::util::_podman_pull_once = sub {
+        $ea_podman::util::_pull_error{ $_[0] } =
+          'Error: unable to copy from source docker://httpd:2.4: initializing source docker://httpd:2.4: '
+          . 'reading manifest 2.4 in docker.io/library/httpd: toomanyrequests: You have reached your '
+          . 'unauthenticated pull rate limit. https://www.docker.com/increase-rate-limit';
+        return 0;
+    };
+
+    is( ea_podman::util::_podman_pull("img-rl"), 0, "the pull fails" );
+    is( ea_podman::util::_pull_failure_reason("img-rl"), "rate_limit", "and is recognised as a rate limit" );
+};
+
+subtest 'anything else is not guessed at' => sub {
+    no warnings 'redefine';
+    local %ea_podman::util::_pulled     = ();
+    local %ea_podman::util::_pull_error = ();
+    local *ea_podman::util::_podman_pull_once = sub {
+        $ea_podman::util::_pull_error{ $_[0] } = 'Error: reading manifest nope in docker.io/library/nope: requested access to the resource is denied';
+        return 0;
+    };
+
+    is( ea_podman::util::_podman_pull("img-404"), 0, "the pull fails" );
+    is( ea_podman::util::_pull_failure_reason("img-404"), "unknown", "and is not mislabelled a rate limit" );
+
+    # A reference never attempted has nothing to say about it.
+    is( ea_podman::util::_pull_failure_reason("img-never"), "unknown", "nor is one that was never tried" );
+};
+
 done_testing();
