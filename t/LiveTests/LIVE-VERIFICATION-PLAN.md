@@ -99,7 +99,15 @@ claims, three mutations. Do these **first**, while the box is clean.
 
 ### 1a. The force contract (CPANEL-56732)
 
-> **What this test does not reach.** It calls
+> **THIS TEST CURRENTLY SKIPS — do 1a by hand via Phase 3 instead.** Verified on
+> AlmaLinux 9.8: `install_app()` reaches ea-podman through its adminbin, which
+> checks its PARENT PROCESS against a whitelist (`cpanel`, `uapi`, `xml-api`,
+> `cpsrvd`, `queueprocd`, …). A standalone `.t` is not on it and cannot be, so
+> the plugin's Podman module cannot be driven from a test script at all. Getting
+> past it needs a full UAPI-driven deploy, which is separate work. Phase 3 is
+> the only thing covering this contract today.
+
+> **What this test does not reach, even once unblocked.** It calls
 > `Cpanel::WebApps::Podman::redeploy_app` directly. It does **not** go through
 > `Cpanel::API::WebApp::redeploy` → UserTasks → `Deploy.pm`, which is the path a
 > real Redeploy takes. So it pins the contract at the boundary but says nothing
@@ -165,12 +173,13 @@ EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl \
     t/LiveTests/ea4-325-upgrade-live.t | tee phase2-eapodman.log
 ```
 
-25 subtests, 30 top-level tests. Last recorded: **30/30 on AlmaLinux 9.8 /
-podman 5.8.2**, as of `b14022f`.
+25 subtests, 30 top-level tests. **30/30 on AlmaLinux 9.8 / podman 5.8.2**,
+re-confirmed against `592a361` with the working trees deployed.
 
-**Two pieces of this file have never executed anywhere** — the end-of-run
-rate-limit diagnostic and the A3 ghost-account cleanup in `END` (both added in
-`fb02827`, syntax-checked only). Watch them specifically.
+The two pieces that had never executed — the end-of-run rate-limit diagnostic
+and the A3 ghost-account cleanup in `END` (both from `fb02827`) — have now both
+run. The ghost cleanup was verified specifically: no `aa*` entry left in
+`/var/cpanel/users` afterwards.
 
 ### Verify clean before continuing
 
@@ -192,9 +201,18 @@ run.
 ### Then the plugin, cheapest first
 
 ```sh
-WEBAPP_LIVE=1 ... t/Cpanel-WebApps-Cleanup-live.t          # 12 subtests, no podman needed
-WEBAPP_LIVE=1 ... t/Cpanel-WebApps-Podman-redeploy-force-live.t   # needs podman + ea-podman
+WEBAPP_LIVE=1 ... t/Cpanel-WebApps-Cleanup-live.t   # 12 subtests
 ```
+
+**12/12 on AlmaLinux 9.8 / podman 5.8.2.**
+
+```sh
+WEBAPP_LIVE=1 ... t/Cpanel-WebApps-Podman-redeploy-force-live.t
+```
+
+**Expect this one to SKIP**, with the adminbin parent-check message. That is
+the current known state, not a regression — see 1a. It costs nothing to run and
+will start working the day there is an allowed-parent harness.
 
 Verify clean again afterwards.
 
