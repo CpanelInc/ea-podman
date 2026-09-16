@@ -1394,6 +1394,55 @@ sub deregister_container_as_root {
     );
 }
 
+# Used by pkg.preinst/pkg.prerm to squirrel the registry away, under the same
+# lock as every other mutation, before the package manager overwrites it with
+# the packaged `{}` default.
+sub snapshot_known_containers_as_root {
+    my ($dest) = @_;
+
+    _mutate_known_containers_as_root(
+        sub {
+            my ($containers_hr) = @_;
+            Cpanel::JSON::DumpFile( $dest, $containers_hr );
+            chmod 0600, $dest;
+            return 0;    # nothing to write back to the live registry
+        }
+    );
+
+    return;
+}
+
+# Merge a snapshot taken by snapshot_known_containers_as_root() back into the
+# live registry: any container already present now wins, so a registration
+# that landed in the live file after the snapshot was taken is preserved
+# rather than being overwritten by the older snapshot data. Only entries the
+# live registry is missing get restored from the snapshot.
+sub restore_known_containers_as_root {
+    my ($src) = @_;
+
+    # Only a missing snapshot is benign; a 0-byte one means an interrupted
+    # write, and it's our only copy, so fall through and let it die below.
+    return if !-e $src;
+
+    my $snapshot_hr = Cpanel::JSON::LoadFile($src);
+    die "“$src” does not contain a JSON object of containers\n" if ref($snapshot_hr) ne 'HASH';
+
+    return _mutate_known_containers_as_root(
+        sub {
+            my ($containers_hr) = @_;
+
+            my $restored = 0;
+            for my $container_name ( keys %{$snapshot_hr} ) {
+                next if exists $containers_hr->{$container_name};
+                $containers_hr->{$container_name} = $snapshot_hr->{$container_name};
+                $restored = 1;
+            }
+
+            return $restored;
+        }
+    );
+}
+
 sub remove_container_by_name {
     my ($container_name) = @_;
 
