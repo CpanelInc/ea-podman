@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 27
+%define release_prefix 28
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -165,6 +165,9 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
+* Mon Sep 14 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-28
+- CPANEL-55337: Add container name guards to register-upgrade
+
 * Tue Sep 03 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-27
 - EA4-319: Add compatibility for cagefs 7.6.39
 

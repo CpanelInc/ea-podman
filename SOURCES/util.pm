@@ -555,6 +555,13 @@ sub get_pkg_from_container_name {
     return $container_name;
 }
 
+sub container_name_belongs_to_user {
+    my ( $container_name, $user ) = @_;
+
+    return 0 if !defined $container_name || !defined $user;
+    return $container_name =~ m/\.\Q$user\E\.[0-9][0-9]$/ ? 1 : 0;
+}
+
 # What `podman generate systemd` leaves to systemd's defaults: 5 restarts 100ms
 # apart, so a container that crashes on start is failed forever half a second
 # in. 137 is left out of SuccessExitStatus — that is also an OOM kill.
@@ -1324,17 +1331,23 @@ sub register_container_as_root {
         sub {
             my ($containers_hr) = @_;
 
-            if ( exists $containers_hr->{$container_name} && !$isupgrade ) {
+            my $entry = $containers_hr->{$container_name};
+            if ( $entry && ( $entry->{user} // '' ) ne $user ) {
+                warn "$container_name does not belong to $user";
+                return 0;
+            }
+
+            if ( $entry && !$isupgrade ) {
                 warn "$container_name is already registered";
                 return 0;
             }
-            elsif ( !exists $containers_hr->{$container_name} && $isupgrade ) {
+            elsif ( !$entry && $isupgrade ) {
                 warn "$container_name is not registered, registering now …\n";
             }
 
             # `webapp` is established at install time only (--webapp-dir given); an
             # upgrade/restore keeps the value already recorded in this root-owned file.
-            my $webapp_value = $isupgrade && exists $containers_hr->{$container_name} ? $containers_hr->{$container_name}{webapp} : $webapp;
+            my $webapp_value = $isupgrade && $entry ? $entry->{webapp} : $webapp;
 
             $containers_hr->{$container_name} = {
                 container_name => $container_name,
