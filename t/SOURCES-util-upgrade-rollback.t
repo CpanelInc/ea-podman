@@ -88,7 +88,7 @@ sub _harness {
     # these subtests are about what happens AFTER the gate says "recreate".
     *ea_podman::util::_podman_pull                     = sub { 1 };
     *ea_podman::util::_get_image_id                    = sub { "sha-new" };
-    *ea_podman::util::_get_container_image_id          = sub { "sha-old" };
+    *ea_podman::util::_get_container_image_id          = sub { exists $opts{prev_image_id} ? $opts{prev_image_id} : "sha-old" };
 
     my @create_results = @{ $opts{creates} || [1] };
     *ea_podman::util::create_user_container = sub {
@@ -150,22 +150,56 @@ subtest 'the rollback recreates with the image the container was actually runnin
     my ( $tmp, $name, $dir ) = _world();
 
     # The upgrade's create fails; the rollback's create succeeds.
-    my $log = _harness( creates => [ 0, 1 ], prev_image => "docker.io/library/httpd:2.3" );
+    my $log = _harness( creates => [ 0, 1 ], prev_image => "docker.io/library/httpd:2.3", prev_image_id => "sha-old" );
 
     my $err = do { local $@; eval { ea_podman::util::_ensure_latest_container( $name, { op => "upgrade" } ) }; $@ };
 
     is( scalar @{ $log->{created} }, 2, "it tried again exactly once" );
     is( $log->{created}[0][-1], "docker.io/library/httpd:2.4", "the upgrade used the new image" );
-    is( $log->{created}[1][-1], "docker.io/library/httpd:2.3", "the rollback pinned back to the previous one" );
+    is( $log->{created}[1][-1], "sha-old", "the rollback pinned back to the previous IMAGE, by ID" );
     is_deeply( $log->{removed}, [$name], "the half-made container was cleared out of the way first" );
 
     like( $err, qr/is running again/,        "it says service is restored" );
     like( $err, qr/the upgrade did not happen/, "but is explicit that the upgrade did not happen" );
+    like( $err, qr/docker\.io\/library\/httpd:2\.3/, "and names the reference, which is what a reader recognises" );
+};
+
+# The case that made the ID necessary, and the one no test could see while the
+# rollback pinned the reference: the container tracks a tag, the pull moved that
+# tag, so the reference the container was created from and the reference the
+# upgrade is creating from are the SAME STRING. Pinning it recreates the
+# container on the image that just arrived while claiming the opposite.
+subtest 'a rollback of a tag-tracking container does not land on the image just pulled' => sub {
+    my ( $tmp, $name, $dir ) = _world();
+
+    # prev_image is identical to the configured image, as a moved tag makes it.
+    my $log = _harness( creates => [ 0, 1 ], prev_image => "docker.io/library/httpd:2.4", prev_image_id => "sha-old" );
+
+    my $err = do { local $@; eval { ea_podman::util::_ensure_latest_container( $name, { op => "upgrade" } ) }; $@ };
+
+    is( $log->{created}[0][-1], "docker.io/library/httpd:2.4", "the upgrade created from the tag" );
+    isnt( $log->{created}[1][-1], "docker.io/library/httpd:2.4", "the rollback did NOT create from that same tag" );
+    is( $log->{created}[1][-1], "sha-old", "it pinned the image the container had been running" );
+    like( $err, qr/the exact image it had been running/, "and the message can say so without qualification" );
+};
+
+# No ID but a reference we can still use. Better than nothing -- an operator may
+# have edited the persisted image -- but the wording must not promise it is the
+# same image, because a moved tag means it is not.
+subtest 'a reference with no ID is pinned, but claimed only as a reference' => sub {
+    my ( $tmp, $name, $dir ) = _world();
+    my $log = _harness( creates => [ 0, 1 ], prev_image => "docker.io/library/httpd:2.3", prev_image_id => undef );
+
+    my $err = do { local $@; eval { ea_podman::util::_ensure_latest_container( $name, { op => "upgrade" } ) }; $@ };
+
+    is( $log->{created}[1][-1], "docker.io/library/httpd:2.3", "the reference is used when there is no ID" );
+    like( $err,   qr/could not report the image ID/,      "and the message says the ID was unavailable" );
+    unlike( $err, qr/the exact image it had been running/, "so it never claims to be the same image" );
 };
 
 subtest 'an unknown previous image recreates with the args as given, and says so' => sub {
     my ( $tmp, $name, $dir ) = _world();
-    my $log = _harness( creates => [ 0, 1 ], prev_image => undef );
+    my $log = _harness( creates => [ 0, 1 ], prev_image => undef, prev_image_id => undef );
 
     my $err = do { local $@; eval { ea_podman::util::_ensure_latest_container( $name, { op => "upgrade" } ) }; $@ };
 
@@ -179,7 +213,7 @@ subtest 'the message never claims more recovery than happened' => sub {
     my $status_enabled = { created => 1, enabled => 1, started => 0 };
     my $status_all     = { created => 1, enabled => 1, started => 1 };
 
-    my @args = ( "myapp.bob.01", "/home/bob/ea-podman.d/myapp.bob.01", "docker.io/library/httpd:2.3" );
+    my @args = ( "myapp.bob.01", "/home/bob/ea-podman.d/myapp.bob.01", "docker.io/library/httpd:2.3", "sha256:0123456789abcdef" );
 
     like( ea_podman::util::_failed_upgrade_message( @args, $status_none ),    qr/could not be recreated/,       "nothing recovered" );
     like( ea_podman::util::_failed_upgrade_message( @args, $status_created ), qr/could not be enabled/,         "created but not enabled" );
@@ -195,7 +229,7 @@ subtest 'the message never claims more recovery than happened' => sub {
 
 subtest 'a fully recovered rollback still warns the container dir was not rolled back' => sub {
     my $msg = ea_podman::util::_failed_upgrade_message(
-        "myapp.bob.01", "/home/bob/ea-podman.d/myapp.bob.01", "docker.io/library/httpd:2.3",
+        "myapp.bob.01", "/home/bob/ea-podman.d/myapp.bob.01", "docker.io/library/httpd:2.3", "sha256:0123456789abcdef",
         { created => 1, enabled => 1, started => 1 },
     );
 

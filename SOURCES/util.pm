@@ -1331,7 +1331,12 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     # below pins back. Nothing else needs capturing: the upgrade path never
     # touches the ports (_get_current_ports is read-only) or $container_dir, and
     # the registry entry is left true by deferring the write below. (EA4-325)
+    #
+    # BOTH the ID and the reference, and they are not interchangeable. The ID is
+    # what the rollback pins; the reference is only ever displayed. See
+    # _rollback_failed_upgrade() for why pinning the reference is wrong.
     my $prev_image_ref = $isupgrade ? _get_container_image_ref($container_name) : undef;
+    my $prev_image_id  = $isupgrade ? _get_container_image_id($container_name)  : undef;
 
     uninstall_container($container_name) if $isupgrade || $isrestore;    # avoid spurious warnings on install
 
@@ -1369,8 +1374,8 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
         # deregistering and deleting the directory perform_user_restore() had just
         # extracted from the user's backup, their only copy of it. (EA4-325)
         if ($isupgrade) {
-            my $rollback = _rollback_failed_upgrade( $container_name, $prev_image_ref, \@start_args );
-            die _failed_upgrade_message( $container_name, $container_dir, $prev_image_ref, $rollback );
+            my $rollback = _rollback_failed_upgrade( $container_name, $prev_image_ref, $prev_image_id, \@start_args );
+            die _failed_upgrade_message( $container_name, $container_dir, $prev_image_ref, $prev_image_id, $rollback );
         }
         elsif ($isrestore) {
 
@@ -1439,8 +1444,23 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
 # deferred until after a successful create, so on this path the entry still
 # describes the container being recreated and is correct untouched.
 #
-# The recreate pins the image back to $prev_image_ref, the fully-qualified
-# reference the container was actually running. That is the whole of what this can
+# The recreate pins the image back to $prev_image_id — the image ID, NOT the
+# reference. The reference is the wrong thing to pin, and pinning it was the
+# original bug here: _podman_pull() has already run by the time the previous image
+# is captured, so for a container tracking a tag — the normal case — that
+# reference now resolves to the image the pull just fetched. The rollback would
+# recreate the container on the NEW image while the message below told the
+# operator it had been put back on the old one, and no test could see it because
+# both sides print the same tag string. An ID names one image for as long as it
+# exists, and a pull does not remove the image it displaces; it only moves the tag
+# off it.
+#
+# $prev_image_ref is the fallback for when podman cannot report an ID — still
+# better than not pinning at all, since an operator may have edited the persisted
+# image — and it is what the message displays either way, because an ID means
+# nothing to a reader.
+#
+# That is the whole of what this can
 # fix. Every other start arg is rebuilt from the same $container_dir/ea-podman.json
 # (and, for a package, /opt/cpanel/$pkg/ea-podman.json) that a retry would read,
 # so a failure which is not the image pin recurs here. It also cannot undo
@@ -1449,12 +1469,13 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
 # Reports what it achieved rather than deciding what to say about it, and never
 # dies — a rollback that dies is a rollback that reports nothing.
 sub _rollback_failed_upgrade {
-    my ( $container_name, $prev_image_ref, $start_args_ar ) = @_;
+    my ( $container_name, $prev_image_ref, $prev_image_id, $start_args_ar ) = @_;
 
     my %status = ( created => 0, enabled => 0, started => 0 );
 
     my @args = @{$start_args_ar};
-    $args[-1] = $prev_image_ref if defined $prev_image_ref;
+    my $pin  = $prev_image_id // $prev_image_ref;
+    $args[-1] = $pin if defined $pin;
 
     # The failed create can leave the name taken; `rm --ignore` is a no-op when it
     # did not.
@@ -1476,15 +1497,31 @@ sub _rollback_failed_upgrade {
     return \%status;
 }
 
+# What the rollback actually pinned, said in a way an operator can act on.
+#
+# The ID is the honest claim and the reference is the readable one, so when both
+# are known both are printed. When only the reference is known the wording has to
+# stop short of "the image it had been running": if the tag has moved since, it is
+# not. (EA4-325)
+sub _pinned_image_description {
+    my ( $prev_image_ref, $prev_image_id ) = @_;
+
+    # Enough to identify it in `podman images` without wrapping the line.
+    my $short = defined $prev_image_id ? substr( $prev_image_id, 0, 12 ) : undef;
+
+    return "“$prev_image_ref” (image $short — the exact image it had been running)" if defined $short && defined $prev_image_ref;
+    return "image $short (the exact image it had been running)"                                if defined $short;
+    return "“$prev_image_ref” (the image reference it was created from — podman could not report the image ID, so if that tag has moved since, this is not the same image)" if defined $prev_image_ref;
+
+    return "the image its configuration names — podman could not report what the container had been running, so there was nothing to pin back";
+}
+
 # Kept argument-pure (names and what the rollback achieved in, string out) so it
 # is unit-testable. House style: name the condition, then name the recovery.
 sub _failed_upgrade_message {
-    my ( $container_name, $container_dir, $prev_image_ref, $status ) = @_;
+    my ( $container_name, $container_dir, $prev_image_ref, $prev_image_id, $status ) = @_;
 
-    my $pinned =
-      defined $prev_image_ref
-      ? "“$prev_image_ref” (the image it had been running)"
-      : "the image its configuration names — podman could not report what the container had been running, so there was nothing to pin back";
+    my $pinned = _pinned_image_description( $prev_image_ref, $prev_image_id );
 
     my $intact =
         "Nothing was deregistered and nothing was deleted: “$container_name” is still registered at the version it was on, its assigned ports are still held, and “$container_dir” is untouched.\n"

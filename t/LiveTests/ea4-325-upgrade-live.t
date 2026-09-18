@@ -260,6 +260,17 @@ sub running_image {
     return $rc == 0 ? $out : '';
 }
 
+# The IMAGE ID, not the name. `{{.ImageName}}` is a tag, and a tag proves nothing
+# about which image a container is on once a pull has moved it -- the rollback
+# pins the ID precisely because the two can diverge, so an assertion about the
+# rollback has to read the ID or it is asserting a string against itself.
+sub running_image_id {
+    my ( $user, $container ) = @_;
+    my ( $rc, $out ) = run_as_user( $user, "podman inspect --format '{{.Image}}' " . _sh($container) );
+    chomp $out;
+    return $rc == 0 ? $out : '';
+}
+
 sub is_running {
     my ( $user, $container ) = @_;
     my ( $rc, $out ) = run_as_user( $user, "podman ps --format '{{.Names}}'" );
@@ -582,9 +593,10 @@ subtest 'UAPI stop stays permissive, so teardown paths keep working' => sub {
 # A2 — a failed create recreates rather than destroys
 #---------------------------------------------------------------------
 subtest 'A2: a failed upgrade recreates the previous container' => sub {
-    my $was_running_image = running_image( $USER, $container );
-    my $registry_before   = slurp($REGISTRY);
-    my $ports_before      = ports_held( $USER, $container );
+    my $was_running_image    = running_image( $USER, $container );
+    my $was_running_image_id = running_image_id( $USER, $container );
+    my $registry_before      = slurp($REGISTRY);
+    my $ports_before         = ports_held( $USER, $container );
 
     patch_start_args(
         $USER, $container,
@@ -604,6 +616,12 @@ subtest 'A2: a failed upgrade recreates the previous container' => sub {
     isnt( $rc, 0, "the upgrade reports failure" );
     ok( is_running( $USER, $container ), "the container is running again" );
     is( running_image( $USER, $container ), $was_running_image, "on the image it was running before" );
+
+    # The assertion above compares TAGS, and a tag survives the bug this guards
+    # against: the rollback used to pin the reference, which after the pull
+    # resolves to whatever just arrived. Only the ID can tell the two apart.
+    is( running_image_id( $USER, $container ), $was_running_image_id, "and on the same image ID, not merely the same tag" );
+    isnt( $was_running_image_id, '', "the image ID was readable, so the check above means something" );
     is( unit_prop( $USER, $container, 'ActiveState' ), 'active', "with its unit active" );
 
     ok( -d $CDIR, "the container directory is untouched" );
