@@ -712,7 +712,7 @@ sub _ensure_latest_container {
         die "“$container_dir” does not exist\n" if !-d $container_dir;
     }
 
-    my ( $webapp_source_dir, $no_start );
+    my ( $webapp_source_dir, $no_start, $webapp );
 
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
         my $pkg_dir = "/opt/cpanel/$pkg";
@@ -892,11 +892,27 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
 
         my $docker_name = pop @real_start_args;    # so we can put ports before the image
 
-        # then add the ports if any
+        # A restore has no registry entry to carry `webapp` over from the way
+        # an upgrade does (perform_user_restore() deleted them all, and a
+        # restore to another server never had one), so it comes from the
+        # backup file instead. An upgrade, unlike restore, does have a
+        # registry entry to read, so it looks the stored value up directly
+        # instead of being told it (register_container_as_root() preserves
+        # that value across upgrades regardless of what's passed to it).
+        $webapp =
+              defined $webapp_source_dir ? 1
+            : $isrestore                 ? ( $opts->{webapp} ? 1 : 0 )
+            : $isupgrade                 ? _is_registered_webapp($container_name)
+            :                               0;
+
+        # then add the ports if any, binding web app ports to loopback only
+        # so the reverse proxy (which always talks to 127.0.0.1) remains the
+        # only path into the app; see docs/webapp-port-binding.md
         my @ports = $portsfunc->( $container_name => scalar(@cpuser_ports) );
         for my $idx ( 0 .. $#ports ) {
             my $container_port = $cpuser_ports[$idx] || $ports[$idx];
-            push @real_start_args, "-p", "$ports[$idx]:$container_port";
+            my $host_port      = $webapp ? "127.0.0.1:$ports[$idx]" : $ports[$idx];
+            push @real_start_args, "-p", "$host_port:$container_port";
         }
 
         @start_args = @real_start_args;
@@ -905,11 +921,6 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
 
     my $image_arg = $start_args[-1];                # so we can persist image name
     my ($image_name) = $image_arg =~ m|([^/]+)$|;
-
-    # A restore has no registry entry to carry `webapp` over from the way an
-    # upgrade does (perform_user_restore() deleted them all, and a restore to
-    # another server never had one), so it comes from the backup file instead.
-    my $webapp = defined $webapp_source_dir ? 1 : $isrestore ? ( $opts->{webapp} ? 1 : 0 ) : 0;
 
     uninstall_container($container_name) if $isupgrade || $isrestore;    # avoid spurious warnings on install
     register_container( $container_name, $isupgrade || $isrestore, $image_name, $webapp );    # register before create just in case
@@ -1018,6 +1029,13 @@ sub _file_write_chmod {
     $path->spew($cont);
     $path->chmod($mode);             # spew() first to ensure it exists
     return 1;
+}
+
+sub _is_registered_webapp {
+    my ($container_name) = @_;
+
+    my $registered = load_known_containers();
+    return $registered->{$container_name} && $registered->{$container_name}{webapp} ? 1 : 0;
 }
 
 sub get_pkg_versions {
