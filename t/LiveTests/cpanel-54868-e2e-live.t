@@ -412,10 +412,20 @@ sub _spew {
     return;
 }
 
-# What the app answers on its published port, from the host side.
+# The published host port, re-read every time: a recreate can be given a
+# different one, so caching it would make a later assertion fail for a port
+# reason while reading like a configuration reason.
+sub host_port {
+    my ($container) = @_;
+    return inspect_field( $USER, $container, '{{range $p, $conf := .NetworkSettings.Ports}}{{(index $conf 0).HostPort}}{{end}}' );
+}
+
+# What the app answers on that port, from the host side. Returns the empty
+# string when there is no port OR the request failed -- callers assert the port
+# separately so the two cannot be confused.
 sub app_says {
     my ($container) = @_;
-    my $port = inspect_field( $USER, $container, '{{range $p, $conf := .NetworkSettings.Ports}}{{(index $conf 0).HostPort}}{{end}}' );
+    my $port = host_port($container);
     return '' if !length $port;
     my ( $rc, $out ) = run_cmd( 'curl', '-s', '--max-time', '10', "http://127.0.0.1:$port/" );
     return $rc == 0 ? ( $out // '' ) : '';
@@ -507,9 +517,15 @@ subtest 'B: a configuration change that does not move the image reaches the cont
     # ea-podman 1.0-28 the redeploy reports SUCCESS and changes nothing, so the
     # id assertion is the one that catches it -- the status never would.
     isnt( $after_id, $before_id, 'the container was actually recreated' );
-    like( app_says($CONTAINER), qr/E2E_MARKER=two/, 'and the new configuration is what is now running' );
 
     ok( container_running( $USER, $CONTAINER ), 'the container is up afterwards' );
+
+    # Asserted on its own. A recreate may publish a DIFFERENT host port, and
+    # without this an empty port would fail the marker assertion below and read
+    # as "the configuration did not take" -- the opposite of the truth.
+    ok( length( host_port($CONTAINER) ), 'it has a published host port' );
+
+    like( app_says($CONTAINER), qr/E2E_MARKER=two/, 'and the new configuration is what is now running' );
 
     return;
 };
@@ -661,14 +677,15 @@ subtest 'E: webapp_cleanup.pl reclaims leftovers and leaves the live application
     ok( !-d $ghost,    'the orphan is gone' );
     ok( !-e $old_log,  'and so is the superseded deploy log' );
 
-    # The live application's own staging directory is protected by the registry,
-    # not by age -- at --days=0 age protects nothing at all.
+    # The live application's own staging directory is protected by the REGISTRY,
+    # not by age -- at --days=0 age protects nothing at all, so this is the only
+    # thing standing between the sweep and a deployed application. A deploy
+    # MOVES the staged source into the container directory, so what survives
+    # here is the empty parent; that it is empty is not a reason to skip the
+    # assertion, which is why this is not conditional.
     my $live_staging = "$HOME/.cpanel/webapp-staging/$SLUG";
-    if ( -d $live_staging ) {
-        like( $run_out, qr/\Q$SLUG\E/, 'the registered application is reported rather than swept' )
-          if $run_out =~ m/\Q$SLUG\E/;
-        ok( -d $live_staging, 'the registered application keeps its staging directory' );
-    }
+    ok( -d $live_staging, 'the registered application still has its staging directory after a --days=0 --run sweep' )
+      or note_both("no staging directory at $live_staging -- if a deploy stopped leaving one, this assertion needs rewriting, not deleting");
 
     ok( container_running( $USER, $CONTAINER ), 'and the running application is untouched by any of it' );
 
