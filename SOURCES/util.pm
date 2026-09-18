@@ -892,13 +892,8 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
 
         my $docker_name = pop @real_start_args;    # so we can put ports before the image
 
-        # A restore has no registry entry to carry `webapp` over from the way
-        # an upgrade does (perform_user_restore() deleted them all, and a
-        # restore to another server never had one), so it comes from the
-        # backup file instead. An upgrade, unlike restore, does have a
-        # registry entry to read, so it looks the stored value up directly
-        # instead of being told it (register_container_as_root() preserves
-        # that value across upgrades regardless of what's passed to it).
+        # Restore has no registry entry to carry `webapp` over (it comes from
+        # the backup file instead), but upgrade does, so it's read directly.
         $webapp =
               defined $webapp_source_dir ? 1
             : $isrestore                 ? ( $opts->{webapp} ? 1 : 0 )
