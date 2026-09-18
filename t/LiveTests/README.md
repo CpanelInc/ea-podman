@@ -44,7 +44,7 @@ as well as v2 (AlmaLinux 9/10 and Ubuntu 24.04, which default to v2).
 | `ea-memcached16-cli-live.t` | A **normal** account uses the `ea-podman` CLI directly (`install <PKG>` mode) to install a real EA4 container-based package, `ea-memcached16`. | A live cPanel VM (cgroup v1 or v2), with `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
 | `ea-memcached16-cagefs-cli-live.t` | Sister to the above, but the account is **CageFS**-enabled: the CLI is driven through a real CageFS login, exercising the CPANEL-54672 fallback to the UAPI bridge. | CloudLinux (cgroup v1 or v2), with CageFS installed + initialized, and `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
 | `ea4-325-upgrade-live.t` | `ea-podman upgrade` reports a container that did not come back up, recreates the previous one when a create fails, and no longer lets a failed `restore` delete the directory it just extracted. Also covers `upgrade_containers --all` surviving a deleted account, and the EAPodman UAPI's `start`/`stop`. | A live cPanel VM (cgroup v1 or v2), with an ea-podman build carrying EA4-325 **recompiled** (see below). `ea-memcached16` optional — the packaged-container subtest skips without it. |
-
+| `cpanel-54868-e2e-live.t` | **The two halves against each other.** Drives `uapi WebApp stage/deploy/redeploy` as a real account against the installed plugin AND ea-podman: a configuration change that does not move the image reaches the container (CPANEL-56732), while a plain `ea-podman upgrade` on that same container does nothing at all (EA4-325 B2). Then `webapp_cleanup.pl` (CPANEL-56733) and `ea-podman clean` (CPANEL-54870) over what a real delete leaves. | A live cPanel VM on **cgroup v2**, with `zip`, the webapp plugin >= 1.5.0 installed and its feature flag present, and an ea-podman carrying EA4-325 **recompiled**. Needs to pull a `node` image once. |
 ### EA4-319 in the two cagefs `.t` files
 
 Both cagefs tests carry the `user@.service` mask checks: the mask is recorded
@@ -289,6 +289,12 @@ EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl cagefs-podman-live.t
 EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea-memcached16-cli-live.t
 # EA4-325: upgrade/restore truthfulness and the failed-create recreate.
 EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea4-325-upgrade-live.t
+# CPANEL-54868: the plugin and ea-podman against each other, through the product.
+# Run the preflight with --deploy first; it is what puts BOTH halves under test.
+EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl cpanel-54868-e2e-live.t
+# ... and the same file building the ordering HAZARD deliberately (edits the
+# deployed Podman.pm and restores it):
+EAPODMAN_LIVE=1 CP54868_PROVE_HAZARD=1 /usr/local/cpanel/3rdparty/bin/perl cpanel-54868-e2e-live.t
 # same, but for a CageFS-enabled account (CloudLinux only):
 EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea-memcached16-cagefs-cli-live.t
 ```
@@ -307,6 +313,17 @@ Useful environment variables (see each test's header for the full list):
   install (default: `ea-memcached16`); must already be installed locally.
 - `EAPODMAN_KEEP=1` — skip teardown and leave the account/container for manual
   inspection.
+- `CP54868_*` (the CPANEL-54868 test) — `CP54868_TEST_USER`, `CP54868_NODE_TAG`
+  (default `22`), `CP54868_KEEP=1`, `CP54868_DEPLOY_TIMEOUT` (default 600), and
+  `CP54868_PROVE_HAZARD=1`. It uses its own prefix rather than `EAPODMAN_*`
+  because it is as much a plugin test as an ea-podman one.
+
+### These two are mutually destructive
+
+`ea4-325-upgrade-live.t` runs `remove_containers --all` **as root**, which
+reaches every account on the box, and `cpanel-54868-e2e-live.t` has a live
+application it expects to still be there. Never interleave them. Run one, then
+`setup-remote-live.pl --check-clean`, then the other.
 
 ## CloudLinux setup for the cagefs test
 

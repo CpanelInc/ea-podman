@@ -220,9 +220,16 @@ Verify clean again afterwards.
 
 ## Phase 3 — the combination the ordering dependency exists for
 
-**No automated test covers this, and it is the scenario that would reach
-customers.** EA4-325 Increment B makes safe mode the default, which is why
-CPANEL-56732 must ship *before* ea-podman 1.0-28.
+**`cpanel-54868-e2e-live.t` now covers this.** It was written for exactly this
+phase: its stages B and C are the positive half (the fixed pair), and
+`CP54868_PROVE_HAZARD=1` builds the dangerous combination below automatically,
+by removing `force` from the deployed `Podman.pm` and putting it back. Run that
+first; what follows is the manual procedure it automates, kept because seeing
+the no-op with your own eyes is still the thing that justifies the release
+order.
+
+EA4-325 Increment B makes safe mode the default, which is why CPANEL-56732 must
+ship *before* ea-podman 1.0-28.
 
 Build that dangerous combination deliberately:
 

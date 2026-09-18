@@ -556,10 +556,35 @@ if ( -d $pl_t ) {
     WEBAPP_LIVE=1 $PERL $pl_t/Cpanel-WebApps-Cleanup-live.t
     WEBAPP_LIVE=1 $PERL $pl_t/Cpanel-WebApps-Podman-redeploy-force-live.t
 
+  NOTE: the second one SKIPS. install_app() reaches ea-podman through an
+  adminbin that checks its parent process against a whitelist, and a standalone
+  .t is not on it. The end-to-end file below is what covers that contract.
+
 END
 }
 else {
     note("no plugin tests at $pl_t");
+}
+
+my $e2e_t = $opt{'ea-podman'} . '/t/LiveTests/cpanel-54868-e2e-live.t';
+if ( -e $e2e_t ) {
+    print <<"END";
+  BOTH HALVES, through the product (CPANEL-54868). This is the only test that
+  can prove the ordering contract, because it needs the plugin and ea-podman
+  installed and talking to each other. Run it AFTER the ea-podman one above,
+  with --check-clean in between -- they are mutually destructive:
+
+    EAPODMAN_LIVE=1 $PERL $e2e_t
+
+  ... and to build the ordering HAZARD deliberately (edits the deployed
+  Podman.pm and restores it):
+
+    EAPODMAN_LIVE=1 CP54868_PROVE_HAZARD=1 $PERL $e2e_t
+
+END
+}
+else {
+    note("no end-to-end test at $e2e_t");
 }
 
 #---------------------------------------------------------------------
