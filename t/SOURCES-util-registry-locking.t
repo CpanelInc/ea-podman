@@ -155,6 +155,30 @@ subtest 'deregister_container_as_root enforces the optional owner check' => sub 
     ok( !exists ea_podman::util::load_known_containers_as_root()->{"mine.alice.01"}, "the real owner can still deregister it" );
 };
 
+subtest 'register_container_as_root will not rewrite another account’s entry' => sub {
+    my $tmp = File::Temp->newdir();
+    local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";
+
+    ea_podman::util::register_container_as_root( "mine.alice.01", "alice", 0, "node:22", 0 );
+
+    for my $isupgrade ( 0, 1 ) {
+        my @warnings;
+        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+        ea_podman::util::register_container_as_root( "mine.alice.01", "mallory", $isupgrade, "evil:1", 1 );
+        is( scalar @warnings, 1, "a mismatched owner warns instead of dying (isupgrade=$isupgrade)" );
+    }
+
+    my $entry = ea_podman::util::load_known_containers_as_root()->{"mine.alice.01"};
+    is( $entry->{user},  "alice",   "the entry still belongs to its owner" );
+    is( $entry->{image}, "node:22", "and none of the rest of it was rewritten either" );
+
+    ea_podman::util::register_container_as_root( "mine.alice.01", "alice", 1, "node:23", 0 );
+    is( ea_podman::util::load_known_containers_as_root()->{"mine.alice.01"}{image}, "node:23", "the real owner can still re-register it" );
+
+    ea_podman::util::deregister_container_as_root( "mine.alice.01", "alice" );
+    ok( !exists ea_podman::util::load_known_containers_as_root()->{"mine.alice.01"}, "and can still remove it" );
+};
+
 subtest 'the registry stays root-only' => sub {
     my $tmp = File::Temp->newdir();
     local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";

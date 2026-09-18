@@ -229,7 +229,7 @@ the no-op with your own eyes is still the thing that justifies the release
 order.
 
 EA4-325 Increment B makes safe mode the default, which is why CPANEL-56732 must
-ship *before* ea-podman 1.0-28.
+ship *before* ea-podman 1.0-29.
 
 Build that dangerous combination deliberately:
 
