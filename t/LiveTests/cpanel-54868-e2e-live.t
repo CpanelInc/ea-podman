@@ -55,22 +55,45 @@
 #
 # RUN IT
 #
+# Copy the one file over and run it. Nothing else is needed:
+#
+#     scp t/LiveTests/cpanel-54868-e2e-live.t root@VM:/root/
+#     ssh root@VM 'EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/prove -v /root/cpanel-54868-e2e-live.t'
+#
+# `prove -v` rather than plain perl because this runs for a while -- an image
+# pull, an npm install and three deploys -- and without -v you get no output at
+# all until it finishes.
+#
+# WHAT THE BOX NEEDS FIRST
+#
+#   * a disposable, LICENSED cPanel VM (whmapi1 createacct is the first thing an
+#     expired licence stops) on CGROUP V2 -- AlmaLinux 9 or Ubuntu 24.04, not EL8
+#   * ea-podman >= 1.0-28 and cpanel-webapp-plugin >= 1.5.0-1 INSTALLED
+#   * `zip`, and enough network to pull a node image once
+#
+# The RPM/DEB brings the feature flag and the sweep script with it, so a normal
+# package install needs no extra step. Every guard below names what is missing
+# rather than skipping silently, so a wrong box tells you which way it is wrong.
+#
+# TESTING A WORKING TREE INSTEAD OF THE PACKAGES
+#
+# Then setup-remote-live.pl is required, and it is the only way to get this
+# right:
+#
 #     scp t/LiveTests/setup-remote-live.pl root@VM:/root/
 #     ssh root@VM '/usr/local/cpanel/3rdparty/bin/perl /root/setup-remote-live.pl \
 #         --ea-podman=/root/ea-podman --plugin=/root/plugins --deploy'
 #
-#     scp t/LiveTests/cpanel-54868-e2e-live.t root@VM:/root/
-#     ssh root@VM 'EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl /root/cpanel-54868-e2e-live.t'
-#
-# The preflight is not optional here. It is what puts the code under test on the
-# box and, more to the point, what tells you WHICH copy is under test: the
-# ea-podman CLI is a compiled binary that embeds util.pm, and the plugin's
-# modules are symlinks into a repo on a dev box but real files from the package
-# on a VM. Both failure modes are silent and both make this file pass while
-# testing something else.
+# The ea-podman CLI is a COMPILED BINARY that embeds util.pm, so copying the
+# library alone changes nothing the CLI runs; and the plugin's modules are
+# symlinks into a repo on a dev box but real files from the package on a VM.
+# Both failure modes are silent and both make this file pass while testing code
+# you are not looking at. The preflight handles both and states which copy is
+# under test. Against installed packages it is merely a useful confirmation --
+# the version guards below ask the binary and the installed module directly.
 #
 # Self-contained otherwise: core Perl plus what cPanel ships, no repo checkout,
-# no CPAN. Single file on purpose -- it gets scp'd to a bare host.
+# no CPAN, no lib flags. Single file on purpose -- it gets scp'd to a bare host.
 #
 # MUST NOT INTERLEAVE WITH ea4-325-upgrade-live.t. That file runs
 # `remove_containers --all` AS ROOT, which reaches every account on the box.
