@@ -26,7 +26,23 @@ else
 
         mkdir -p /root/.ea-podman-tmp
         chmod 0700 /root/.ea-podman-tmp
-        cp -f /opt/cpanel/ea-podman/registered-containers.json /root/.ea-podman-tmp
+
+        # Snapshot under the same lock every mutation uses. Exit 2 means the
+        # still-installed (pre-unpack) util.pm predates that helper — fall
+        # back to the old plain cp. Any other failure means the locked
+        # snapshot itself failed (e.g. contention with a live writer), which
+        # a blind cp fallback would risk copying mid-write — fail instead.
+        /usr/local/cpanel/3rdparty/bin/perl -e '
+            require "/opt/cpanel/ea-podman/lib/ea_podman/util.pm";
+            exit 2 if !defined &ea_podman::util::snapshot_known_containers_as_root;
+            ea_podman::util::snapshot_known_containers_as_root("/root/.ea-podman-tmp/registered-containers.json");
+        '
+        rc=$?
+        if [ "$rc" = "2" ]; then
+            cp -f /opt/cpanel/ea-podman/registered-containers.json /root/.ea-podman-tmp
+        elif [ "$rc" != "0" ]; then
+            exit 1
+        fi
     fi
 fi
 

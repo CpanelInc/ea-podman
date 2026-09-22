@@ -712,7 +712,7 @@ sub _ensure_latest_container {
         die "“$container_dir” does not exist\n" if !-d $container_dir;
     }
 
-    my ( $webapp_source_dir, $no_start );
+    my ( $webapp_source_dir, $no_start, $webapp );
 
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
         my $pkg_dir = "/opt/cpanel/$pkg";
@@ -892,11 +892,22 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
 
         my $docker_name = pop @real_start_args;    # so we can put ports before the image
 
-        # then add the ports if any
+        # Restore has no registry entry to carry `webapp` over (it comes from
+        # the backup file instead), but upgrade does, so it's read directly.
+        $webapp =
+              defined $webapp_source_dir ? 1
+            : $isrestore                 ? ( $opts->{webapp} ? 1 : 0 )
+            : $isupgrade                 ? _is_registered_webapp($container_name)
+            :                               0;
+
+        # then add the ports if any, binding web app ports to loopback only
+        # so the reverse proxy (which always talks to 127.0.0.1) remains the
+        # only path into the app; see docs/webapp-port-binding.md
         my @ports = $portsfunc->( $container_name => scalar(@cpuser_ports) );
         for my $idx ( 0 .. $#ports ) {
             my $container_port = $cpuser_ports[$idx] || $ports[$idx];
-            push @real_start_args, "-p", "$ports[$idx]:$container_port";
+            my $host_port      = $webapp ? "127.0.0.1:$ports[$idx]" : $ports[$idx];
+            push @real_start_args, "-p", "$host_port:$container_port";
         }
 
         @start_args = @real_start_args;
@@ -905,11 +916,6 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
 
     my $image_arg = $start_args[-1];                # so we can persist image name
     my ($image_name) = $image_arg =~ m|([^/]+)$|;
-
-    # A restore has no registry entry to carry `webapp` over from the way an
-    # upgrade does (perform_user_restore() deleted them all, and a restore to
-    # another server never had one), so it comes from the backup file instead.
-    my $webapp = defined $webapp_source_dir ? 1 : $isrestore ? ( $opts->{webapp} ? 1 : 0 ) : 0;
 
     uninstall_container($container_name) if $isupgrade || $isrestore;    # avoid spurious warnings on install
     register_container( $container_name, $isupgrade || $isrestore, $image_name, $webapp );    # register before create just in case
@@ -1018,6 +1024,13 @@ sub _file_write_chmod {
     $path->spew($cont);
     $path->chmod($mode);             # spew() first to ensure it exists
     return 1;
+}
+
+sub _is_registered_webapp {
+    my ($container_name) = @_;
+
+    my $registered = load_known_containers();
+    return $registered->{$container_name} && $registered->{$container_name}{webapp} ? 1 : 0;
 }
 
 sub get_pkg_versions {
@@ -1390,6 +1403,55 @@ sub deregister_container_as_root {
             delete $containers_hr->{$container_name};
 
             return 1;
+        }
+    );
+}
+
+# Used by pkg.preinst/pkg.prerm to squirrel the registry away, under the same
+# lock as every other mutation, before the package manager overwrites it with
+# the packaged `{}` default.
+sub snapshot_known_containers_as_root {
+    my ($dest) = @_;
+
+    _mutate_known_containers_as_root(
+        sub {
+            my ($containers_hr) = @_;
+            Cpanel::JSON::DumpFile( $dest, $containers_hr );
+            chmod 0600, $dest;
+            return 0;    # nothing to write back to the live registry
+        }
+    );
+
+    return;
+}
+
+# Merge a snapshot taken by snapshot_known_containers_as_root() back into the
+# live registry: any container already present now wins, so a registration
+# that landed in the live file after the snapshot was taken is preserved
+# rather than being overwritten by the older snapshot data. Only entries the
+# live registry is missing get restored from the snapshot.
+sub restore_known_containers_as_root {
+    my ($src) = @_;
+
+    # Only a missing snapshot is benign; a 0-byte one means an interrupted
+    # write, and it's our only copy, so fall through and let it die below.
+    return if !-e $src;
+
+    my $snapshot_hr = Cpanel::JSON::LoadFile($src);
+    die "“$src” does not contain a JSON object of containers\n" if ref($snapshot_hr) ne 'HASH';
+
+    return _mutate_known_containers_as_root(
+        sub {
+            my ($containers_hr) = @_;
+
+            my $restored = 0;
+            for my $container_name ( keys %{$snapshot_hr} ) {
+                next if exists $containers_hr->{$container_name};
+                $containers_hr->{$container_name} = $snapshot_hr->{$container_name};
+                $restored = 1;
+            }
+
+            return $restored;
         }
     );
 }
