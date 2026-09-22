@@ -126,6 +126,7 @@ sub _age_str {
 
 sub _size_str {
     my ($bytes) = @_;
+    return "size unknown" if !defined $bytes;
     return sprintf( "%.1f GiB", $bytes / ( 1024**3 ) ) if $bytes >= 1024**3;
     return sprintf( "%.1f MiB", $bytes / ( 1024**2 ) ) if $bytes >= 1024**2;
     return sprintf( "%.1f KiB", $bytes / 1024 )        if $bytes >= 1024;
@@ -909,7 +910,17 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
                                 }
                             );
 
-                            push @reports, $report if ref $report eq 'HASH';
+                            # clean_backups() returns a hash on every path, so this
+                            # is the serialisation back across the fork failing
+                            # quietly. Say so, rather than dropping the account
+                            # from the listing as if it had had nothing to clean.
+                            if ( ref $report eq 'HASH' ) {
+                                push @reports, $report;
+                            }
+                            else {
+                                warn "ea-podman: no report came back for “$c_user”\n";
+                                push @reports, { user => $c_user, unreachable => 1, removable => [], skipped => [] };
+                            }
                         }
                         catch {
                             my $err = $_;
@@ -923,11 +934,16 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
                     push @reports, ea_podman::util::clean_backups( run => $run, %age );
                 }
 
-                my $total = 0;
-                my $bytes = 0;
+                my $total         = 0;
+                my $bytes         = 0;
+                my $bytes_unknown = 0;
                 for my $r (@reports) {
                     if ( $r->{unreachable} ) {
                         print "$r->{user}: UNKNOWN — the account could not be reached, so nothing was examined.\n";
+                        next;
+                    }
+                    if ( $r->{unreadable} ) {
+                        print "$r->{user}: UNKNOWN — “$r->{unreadable}” could not be read, so nothing was examined.\n";
                         next;
                     }
                     if ( $r->{podman_unverifiable} ) {
@@ -937,11 +953,20 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
                     for my $b ( @{ $r->{removable} } ) {
                         printf( "%s: %s  (%s old, %s)%s\n", $r->{user}, $b->{path}, _age_str( $b->{age} ), _size_str( $b->{size} ), $run ? " — REMOVED" : "" );
                         $total++;
-                        $bytes += $b->{size};
+                        if   ( defined $b->{size} ) { $bytes += $b->{size} }
+                        else                        { $bytes_unknown++ }
                     }
                     for my $sk ( @{ $r->{skipped} } ) {
                         next if $sk->{reason} eq 'too_recent' || $sk->{reason} eq 'not_a_container_backup';
-                        print "$r->{user}: $sk->{path} — kept, the name is still in use ($sk->{reason}); that is an orphan-reconciliation matter, not a cleanup one.\n";
+                        if ( $sk->{reason} eq 'remove_failed' ) {
+                            print "$r->{user}: $sk->{path} — could not be removed; see the warning above.\n";
+                        }
+                        elsif ( $sk->{reason} eq 'unreadable' ) {
+                            print "$r->{user}: $sk->{path} — could not be examined, so it was left alone.\n";
+                        }
+                        else {
+                            print "$r->{user}: $sk->{path} — kept, the name is still in use ($sk->{reason}); that is an orphan-reconciliation matter, not a cleanup one.\n";
+                        }
                     }
                 }
 
@@ -949,7 +974,8 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
                     print "Nothing to clean up.\n";
                 }
                 else {
-                    printf( "\n%d backup director%s%s, %s.\n", $total, ( $total == 1 ? "y" : "ies" ), ( $run ? " removed" : " could be removed" ), _size_str($bytes) );
+                    my $size = $bytes_unknown ? "at least " . _size_str($bytes) . " ($bytes_unknown of unknown size)" : _size_str($bytes);
+                    printf( "\n%d backup director%s%s, %s.\n", $total, ( $total == 1 ? "y" : "ies" ), ( $run ? " removed" : " could be removed" ), $size );
                 }
 
                 return 1;

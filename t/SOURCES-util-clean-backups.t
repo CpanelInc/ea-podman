@@ -27,6 +27,9 @@ BEGIN {
 
 require "$FindBin::Bin/../SOURCES/util.pm";
 
+# Taken before _world() stubs it, so the real one can be asked directly.
+my $real_dir_size = \&ea_podman::util::_dir_size;
+
 # EA4-325 Increment C, CPANEL-54870. `ea-podman uninstall` and
 # remove_containers move a container's directory aside to <name>.bak and then
 # nothing ever reclaims it. A `.bak` holds the container's read-write /app --
@@ -265,6 +268,59 @@ subtest 'the age threshold is an option' => sub {
 
     ea_podman::util::clean_backups( run => 1, max_age => 0 );
     ok( !-d $bak, "and reachable with a lowered one" );
+};
+
+# "Could not look" must never read as "nothing there". A symlink that points at
+# itself fails stat() with ELOOP; EACCES is the real-life case, but this suite
+# may run as root, and ELOOP takes the same branch.
+subtest 'a ~/ea-podman.d that cannot be examined is reported, not treated as empty' => sub {
+    my $tmp  = _world();
+    my $root = "$tmp/ea-podman.d";
+    rmdir $root or die "rmdir: $!";
+    symlink( $root, $root ) or die "symlink: $!";
+
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    my $report = ea_podman::util::clean_backups( run => 1 );
+
+    is( $report->{unreadable}, $root, "the account is reported as unreadable" );
+    is_deeply( $report->{removable}, [], "and nothing is claimed" );
+    like( $warnings[0] // '', qr/could not examine/, "and the operator is told" );
+
+    unlink $root;
+    my $absent = ea_podman::util::clean_backups();
+    ok( !exists $absent->{unreadable}, "while one that simply does not exist is just empty" );
+};
+
+subtest 'a .bak that cannot be stat()ed is reported, and never aged as 0 days old' => sub {
+    my $tmp = _world();
+    my $loop = "$tmp/ea-podman.d/myapp.bob.02.bak";
+    symlink( $loop, $loop ) or die "symlink: $!";
+    open( my $fh, '>', "$tmp/ea-podman.d/stray.bob.03.bak" ) or die "open: $!";
+    close $fh;
+
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+
+    # --days=0 considers every backup, so an age that fell back to 0 would be
+    # removed here. It must be reported instead.
+    my $report = ea_podman::util::clean_backups( run => 1, max_age => 0 );
+
+    is( _reason_for( $report, $loop ), 'unreadable', "it is reported as unreadable" );
+    is_deeply( $report->{removable}, [], "and not removed" );
+    is( _reason_for( $report, "$tmp/ea-podman.d/stray.bob.03.bak" ), undef, "while a stray file is still passed over without a word" );
+    is( scalar(@warnings), 1, "one warning, for the one that could not be examined" );
+};
+
+subtest 'a size that could not be measured is undef, never 0 bytes' => sub {
+    my $tmp = File::Temp->newdir();
+    open( my $fh, '>', "$tmp/data" ) or die "open: $!";
+    print {$fh} "x" x 5000;
+    close $fh;
+
+    my $size = $real_dir_size->("$tmp");
+    ok( defined $size && $size >= 5000, "a readable tree is measured" );
+    is( $real_dir_size->("$tmp/not-here"), undef, "one du cannot measure is undef, not 0" );
 };
 
 subtest 'an account with nothing to clean reports cleanly' => sub {

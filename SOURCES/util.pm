@@ -64,6 +64,7 @@ use Cpanel::JSON           ();
 use Cpanel::AdminBin::Call ();
 use Cpanel::Time           ();
 use File::Path::Tiny       ();
+use Errno                  ();    # for %!, loaded explicitly: the CLI is a compiled binary
 use Cwd                    ();
 use Time::HiRes            ();
 
@@ -1933,7 +1934,13 @@ sub _dir_size {
     chomp( my $out = `du -sb $name_qx 2> /dev/null` );
     my ($bytes) = $out =~ m/^([0-9]+)/;
 
-    return $bytes // 0;
+    # undef, never 0, when the size could not be measured. `clean` prints this
+    # to an operator deciding whether to delete what may be the only copy of an
+    # application's data, and "0 bytes" reads as "nothing to lose". du exits
+    # non-zero on a partly unreadable tree while still printing a partial
+    # total, so that counts as not measured too.
+    return undef if $? != 0 || !defined $bytes;
+    return $bytes;
 }
 
 # Is this the `.bak` of a container that is genuinely gone, or the wreckage of
@@ -2019,10 +2026,19 @@ sub clean_backups {
     my $can_ask_podman = $user_session_reachable->() ? 1 : 0;
     $result{podman_unverifiable} = 1 if !$can_ask_podman;
 
+    # An account with no ~/ea-podman.d has nothing to clean. One whose
+    # ~/ea-podman.d could not be stat()ed or read is NOT that -- it is an
+    # account nothing was examined for -- and reporting it as empty is how a
+    # sweep says "clean" about something it never looked at.
     my $root = _get_container_root();
-    return \%result if !-d $root;
+    my @root_st = stat($root);
+    if ( !@root_st ) {
+        return \%result if $!{ENOENT} || $!{ENOTDIR};
+        return _clean_backups_unreadable( \%result, $root, "$!" );
+    }
+    return \%result if !-d _;
 
-    opendir( my $dh, $root ) or return \%result;
+    opendir( my $dh, $root ) or return _clean_backups_unreadable( \%result, $root, "$!" );
     my @entries = sort grep { $_ ne '.' && $_ ne '..' } readdir($dh);
     closedir $dh;
 
@@ -2030,7 +2046,21 @@ sub clean_backups {
         next if $entry !~ m/\.bak\z/;
 
         my $path = "$root/$entry";
-        next if !-d $path;
+
+        # Stat once, here, and age from THIS result below: a second stat could
+        # fail on its own, and an age that cannot be read must never become 0 --
+        # under --days=0 that hands the backup straight to the remover. A path
+        # that vanished, or a stray file, is skipped quietly; one that could not
+        # be stat()ed for any other reason is reported, not passed over.
+        my @st = stat($path);
+        if ( !@st ) {
+            next if $!{ENOENT} || $!{ENOTDIR};
+            my $err = "$!";
+            warn "ea-podman: could not examine “$path”: $err\n";
+            push @{ $result{skipped} }, { path => $path, name => $entry, reason => "unreadable" };
+            next;
+        }
+        next if !-d _;
 
         ( my $name = $entry ) =~ s/\.bak\z//;
 
@@ -2048,8 +2078,7 @@ sub clean_backups {
         # leaves mtime alone, so a `.bak` made one second ago still reports the
         # mtime of its last deploy -- an mtime rule would delete backups made
         # moments earlier. ctime IS the moment it became a `.bak`.
-        my $ctime = ( stat($path) )[10];
-        my $age   = defined $ctime ? $now->() - $ctime : 0;
+        my $age = $now->() - $st[10];
 
         if ( $age < $max_age ) {
             push @{ $result{skipped} }, { path => $path, name => $name, reason => "too_recent" };
@@ -2071,6 +2100,13 @@ sub clean_backups {
     }
 
     return \%result;
+}
+
+sub _clean_backups_unreadable {
+    my ( $result, $root, $err ) = @_;
+    warn "ea-podman: could not examine “$root”: $err\n";
+    $result->{unreadable} = $root;
+    return $result;
 }
 
 sub remove_port_authority_ports {
