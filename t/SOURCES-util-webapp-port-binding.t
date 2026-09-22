@@ -60,6 +60,7 @@ sub _run {
     local *ea_podman::util::_get_container_image_id               = sub { return "sha-old" };
     local *ea_podman::util::_get_container_image_ref              = sub { return };
     local *ea_podman::util::is_user_container_name_running        = sub { return 1 };
+    local *ea_podman::util::_container_ports_all_loopback         = sub { return 0 };
 
     my @podman_calls;
     local *ea_podman::util::podman = sub {

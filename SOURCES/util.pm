@@ -641,12 +641,22 @@ sub _add_container_unit_directives {
 #                    package version, OR the image, so a re-pushed upstream tag
 #                    is still picked up. Never on the image alone.
 #
+# Either kind also needs a recreate when it is a web app still published on
+# every interface. EA4-327 binds web app ports to 127.0.0.1 only, but -p is fixed
+# when the container is created, so a web app created before EA4-327 keeps its
+# public binding until it is recreated. EA4-327 relied on the next upgrade doing
+# that recreate. Before this gate, every upgrade did; now one with an unmoved
+# image would not. The image is the same, but the container's desired config
+# is not.
+#
 # Cannot-tell is treated as "needed". Guessing "not needed" from missing
 # information is how a container silently stops being updated.
 sub _upgrade_is_needed {
-    my ( $container_name, $image_ref, $pkg, $force ) = @_;
+    my ( $container_name, $image_ref, $pkg, $force, $webapp ) = @_;
 
     return 1 if $force;    # force never asks
+
+    return 1 if $webapp && !_container_ports_all_loopback($container_name);
 
     my $image_moved = sub {
         my $current  = _get_container_image_id($container_name);
@@ -745,6 +755,32 @@ sub _get_container_image_id {
 
     return if $? != 0 || !length($id);
     return $id;
+}
+
+# Whether every port the container publishes is bound to 127.0.0.1. Returns 1
+# when they all are (including when it publishes none), 0 when any is not, and
+# undef when podman cannot say. Its own sub so tests have a seam that does not
+# need podman. (EA4-327 via EA4-325)
+sub _container_ports_all_loopback {
+    my ($container_name) = @_;
+    validate_user_container_name($container_name);
+
+    my $container_name_qx = quotemeta($container_name);
+    my $json              = `podman inspect --format '{{json .HostConfig.PortBindings}}' $container_name_qx 2> /dev/null`;
+    return if $? != 0 || !length( $json // '' );
+
+    my $bindings = eval { Cpanel::JSON::Load($json) };
+    return if $@;
+    return 1 if !$bindings;    # "null": publishes nothing
+    return if ref $bindings ne 'HASH';
+
+    for my $host_list ( values %{$bindings} ) {
+        for my $binding ( @{ $host_list || [] } ) {
+            return 0 if ( $binding->{HostIp} // '' ) ne '127.0.0.1';
+        }
+    }
+
+    return 1;
 }
 
 # The fully-qualified image a container was created from, e.g.
@@ -1321,7 +1357,7 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
         # container down the packaged branch, where it always reports "needed".
         my $gate_pkg = scalar get_pkg_from_container_name($container_name);
 
-        if ( !_upgrade_is_needed( $container_name, $image_arg, $gate_pkg, $force ) ) {
+        if ( !_upgrade_is_needed( $container_name, $image_arg, $gate_pkg, $force, $webapp ) ) {
             print "“$container_name” is already up to date; nothing to do.\n";
 
             # The early return B2 asks for: no teardown, no recreate, no restart,

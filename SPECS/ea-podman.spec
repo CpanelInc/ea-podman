@@ -190,6 +190,9 @@ rm -rf %{buildroot}
   at accounts the container registry still listed, reported nothing back across
   the privilege boundary, and refused any account whose rootless session was down
   — which is every account that had just removed its last container
+- EA4-325: Make `ea-podman upgrade` still recreate a web app container that is
+  published on every interface, so it picks up EA4-327's loopback-only binding
+  even when its image has not changed
 
 * Fri Sep 18 2026 Chris Castillo <chris.castillo@webpros.com> - 1.0-30
 - EA4-327: Bind web app container ports to loopback only

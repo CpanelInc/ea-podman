@@ -228,6 +228,59 @@ subtest '_upgrade_is_needed: packaged containers gate on the package version too
     is( ea_podman::util::_upgrade_is_needed( "ea-memcached16.bob.01", "img", "ea-memcached16", 0 ), 1, "same version but a moved image still needs a recreate" );
 };
 
+# EA4-327 binds web app ports to 127.0.0.1, but only at create time, and relied
+# on the next upgrade to recreate the web apps that predate it. An unmoved image
+# must not stop that from happening.
+subtest '_upgrade_is_needed: a web app still published on every interface needs a recreate' => sub {
+    no warnings 'redefine';
+    local *ea_podman::util::_get_container_image_id = sub { "sha-a" };
+    local *ea_podman::util::_get_image_id           = sub { "sha-a" };
+
+    local *ea_podman::util::_container_ports_all_loopback = sub { 0 };
+    is( ea_podman::util::_upgrade_is_needed( "x.bob.01", "img", undef, 0, 1 ), 1, "web app, same image, public binding: recreate" );
+    is( ea_podman::util::_upgrade_is_needed( "x.bob.01", "img", undef, 0, 0 ), 0, "not a web app, same image, public binding: nothing to do" );
+
+    local *ea_podman::util::_container_ports_all_loopback = sub { 1 };
+    is( ea_podman::util::_upgrade_is_needed( "x.bob.01", "img", undef, 0, 1 ), 0, "web app, same image, already loopback: nothing to do" );
+
+    local *ea_podman::util::_container_ports_all_loopback = sub { return };
+    is( ea_podman::util::_upgrade_is_needed( "x.bob.01", "img", undef, 0, 1 ), 1, "web app whose binding cannot be read: cannot-tell errs towards acting" );
+};
+
+subtest '_container_ports_all_loopback reads podman inspect PortBindings' => sub {
+    my $bin = File::Temp->newdir();
+    my %cases = (
+        'null'                                                                                          => 1,
+        '{}'                                                                                            => 1,
+        '{"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"44444"}]}'                                      => 1,
+        '{"8080/tcp":[{"HostIp":"","HostPort":"44444"}]}'                                               => 0,
+        '{"8080/tcp":[{"HostIp":"0.0.0.0","HostPort":"44444"}]}'                                        => 0,
+        '{"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"1"}],"443/tcp":[{"HostIp":"","HostPort":"2"}]}' => 0,
+        'not json'                                                                                      => undef,
+    );
+
+    no warnings 'redefine';
+    local *ea_podman::util::validate_user_container_name = sub { 1 };
+    local $ENV{PATH} = "$bin:$ENV{PATH}";
+
+    for my $out ( sort keys %cases ) {
+        _fake_podman( $bin, "echo '$out'; exit 0" );
+        is( ea_podman::util::_container_ports_all_loopback("x.bob.01"), $cases{$out}, "PortBindings $out" );
+    }
+
+    _fake_podman( $bin, "exit 125" );
+    is( ea_podman::util::_container_ports_all_loopback("x.bob.01"), undef, "a failed inspect is cannot-tell, not loopback" );
+};
+
+sub _fake_podman {
+    my ( $bin, $body ) = @_;
+    open( my $fh, '>', "$bin/podman" ) or die "podman stub: $!";
+    print {$fh} "#!/bin/sh\n$body\n";
+    close $fh;
+    chmod 0755, "$bin/podman";
+    return;
+}
+
 # The pull memoization is deliberately NOT tested here. _harness() above replaces
 # _podman_pull with a non-local glob assignment, so the real sub is gone for the
 # rest of this file and any test of it would be testing the stub. It lives in
