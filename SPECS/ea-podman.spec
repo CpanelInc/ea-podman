@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 29
+%define release_prefix 31
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -165,7 +165,7 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
-* Fri Sep 18 2026 Julian Brown <julian.brown@webpros.com> - 1.0-29
+* Tue Sep 22 2026 Julian Brown <julian.brown@webpros.com> - 1.0-31
 - EA4-325: Make `ea-podman upgrade` report a container that did not come back up,
   instead of exiting 0 with the application down
 - EA4-325: Recreate the previous container when an upgrade's create fails, and
@@ -190,6 +190,12 @@ rm -rf %{buildroot}
   at accounts the container registry still listed, reported nothing back across
   the privilege boundary, and refused any account whose rootless session was down
   — which is every account that had just removed its last container
+
+* Fri Sep 18 2026 Chris Castillo <chris.castillo@webpros.com> - 1.0-30
+- EA4-327: Bind web app container ports to loopback only
+
+* Thu Sep 17 2026 Heekyoung Park <heekyoung.park@webpros.com> - 1.0-29
+- EA4-324: Lock the package-upgrade registry snapshot/restore
 
 * Mon Sep 14 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-28
 - CPANEL-55337: Add container name guards to register-upgrade

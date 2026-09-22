@@ -204,6 +204,92 @@ subtest 'a truncated registry left by an interrupted unlocked write is recoverab
     ok( exists ea_podman::util::load_known_containers_as_root()->{"plain.bob.01"}, "and it can be registered into" );
 };
 
+# EA4-324 round 2: pkg.preinst/pkg.prerm snapshot the registry and
+# pkg.postinst restores it around a package upgrade, since the package
+# replaces the live file with its packaged `{}` default. That has to go
+# through the same lock, and the restore has to merge rather than overwrite,
+# or a registration racing in during the upgrade window is lost.
+subtest 'snapshot_known_containers_as_root takes a lock-consistent copy' => sub {
+    my $tmp = File::Temp->newdir();
+    local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";
+
+    ea_podman::util::register_container_as_root( "mine.alice.01", "alice", 0, "node:22", 0 );
+
+    my $snapshot = "$tmp/snapshot.json";
+    ea_podman::util::snapshot_known_containers_as_root($snapshot);
+
+    is_deeply( Cpanel::JSON::LoadFile($snapshot), Cpanel::JSON::LoadFile($ea_podman::util::known_containers_file), "the snapshot matches the live registry" );
+    is( sprintf( "%04o", ( stat $snapshot )[2] & 07777 ), "0600", "the snapshot is 0600" );
+};
+
+subtest 'restore_known_containers_as_root merges rather than overwrites' => sub {
+    my $tmp = File::Temp->newdir();
+    local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";
+
+    ea_podman::util::register_container_as_root( "old.alice.01", "alice", 0, "node:22", 0 );
+
+    my $snapshot = "$tmp/snapshot.json";
+    ea_podman::util::snapshot_known_containers_as_root($snapshot);
+
+    # The package replaced the live file with its packaged default, then a
+    # registration raced in before the restore ran.
+    Cpanel::JSON::DumpFile( $ea_podman::util::known_containers_file, {} );
+    ea_podman::util::register_container_as_root( "raced-in.bob.01", "bob", 0, "redis:7", 0 );
+
+    ea_podman::util::restore_known_containers_as_root($snapshot);
+
+    my $containers = Cpanel::JSON::LoadFile($ea_podman::util::known_containers_file);
+    ok( exists $containers->{"old.alice.01"}, "the pre-upgrade entry was restored" );
+    ok( exists $containers->{"raced-in.bob.01"}, "the entry registered during the upgrade window was not clobbered" );
+};
+
+subtest 'restore_known_containers_as_root is a no-op without a snapshot' => sub {
+    my $tmp = File::Temp->newdir();
+    local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";
+
+    ea_podman::util::register_container_as_root( "plain.bob.01", "bob", 0, "redis:7", 0 );
+
+    ea_podman::util::restore_known_containers_as_root("$tmp/no-such-snapshot.json");
+
+    my $containers = Cpanel::JSON::LoadFile($ea_podman::util::known_containers_file);
+    is( scalar keys %{$containers}, 1, "nothing was added" );
+    ok( exists $containers->{"plain.bob.01"}, "and the existing entry is untouched" );
+};
+
+subtest 'restore_known_containers_as_root dies on a snapshot that is not a JSON object' => sub {
+    my $tmp = File::Temp->newdir();
+    local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";
+
+    ea_podman::util::register_container_as_root( "plain.bob.01", "bob", 0, "redis:7", 0 );
+
+    my $snapshot = "$tmp/snapshot.json";
+    Cpanel::JSON::DumpFile( $snapshot, [ "not", "a", "hash" ] );
+
+    my $died = !eval { ea_podman::util::restore_known_containers_as_root($snapshot); 1 };
+    ok( $died, "a corrupt/non-object snapshot dies instead of being silently skipped" );
+
+    my $containers = Cpanel::JSON::LoadFile($ea_podman::util::known_containers_file);
+    is( scalar keys %{$containers}, 1, "the live registry is untouched" );
+};
+
+subtest 'restore_known_containers_as_root dies on a 0-byte snapshot instead of skipping it' => sub {
+    my $tmp = File::Temp->newdir();
+    local $ea_podman::util::known_containers_file = "$tmp/registered-containers.json";
+
+    ea_podman::util::register_container_as_root( "plain.bob.01", "bob", 0, "redis:7", 0 );
+
+    # An interrupted write can leave the snapshot at 0 bytes.
+    my $snapshot = "$tmp/snapshot.json";
+    open my $fh, '>', $snapshot or die $!;
+    close $fh;
+
+    my $died = !eval { ea_podman::util::restore_known_containers_as_root($snapshot); 1 };
+    ok( $died, "a 0-byte snapshot dies instead of being silently skipped" );
+
+    my $containers = Cpanel::JSON::LoadFile($ea_podman::util::known_containers_file);
+    is( scalar keys %{$containers}, 1, "the live registry is untouched" );
+};
+
 done_testing();
 
 sub _fork {

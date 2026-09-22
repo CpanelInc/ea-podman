@@ -17,10 +17,19 @@ if [ -f "/usr/bin/apt" ]; then
 fi
 
 if [ -e "/root/.ea-podman-tmp/registered-containers.json" ]; then
-    # This is an upgrade, we copied the file to tmp, so copy it back
-    mv /root/.ea-podman-tmp/registered-containers.json /opt/cpanel/ea-podman/registered-containers.json
-    chmod 0600 /opt/cpanel/ea-podman/registered-containers.json
-    rm -rf /root/.ea-podman-tmp
+    # Merge the pre-upgrade snapshot back in under the same lock, rather than
+    # overwriting anything registered since the package installed its fresh
+    # registry file. Only clean up the snapshot once that actually worked, so
+    # a failed restore leaves it behind for manual recovery instead of
+    # silently destroying the only copy.
+    if /usr/local/cpanel/3rdparty/bin/perl -e '
+        require "/opt/cpanel/ea-podman/lib/ea_podman/util.pm";
+        ea_podman::util::restore_known_containers_as_root("/root/.ea-podman-tmp/registered-containers.json");
+    '; then
+        rm -rf /root/.ea-podman-tmp
+    else
+        echo "!!!! ea-podman: failed to restore the pre-upgrade container registry; the snapshot is kept at /root/.ea-podman-tmp for manual recovery !!!!" >&2
+    fi
 fi
 
 # Boot-time sweep that starts the per-user systemd managers rootless podman

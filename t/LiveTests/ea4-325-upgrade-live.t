@@ -90,8 +90,9 @@
 #   Ubuntu 24.04.4, podman 4.9.3, ea-podman 1.0-28 deb -- 24/24
 #
 # Those builds are THIS branch when it still called itself 1.0-28. Renumbered
-# to 1.0-29 once main shipped a different 1.0-28 (CPANEL-55337); the runs above
-# are unaffected and are left as they were recorded.
+# to 1.0-29 once main shipped a different 1.0-28 (CPANEL-55337), and to 1.0-31
+# once main shipped 1.0-29 (EA4-324) and 1.0-30 (EA4-327); the runs above are
+# unaffected and are left as they were recorded.
 # The gate reads `podman image inspect --format '{{.Id}}'` against
 # `podman inspect --format '{{.Image}}'`, and the rollback reads
 # `{{.ImageName}}`; all three behave identically on 4.9 and 5.8, and

@@ -35,8 +35,8 @@
 # WHAT IT PROVES THAT NOTHING ELSE CAN
 #
 #   1. A Redeploy applies a configuration change that does NOT move the image.
-#      That is the whole of CPANEL-56732. It is inert without ea-podman 1.0-29
-#      and it is silently broken with 1.0-29 and an older plugin, so it can only
+#      That is the whole of CPANEL-56732. It is inert without ea-podman 1.0-31
+#      and it is silently broken with 1.0-31 and an older plugin, so it can only
 #      be tested with both halves installed and talking to each other.
 #   2. The gate really is on: a plain `ea-podman upgrade` on that same container
 #      does nothing at all. Both must be true at once, and they pull in opposite
@@ -68,7 +68,7 @@
 #
 #   * a disposable, LICENSED cPanel VM (whmapi1 createacct is the first thing an
 #     expired licence stops) on CGROUP V2 -- AlmaLinux 9 or Ubuntu 24.04, not EL8
-#   * ea-podman >= 1.0-29 and cpanel-webapp-plugin >= 1.5.0-1 INSTALLED
+#   * ea-podman >= 1.0-31 and cpanel-webapp-plugin >= 1.5.0-1 INSTALLED
 #   * `zip`, and enough network to pull a node image once
 #
 # The RPM/DEB brings the feature flag and the sweep script with it, so a normal
@@ -537,7 +537,7 @@ subtest 'B: a configuration change that does not move the image reaches the cont
     my $after_id = container_id( $USER, $CONTAINER );
 
     # The two halves of the same claim. Without CPANEL-56732 against an
-    # ea-podman 1.0-29 the redeploy reports SUCCESS and changes nothing, so the
+    # ea-podman 1.0-31 the redeploy reports SUCCESS and changes nothing, so the
     # id assertion is the one that catches it -- the status never would.
     isnt( $after_id, $before_id, 'the container was actually recreated' );
 
