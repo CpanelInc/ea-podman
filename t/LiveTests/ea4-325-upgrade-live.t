@@ -953,6 +953,44 @@ subtest 'C: clean lists a backup, warns about it, and removes it only when asked
     return;
 };
 
+# CPANEL-57066 review blocker. Root `clean` used to drop into every cPanel
+# account and init_user() it, which allocates a /etc/subuid and /etc/subgid
+# range for any account without one, so a plain listing changed both files for
+# every account on the box. Root now only visits accounts that may have a
+# `.bak`. The unit tests cover that check; only a real run covers the loop that
+# uses it.
+subtest 'C: root clean lists a backup without allocating subids for anyone' => sub {
+    my ( $irc, $iout ) = run_as_user( $USER, _sh($CLI) . " install rootclean --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
+    my ($cn) = $iout =~ m/Done, installed:\s*(\S+)/;
+    ok( $cn, "installed a container to make a backup from" ) or do { diag($iout); return };
+
+    run_as_user( $USER, _sh($CLI) . " uninstall " . _sh($cn) . " --verify" );
+    my $bak = container_dir( $USER, $cn ) . ".bak";
+    ok( -d $bak, "uninstall left a .bak behind" ) or return;
+
+    # Without an account lacking a range this passes for the wrong reason, so
+    # say how many there were to protect.
+    my $subuid_before = slurp('/etc/subuid') // '';
+    my $subgid_before = slurp('/etc/subgid') // '';
+    my %has_range     = map { ( split /:/ )[0] => 1 } split /\n/, $subuid_before;
+    opendir( my $dh, '/var/cpanel/users' ) or die "opendir /var/cpanel/users: $!";
+    my @without = grep { !m/^\./ && !$has_range{$_} } readdir($dh);
+    closedir $dh;
+    diag( scalar(@without) . " cPanel account(s) with no subuid range before the root clean" );
+
+    my ( $rc, $out ) = run_cmd( $CLI, 'clean', '--days=0' );
+    is( $rc, 0, "a root listing succeeds" ) or diag($out);
+    like( $out, qr/\Q$bak\E/, "and lists the account's backup, so root still reaches accounts that have one" );
+
+    is( slurp('/etc/subuid') // '', $subuid_before, "/etc/subuid is unchanged by a root listing" );
+    is( slurp('/etc/subgid') // '', $subgid_before, "/etc/subgid is unchanged by a root listing" );
+    ok( -d $bak, "and the listing removed nothing" );
+
+    run_as_user( $USER, _sh($CLI) . " clean --run --days=0" );
+
+    return;
+};
+
 # C2, and the reason the ticket calls it out. Renaming a directory moves its
 # ctime and leaves mtime alone, so a `.bak` made one second ago still carries
 # the mtime of its last deploy -- an mtime rule would delete backups made
