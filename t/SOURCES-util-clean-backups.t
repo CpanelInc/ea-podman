@@ -331,4 +331,35 @@ subtest 'an account with nothing to clean reports cleanly' => sub {
     is( $report->{user}, "bob", "and it says whose account it swept" );
 };
 
+# Root `clean` asks this before it init_user()s an account, and init_user()
+# allocates a subuid/subgid range -- so a look-only listing handed one to every
+# account on the box. "No" has to be certain: anything this cannot tell must
+# still send root into the account, where the sweep reports it as unexamined.
+subtest 'root only visits an account that may have a .bak' => sub {
+    my $tmp  = _world();
+    my $root = "$tmp/ea-podman.d";
+    my $may  = \&ea_podman::util::_dir_may_hold_backups;
+
+    is( $may->($root), 0, "an empty ~/ea-podman.d is not visited" );
+
+    mkdir "$root/myapp.bob.01";
+    is( $may->($root), 0, "nor is one holding only live container dirs" );
+
+    _mk_bak( $tmp, "myapp.bob.02" );
+    is( $may->($root), 1, "one with a .bak is" );
+
+    is( $may->("$tmp/not-here"), 0, "an account with no ~/ea-podman.d (ENOENT) is not visited" );
+
+    open( my $fh, '>', "$tmp/a-file" ) or die "open: $!";
+    close $fh;
+    is( $may->("$tmp/a-file"),             0, "nor one where ~/ea-podman.d is a file" );
+    is( $may->("$tmp/a-file/ea-podman.d"), 0, "nor one where a parent is not a directory (ENOTDIR)" );
+
+    my $loop = "$tmp/loop";
+    symlink( $loop, $loop ) or die "symlink: $!";
+    is( $may->($loop), 1, "one that cannot be examined (ELOOP) IS visited, so it is reported rather than dropped" );
+
+    is( ea_podman::util::user_may_have_backups_as_root("no-such-user-ea4-325"), 1, "an account whose home cannot be looked up is visited, so it is reported unreachable" );
+};
+
 done_testing();

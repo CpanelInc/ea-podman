@@ -2599,6 +2599,43 @@ sub _user_has_container_dirs {
     return 0;
 }
 
+# Could this account have a `.bak` for `clean` to report? Asked as root, before
+# dropping privileges, so root `clean` only init_user()s the accounts that can
+# appear in its listing: init_user() allocates a subuid/subgid range, and a
+# look-only listing must not hand one to every account on the box.
+#
+# “No” only when that is certain -- no ~/ea-podman.d, or one that reads with no
+# `*.bak` in it. Anything this cannot tell is “yes”, so the account is still
+# visited and the user-side sweep reports it as not examined, rather than it
+# dropping out of the listing. Names only: the sweep itself decides what the
+# entries are.
+sub user_may_have_backups_as_root {
+    my ($user) = @_;
+
+    my $homedir = ( getpwnam($user) )[7];
+    return 1 if !defined $homedir;    # visited, so the sweep reports it unreachable
+
+    return _dir_may_hold_backups("$homedir/ea-podman.d");
+}
+
+sub _dir_may_hold_backups {
+    my ($root) = @_;
+
+    # Absent means what it means in clean_backups(): ENOENT or ENOTDIR only.
+    my @st = stat($root);
+    if ( !@st ) {
+        return 0 if $!{ENOENT} || $!{ENOTDIR};
+        return 1;
+    }
+    return 0 if !-d _;
+
+    opendir( my $dh, $root ) or return 1;
+    my $found = grep { m/\.bak\z/ } readdir($dh);
+    closedir $dh;
+
+    return $found ? 1 : 0;
+}
+
 # Linger — and the user systemd manager it keeps alive — exists for exactly one
 # reason here: so the account’s rootless containers survive logout and reboot.
 # With no containers left there is nothing to keep running, and on a server with

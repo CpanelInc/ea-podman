@@ -839,7 +839,7 @@ Each container is only recreated if something actually moved; see `ea-podman hel
 Lists only, with each one's age and size, unless you pass `--run`. `--run` removes them.
 
     - as non-root this covers only your own account
-    - as root it covers every account the container registry knows about
+    - as root it covers every account with a `.bak` under ~/ea-podman.d/, whether or not the container registry still lists it
 
 A `.bak` is only removed when its container name is otherwise COMPLETELY gone: no registry entry, nothing in `podman ps -a`, no port still assigned to it, and no systemd unit. Anything still holding the name is reported and left alone -- freeing the name early would hand it to the next install with stale state attached.
 
@@ -870,8 +870,15 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
 
                 my @reports;
                 if ( $user eq "root" ) {
-                    ea_podman::util::init_user();
-                    push @reports, ea_podman::util::clean_backups( run => $run, %age );
+
+                    # init_user() allocates a subuid/subgid range, so a
+                    # look-only listing must not run it for an account -- root
+                    # included -- that has no `.bak` to report. See
+                    # user_may_have_backups_as_root().
+                    if ( ea_podman::util::user_may_have_backups_as_root("root") ) {
+                        ea_podman::util::init_user();
+                        push @reports, ea_podman::util::clean_backups( run => $run, %age );
+                    }
 
                     # Every cPanel account, NOT the ones the container registry
                     # knows about.
@@ -889,7 +896,16 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
                     # manager. This wants the opposite set. Same shape as the
                     # `check` verb below. Sorted so a failure list is
                     # reproducible.
+                    #
+                    # Every account is CONSIDERED, but only the ones that may
+                    # have a `.bak` are visited, checked as root before
+                    # privileges are dropped. Visiting means init_user(), and
+                    # doing that to every account allocated subids for accounts
+                    # that never used ea-podman, on a plain listing. Skipping
+                    # them also spares a fork per account on a large server.
                     for my $c_user ( sort( Cpanel::Config::Users::getcpusers() ) ) {
+                        next if !ea_podman::util::user_may_have_backups_as_root($c_user);
+
                         try {
                             # RETURNED, not pushed. do_as_user_with_exception runs
                             # the closure in a forked child (Cpanel::ForkSync), so

@@ -196,6 +196,9 @@ rm -rf %{buildroot}
 - EA4-325: Make `ea-podman clean` report a backup directory, or an account's
   `~/ea-podman.d`, that it could not examine, and show a size it could not
   measure as unknown rather than 0 bytes
+- EA4-325: Stop `ea-podman clean` as root allocating subuid/subgid ranges for
+  every account on the server, even on a plain listing; it now only visits
+  accounts that have a `.bak` to report
 
 * Fri Sep 18 2026 Chris Castillo <chris.castillo@webpros.com> - 1.0-30
 - EA4-327: Bind web app container ports to loopback only
