@@ -257,8 +257,9 @@ stage_deploy() {
     run "install -m 0644 '$REPO/SOURCES/util.pm' /opt/cpanel/ea-podman/lib/ea_podman/util.pm"
     run "install '$REPO/SOURCES/ea-podman.pl' /opt/cpanel/ea-podman/bin/ea-podman.pl"
 
-    # The CLI is a compiled binary; editing the .pl alone changes nothing.
-    check "the CLI recompiles" "/opt/cpanel/ea-podman/bin/compile.sh 2>&1 | tail -5"
+    # The CLI is the same script, uncompiled since EA4-315; an older build's
+    # compiled binary at this path is simply replaced.
+    run "install -m 0755 '$REPO/SOURCES/ea-podman.pl' /opt/cpanel/ea-podman/bin/ea-podman"
 
     run "install -m 0644 '$REPO/SOURCES/$UNIT' /usr/lib/systemd/system/$UNIT"
     run "systemctl daemon-reload"

@@ -52,7 +52,7 @@
 #                        with an unrestricted shell takes the direct CLI
 #                        path, can't see its own /run/user/<uid> from
 #                        inside the cage, and must transparently fall
-#                        back to the UAPI bridge. Run the file once per
+#                        back to the bridge. Run the file once per
 #                        value to cover both entry points.
 #   EAPODMAN_TEST_USER   reuse an existing account (CageFS is enabled for
 #                        it and its prior state restored afterward).
@@ -86,6 +86,8 @@ my $EAP_LIB   = '/opt/cpanel/ea-podman/lib/ea_podman';
 my $UAPI_MOD  = '/usr/local/cpanel/Cpanel/API/EAPodman.pm';
 my $PORTAUTH  = '/usr/local/cpanel/scripts/cpuser_port_authority';
 my @CLI_PATHS = ( '/usr/local/cpanel/scripts/ea-podman', '/opt/cpanel/ea-podman/bin/ea-podman' );
+my $CPWRAPD_LOG  = '/usr/local/cpanel/logs/cpwrapd_log';
+my $ADMIN_MODULE = '/usr/local/cpanel/Cpanel/Admin/Modules/Cpanel/ea_podman.pm';
 
 my ($CAGEFSCTL) = grep { -x $_ } ( '/usr/sbin/cagefsctl', '/sbin/cagefsctl', '/usr/bin/cagefsctl' );
 
@@ -294,6 +296,10 @@ wait_for( sub { !-e "/run/user/$uid" }, 5 );
 my $CGROUP = -e '/sys/fs/cgroup/cgroup.controllers' ? 'v2' : 'v1';
 diag("Test user: $USER (uid=$uid), CageFS=enabled, cgroup=$CGROUP, image=$IMAGE, port=$PORT, driver=$DRIVER");
 
+# Where the cpwrapd access log stands now, so the EA4-315 checks at the end only
+# look at what this run logged.
+my $CPWRAPD_LOG_AT = -s $CPWRAPD_LOG // 0;
+
 # The raw combined output of the most recent _op_cli call — exposed so a test
 # can assert on incidental output (e.g. the CageFS fallback warning) without
 # every op() caller having to plumb it through.
@@ -328,7 +334,7 @@ sub _op_uapi {
 
 # Drive the CLI through the account's real login (run_via_login), so it
 # exercises the real cage → (bootstrap succeeds, but the runtime dir is
-# invisible) → fallback → adminbin/cpsrvd delegation path, then map its
+# invisible) → fallback → admin-action delegation path, then map its
 # textual output back onto the UAPI envelope.
 sub _op_cli {
     my ( $verb, %args ) = @_;
@@ -423,12 +429,13 @@ my $container;
     # The money assertion for CPANEL-54672: a real CageFS login with an
     # unrestricted shell takes the direct CLI path, can't see its own
     # /run/user/<uid> from inside the cage, and must transparently fall back
-    # to the UAPI bridge rather than failing outright.
+    # to the bridge (the ea_podman admin actions since EA4-315) rather than
+    # failing outright.
     if ( $DRIVER eq 'cli' ) {
         like(
             $LAST_CLI_OUTPUT // '',
-            qr/could not see this account.s rootless runtime directory directly.*retrying through the EAPodman UAPI/s,
-            "[cli] direct CLI hit the CageFS symptom and transparently fell back to the UAPI bridge"
+            qr/could not see this account.s rootless runtime directory directly.*retrying through the (?:EAPodman UAPI|ea-podman admin actions)/s,
+            "[cli] direct CLI hit the CageFS symptom and transparently fell back to the bridge"
         );
     }
 }
@@ -690,6 +697,16 @@ SKIP: {
     ok( !( $list->{data} && exists $list->{data}{$container} ), "uninstalled container no longer registered" );
 }
 
+#--- EA4-315: the delegated CLI goes through admin actions, no API token --
+SKIP: {
+    skip "only the CLI driver goes through the bridge", 2 if $DRIVER ne 'cli';
+    skip "installed ea-podman predates EA4-315 (no admin module)", 2 if !-e $ADMIN_MODULE;
+    my @functions = _cpwrapd_functions_since( $CPWRAPD_LOG_AT, $USER );
+    ok( scalar( grep { /^(?:INSTALL|LIST_CONTAINERS|UNINSTALL)$/ } @functions ), "[cli] the CLI reached the ea_podman lifecycle actions (cpwrapd_log)" )
+      or diag("ea_podman functions logged: @functions");
+    ok( !grep( { $_ eq 'MINT_API_TOKEN' } @functions ), "[cli] and minted no API token" );
+}
+
 done_testing();
 
 #---------------------------------------------------------------------
@@ -765,6 +782,15 @@ sub _redis_ping_over_tcp {
     sysread( $sock, $reply, 64 ) if $sel->can_read(5);
     close $sock;
     return $reply =~ /\+PONG/ ? 1 : 0;
+}
+
+# EA4-315: the ea_podman functions $user called through cpwrapd since $offset
+# bytes into its access log. The delegated CLI must never call MINT_API_TOKEN.
+sub _cpwrapd_functions_since {
+    my ( $offset, $user ) = @_;
+    open( my $fh, '<', $CPWRAPD_LOG ) or return;
+    seek( $fh, $offset, 0 );
+    return map { /\[function\]=\[([A-Z_]+)\]/ ? $1 : () } grep { /\[module\]=\[ea_podman\]/ && /\] \Q$user\E - / } <$fh>;
 }
 
 sub _sh {

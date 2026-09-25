@@ -39,10 +39,26 @@ as well as v2 (AlmaLinux 9/10 and Ubuntu 24.04, which default to v2).
 | Test | Scenario | Extra requirements |
 |------|----------|--------------------|
 | `normal-podman-live.t` | A **normal** account (unrestricted shell, not CageFS) manages containers via UAPI, and may also use the `ea-podman` CLI. | A live cPanel VM (cgroup v1 or v2). |
-| `jailshell-podman-live.t` | A cPanel account whose login shell is **jailshell** manages containers — via UAPI, and (with `EAPODMAN_DRIVER=cli`) via the `ea-podman` CLI, which delegates to the UAPI. | A live cPanel VM (cgroup v1 or v2). |
+| `jailshell-podman-live.t` | A cPanel account whose login shell is **jailshell** manages containers — via UAPI, and (with `EAPODMAN_DRIVER=cli`) via the `ea-podman` CLI, which delegates to the ea_podman admin module's lifecycle actions (EA4-315). | A live cPanel VM (cgroup v1 or v2). |
 | `cagefs-podman-live.t` | A **CloudLinux CageFS**-enabled account manages containers via UAPI. | CloudLinux (cgroup v1 or v2), with CageFS installed + initialized. |
 | `ea-memcached16-cli-live.t` | A **normal** account uses the `ea-podman` CLI directly (`install <PKG>` mode) to install a real EA4 container-based package, `ea-memcached16`. | A live cPanel VM (cgroup v1 or v2), with `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
-| `ea-memcached16-cagefs-cli-live.t` | Sister to the above, but the account is **CageFS**-enabled: the CLI is driven through a real CageFS login, exercising the CPANEL-54672 fallback to the UAPI bridge. | CloudLinux (cgroup v1 or v2), with CageFS installed + initialized, and `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
+| `ea-memcached16-cagefs-cli-live.t` | Sister to the above, but the account is **CageFS**-enabled: the CLI is driven through a real CageFS login, exercising the CPANEL-54672 fallback to the bridge (the ea_podman admin actions since EA4-315). | CloudLinux (cgroup v1 or v2), with CageFS installed + initialized, and `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
+
+| `ea4-315-admin-module-live.t` | The EA4-315 contract: the adminbin became the `Cpanel::Admin::Modules::Cpanel::ea_podman` admin module and the CLI is no longer compiled, with nothing outside ea-podman changing how it calls in. Checks packaging, that an uncompiled caller gets through with the parent check enforced, the legacy actions' return shapes and error text, the lifecycle actions from inside a real jail (and that no API token is minted), the `ea_podman` feature gate and its cleanup carve-outs, demo refusal, and — with `EAPODMAN_UPGRADE_FROM`/`_TO` — an in-place upgrade from the previous package with a running container. | A live cPanel VM (rpm or deb). Creates two throwaway accounts, and temporarily moves `/var/cpanel/skipparentcheck`, adds a feature list and package, and sets `DEMO` on an account; all undone at the end. |
+
+The CLI-driving tests above also check `cpwrapd_log` for the delegated CLI going
+through the lifecycle actions without ever calling `MINT_API_TOKEN` (skipped on
+an ea-podman that predates EA4-315).
+
+### Suggested boxes for EA4-315
+
+Each row is one fresh VM:
+
+| Box | Run |
+|---|---|
+| AlmaLinux 9, cPanel release tier (rpm, cgroup v2) | `ea4-315-admin-module-live.t` with `EAPODMAN_UPGRADE_FROM`/`_TO` set to the previous and new rpm; `normal-podman-live.t`; `jailshell-podman-live.t` with both `EAPODMAN_DRIVER=uapi` and `=cli`; `ea-memcached16-cli-live.t` |
+| CloudLinux 8 with CageFS (cgroup v1, hidepid=2) | `ea4-315-admin-module-live.t`, `cagefs-podman-live.t` (both drivers), `ea-memcached16-cagefs-cli-live.t` |
+| Ubuntu 24.04 (deb) | `ea4-315-admin-module-live.t` with `EAPODMAN_UPGRADE_FROM`/`_TO` set to the previous and new deb |
 
 ### EA4-319 in the two cagefs `.t` files
 
@@ -151,7 +167,8 @@ code, this one drives ea-podman itself.
    ships the unit, and that systemd accepts the unit file. Changes nothing, so it
    runs anywhere including a dev checkout.
 2. **deploy** — installs the changed `subids.pm`/`util.pm`/`ea-podman.pl` over
-   the installed ea-podman, recompiles the CLI, and enables the unit. Lets a box
+   the installed ea-podman (including `bin/ea-podman`, which is no longer
+   compiled), and enables the unit. Lets a box
    be tested without waiting on an OBS build; it is deliberately *not* a test of
    packaging, which is what the `pkg` stage is for.
 3. **smoke** — the verb is registered, is refused to non-root, and no-ops on a

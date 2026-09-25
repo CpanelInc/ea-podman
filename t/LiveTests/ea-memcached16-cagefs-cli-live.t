@@ -16,8 +16,8 @@
 # entered at the PAM/login layer, so a real login running the direct CLI
 # cannot see its own /run/user/<uid> (rootless podman's runtime dir) from
 # inside the cage. Per CPANEL-54672, ea-podman.pl catches that exact symptom
-# and transparently falls back to the same EAPodman UAPI bridge jailshell
-# accounts use — so `ea-podman install ea-memcached16` still works from a
+# and transparently falls back to the same bridge jailshell accounts use
+# (the ea_podman admin module's lifecycle actions since EA4-315) — so `ea-podman install ea-memcached16` still works from a
 # real CageFS login, it just takes one extra hop under the hood.
 #
 # Everything else here mirrors t/LiveTests/ea-memcached16-cli-live.t: same
@@ -90,6 +90,8 @@ my $BASH = '/bin/bash';    # an unrestricted login shell
 my $WHMAPI    = '/usr/local/cpanel/bin/whmapi1';
 my $EAP_LIB   = '/opt/cpanel/ea-podman/lib/ea_podman';
 my @CLI_PATHS = ( '/usr/local/cpanel/scripts/ea-podman', '/opt/cpanel/ea-podman/bin/ea-podman' );
+my $CPWRAPD_LOG  = '/usr/local/cpanel/logs/cpwrapd_log';
+my $ADMIN_MODULE = '/usr/local/cpanel/Cpanel/Admin/Modules/Cpanel/ea_podman.pm';
 
 my $PKG_DIR = "/opt/cpanel/$PKG";
 
@@ -143,6 +145,15 @@ sub wait_for {
         select( undef, undef, undef, 0.1 );
     }
     return $predicate->();
+}
+
+# EA4-315: the ea_podman functions $user called through cpwrapd since $offset
+# bytes into its access log. The delegated CLI must never call MINT_API_TOKEN.
+sub _cpwrapd_functions_since {
+    my ( $offset, $user ) = @_;
+    open( my $fh, '<', $CPWRAPD_LOG ) or return;
+    seek( $fh, $offset, 0 );
+    return map { /\[function\]=\[([A-Z_]+)\]/ ? $1 : () } grep { /\[module\]=\[ea_podman\]/ && /\] \Q$user\E - / } <$fh>;
 }
 
 sub _sh {
@@ -303,6 +314,10 @@ wait_for( sub { !-e "/run/user/$uid" }, 5 );
 
 diag("Test user: $USER (uid=$uid), CageFS=enabled, cgroup=$CGROUP, package=$PKG");
 
+# Where the cpwrapd access log stands now, so the EA4-315 checks at the end only
+# look at what this run logged.
+my $CPWRAPD_LOG_AT = -s $CPWRAPD_LOG // 0;
+
 #=====================================================================
 # the tests
 #=====================================================================
@@ -355,11 +370,12 @@ my $container;
     # The money assertion for CPANEL-54672: a real CageFS login with an
     # unrestricted shell takes the direct CLI path, can't see its own
     # /run/user/<uid> from inside the cage, and must transparently fall back
-    # to the UAPI bridge rather than failing outright.
+    # to the bridge (the ea_podman admin actions since EA4-315) rather than
+    # failing outright.
     like(
         $out,
-        qr/could not see this account.s rootless runtime directory directly.*retrying through the EAPodman UAPI/s,
-        "direct CLI hit the CageFS symptom and transparently fell back to the UAPI bridge"
+        qr/could not see this account.s rootless runtime directory directly.*retrying through the (?:EAPodman UAPI|ea-podman admin actions)/s,
+        "direct CLI hit the CageFS symptom and transparently fell back to the bridge"
     );
 }
 
@@ -565,6 +581,15 @@ ok( wait_for( sub { _memcached_serving_via_socket($USER) }, 45 ), "memcached ans
     ( $rc, $out ) = run_via_login( $USER, _sh($CLI) . " list" );
     my $decoded = _decode_json_loose($out);
     ok( !( $decoded && exists $decoded->{$container} ), "uninstalled container no longer registered" );
+}
+
+#--- EA4-315: the delegated CLI goes through admin actions, no API token --
+SKIP: {
+    skip "installed ea-podman predates EA4-315 (no admin module)", 2 if !-e $ADMIN_MODULE;
+    my @functions = _cpwrapd_functions_since( $CPWRAPD_LOG_AT, $USER );
+    ok( scalar( grep { /^(?:INSTALL|LIST_CONTAINERS|UNINSTALL)$/ } @functions ), "the CLI reached the ea_podman lifecycle actions (cpwrapd_log)" )
+      or diag("ea_podman functions logged: @functions");
+    ok( !grep( { $_ eq 'MINT_API_TOKEN' } @functions ), "and minted no API token" );
 }
 
 done_testing();
