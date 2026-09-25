@@ -164,10 +164,13 @@ sub uapi_errors {
 }
 
 # As $user, without the login shell, with the rootless podman env primed.
+# A non-login su keeps root's environment, so drop what would point the
+# account's perl at root's paths (`prove -l` exports PERL5LIB=/root/lib, which
+# the account cannot read, and perl dies on that).
 sub run_as_user {
     my ( $user, $cmd ) = @_;
     my $uid = ( getpwnam($user) )[2];
-    my $env = "export XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus HOME=\"\$(getent passwd $user | cut -d: -f6)\"; cd \"\$HOME\" 2>/dev/null;";
+    my $env = "unset PERL5LIB PERLLIB PERL5OPT; export XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus HOME=\"\$(getent passwd $user | cut -d: -f6)\"; cd \"\$HOME\" 2>/dev/null;";
     return run_cmd( 'su', '-s', '/bin/bash', $user, '-c', "$env $cmd" );
 }
 
@@ -345,8 +348,27 @@ sub set_demo {
     open( $fh, '>', $file ) or return 0;
     print {$fh} @lines;
     close $fh;
+
+    # The cached copy is trusted while it is not older than the file; an edit
+    # within the same second would go unseen, so drop it.
+    unlink "/var/cpanel/users.cache/$user";
     $on ? ( $DEMO_SET{$user} = 1 ) : delete $DEMO_SET{$user};
     return 1;
+}
+
+# changepackage applies the package's shell setting; put back the shells the
+# scenarios depend on (a normal shell, and jailshell).
+sub restore_shells {
+    run_cmd( '/usr/sbin/usermod', '-s', '/bin/bash', $NUSER ) if $NUSER;
+    run_cmd( '/usr/sbin/usermod', '-s', $JAILSHELL,  $JUSER ) if $JUSER;
+    return;
+}
+
+sub change_package {
+    my ( $user, $pkg ) = @_;
+    my $ok = whmapi( 'changepackage', "user=$user", "pkg=$pkg" );
+    restore_shells();
+    return $ok;
 }
 
 sub account_plan {
@@ -665,22 +687,28 @@ subtest 'the ea_podman feature' => sub {
     $ORIG_PLAN{$_} = account_plan($_) // 'default' for $NUSER, $JUSER;
 
     # A feature list an administrator saved before ea_podman existed: it does
-    # not mention the feature at all, which must leave it on.
-    ok( whmapi( 'create_featurelist', "featurelist=$LEGACY_LIST", 'webdisk=0' ), "created feature list $LEGACY_LIST, which predates (does not mention) ea_podman" );
+    # not mention the feature at all, which must leave it on. Written by hand
+    # because create_featurelist (like WHM's Feature Manager) writes every
+    # feature it knows about, recording the ones not ticked as =0 -- so a list
+    # created now would say ea_podman=0, which is not what an old list says.
+    my $legacy_file = "/var/cpanel/features/$LEGACY_LIST";
+    ok( open( my $lfh, '>', $legacy_file ), "wrote feature list $LEGACY_LIST, which predates (does not mention) ea_podman" );
+    print {$lfh} "webdisk=0\n";
+    close $lfh;
     $MADE_FEATURELIST{$LEGACY_LIST} = 1;
-    ok( whmapi( 'addpkg', "name=$LEGACY_PKG", "featurelist=$LEGACY_LIST" ), "created package $LEGACY_PKG using it" );
+    ok( whmapi( 'addpkg', "name=$LEGACY_PKG", "featurelist=$LEGACY_LIST", 'hasshell=1' ), "created package $LEGACY_PKG using it" );
     $MADE_PACKAGE{$LEGACY_PKG} = 1;
-    ok( whmapi( 'changepackage', "user=$NUSER", "pkg=$LEGACY_PKG" ), "moved $NUSER onto it" );
+    ok( change_package( $NUSER, $LEGACY_PKG ), "moved $NUSER onto it" );
     my $ens = admin_call( $NUSER, 'ENSURE_USER', [1] );
     ok( $ens->{ok}, '... and a create-type action is still allowed' ) or diag explain $ens;
 
     ok( whmapi( 'create_featurelist', "featurelist=$FEATURELIST", 'ea_podman=0' ), "created feature list $FEATURELIST with ea_podman off" );
     $MADE_FEATURELIST{$FEATURELIST} = 1;
-    ok( whmapi( 'addpkg', "name=$PACKAGE", "featurelist=$FEATURELIST" ), "created package $PACKAGE using it" );
+    ok( whmapi( 'addpkg', "name=$PACKAGE", "featurelist=$FEATURELIST", 'hasshell=1' ), "created package $PACKAGE using it" );
     $MADE_PACKAGE{$PACKAGE} = 1;
 
     for my $user ( $NUSER, $JUSER ) {
-        ok( whmapi( 'changepackage', "user=$user", "pkg=$PACKAGE" ), "moved $user onto it" );
+        ok( change_package( $user, $PACKAGE ), "moved $user onto it" );
     }
 
     $ens = admin_call( $NUSER, 'ENSURE_USER', [1] );
@@ -713,7 +741,7 @@ subtest 'the ea_podman feature' => sub {
     delete $CONTAINERS{$ncontainer};
 
     for my $user ( $NUSER, $JUSER ) {
-        ok( whmapi( 'changepackage', "user=$user", "pkg=$ORIG_PLAN{$user}" ), "moved $user back to $ORIG_PLAN{$user}" );
+        ok( change_package( $user, $ORIG_PLAN{$user} ), "moved $user back to $ORIG_PLAN{$user}" );
         delete $ORIG_PLAN{$user};
     }
 };
