@@ -54,6 +54,29 @@ sub with_mocks {
 }
 
 #-----------------------------------------------------------------------
+# The ea_podman feature
+#-----------------------------------------------------------------------
+
+# The same split as the admin module's actions: what creates or runs something
+# needs the feature, what only reads or removes the caller's own state does
+# not. start and restart would otherwise go ungated: they reach the admin
+# module only through ENSURE_USER(0). Nothing is allowed in demo mode.
+{
+    no warnings 'once';
+    my %api = %Cpanel::API::EAPodman::API;
+
+    is_deeply( [ sort keys %api ], [qw(cmd install list restart start status stop uninstall upgrade)], 'the UAPI verbs' );
+
+    for my $verb (qw(install upgrade start restart cmd)) {
+        is( $api{$verb}{needs_feature}, 'ea_podman', "$verb needs the ea_podman feature" );
+    }
+    for my $verb (qw(list status stop uninstall)) {
+        ok( !$api{$verb}{needs_feature}, "$verb does not" );
+    }
+    ok( !$api{$_}{allow_demo}, "$_ is not allowed in demo mode" ) for sort keys %api;
+}
+
+#-----------------------------------------------------------------------
 # The UAPI wrappers
 #-----------------------------------------------------------------------
 

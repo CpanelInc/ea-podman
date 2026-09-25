@@ -63,7 +63,10 @@ my %MEDIUM_RUNNING = map { $_ => 350 } qw(START STOP RESTART STATUS UNINSTALL CM
 
 use constant _actions => (
 
-    # the legacy bin's actions, unchanged
+    # the legacy bin's actions, unchanged, less MINT_API_TOKEN and
+    # REVOKE_API_TOKEN: with any caller allowed, the first would hand a
+    # full-access API token to any process the account owns, and nothing calls
+    # either any more (EA4-314)
     qw(
       LIST
       GIVE
@@ -73,8 +76,6 @@ use constant _actions => (
       REGISTER
       DEREGISTER
       REGISTERED_CONTAINERS
-      MINT_API_TOKEN
-      REVOKE_API_TOKEN
       EXEC_IN_CONTAINER
     ),
 
@@ -295,50 +296,6 @@ sub REGISTERED_CONTAINERS ($self) {
     my $cpuser = $self->_debug_and_user();
 
     return $self->_own_registered_containers($cpuser);
-}
-
-# Gated by the feature today; scoping it down or removing it (and the apitokens
-# question) is EA4-314. The ea-podman CLI no longer calls it.
-sub MINT_API_TOKEN ($self) {
-    my $cpuser = $self->_debug_and_user();
-    $self->cpuser_has_feature_or_die(FEATURE);
-
-    # Mint a short-lived cPanel API token for THIS caller (peer-cred trusted,
-    # never an arbitrary user). `uapi --user` is root-only. See CPANEL-54037.
-    my $name = "ea_podman_cli_${$}_" . time;
-
-    require Cpanel::SafeRun::Object;
-    my $run = Cpanel::SafeRun::Object->new(
-        program => '/usr/local/cpanel/bin/uapi',
-        args    => [ "--user=$cpuser", '--output=json', 'Tokens', 'create_full_access', "name=$name" ],
-    );
-    _die_with_message("Could not create an API token") if $run->CHILD_ERROR;
-
-    my $resp = eval { Cpanel::JSON::Load( $run->stdout ) };
-    _die_with_message("Could not parse the API-token response") if !$resp;
-
-    my $r = $resp->{result} || {};
-    if ( !$r->{status} ) {
-        _die_with_message( "API token creation failed: " . join( "; ", @{ $r->{errors} || ['unknown error'] } ) );
-    }
-
-    return { name => $name, token => $r->{data}{token} };
-}
-
-# Not feature-gated (removes own state): revokes one of the caller's own
-# ea_podman_cli_ tokens.
-sub REVOKE_API_TOKEN ( $self, $name = undef ) {
-    my $cpuser = $self->_debug_and_user();
-
-    # Best-effort cleanup of the one-shot token; only ever our own.
-    return 0 if !defined $name || $name !~ /^ea_podman_cli_/;
-
-    require Cpanel::SafeRun::Object;
-    Cpanel::SafeRun::Object->new(
-        program => '/usr/local/cpanel/bin/uapi',
-        args    => [ "--user=$cpuser", '--output=json', 'Tokens', 'revoke', "name=$name" ],
-    );
-    return 1;
 }
 
 sub EXEC_IN_CONTAINER ( $self, $container_name = undef, $cd = undef, @cmd_argv ) {
@@ -634,7 +591,9 @@ __END__
 =head2 Legacy actions
 
 Carried over from the C<bin/admin/Cpanel/ea_podman> script with the same
-arguments and returns.
+arguments and returns, except MINT_API_TOKEN and REVOKE_API_TOKEN, which are
+gone (EA4-314): the CLI no longer needs an API token, and with C<_allowed_parents>
+at C<*> minting one would hand it to any process the account owns.
 
 =over
 
@@ -688,11 +647,6 @@ Removes the caller's own registered container from the list.
 
 Hashref of the caller’s registry entries, keyed by container name.
 
-=item MINT_API_TOKEN / REVOKE_API_TOKEN( $NAME )
-
-Mints (and revokes) a short-lived full-access API token for the caller. No
-longer used by the ea-podman CLI; kept until EA4-314 removes or scopes it down.
-
 =item EXEC_IN_CONTAINER( $CONTAINER_NAME, $CD, @ARGV )
 
 Runs one non-interactive command in the caller's registered container, entering
@@ -727,14 +681,13 @@ returns what that verb puts in its result's C<data>.
 
 Every action acts only for the peer-credential caller. Actions that create or
 run something require the C<ea_podman> feature: GIVE, REGISTER, ENSURE_USER when
-C<$CREATING>, EXEC_IN_CONTAINER, MINT_API_TOKEN, INSTALL, UPGRADE, START,
-RESTART and CMD.
+C<$CREATING>, EXEC_IN_CONTAINER, INSTALL, UPGRADE, START, RESTART and CMD.
 
 The rest only read or remove the caller's own state, and are deliberately not
 feature-gated so an account whose feature is turned off can still see and remove
 what it has without leaking ports, registry entries or a lingering session:
 LIST, TAKE, ENSURE_USER(0), RELEASE_USER, DEREGISTER, REGISTERED_CONTAINERS,
-REVOKE_API_TOKEN, LIST_CONTAINERS, UNINSTALL, STOP and STATUS. This is a
+LIST_CONTAINERS, UNINSTALL, STOP and STATUS. This is a
 considered exception to the "feature gate on every action" rule in
 F<docs/security/surfaces/admin-bins.md>, not its shared-state ownership
 carve-out: every one of them is still scoped to the caller's own resources.
@@ -780,12 +733,6 @@ C<webapp> is stored as a boolean and not updatable. Feature-gated.
 
 A command in its own registered container, re-mapped to the container's root
 (the account's own uid). Feature-gated.
-
-=item MINT_API_TOKEN
-
-A full-access API token for itself — the one action that grants something the
-account does not otherwise hold when the C<apitokens> feature is off.
-Feature-gated here; EA4-314 removes or scopes it.
 
 =item INSTALL, UPGRADE, UNINSTALL, START, STOP, RESTART
 

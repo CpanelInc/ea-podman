@@ -160,6 +160,7 @@ rm -rf %{buildroot}
 - EA4-315: Route jailshell and CageFS CLI commands through admin actions
   instead of a full-access API token
 - EA4-315: Add the ea_podman feature
+- EA4-315: Remove the MINT_API_TOKEN and REVOKE_API_TOKEN admin actions
 
 * Fri Sep 18 2026 Chris Castillo <chris.castillo@webpros.com> - 1.0-30
 - EA4-327: Bind web app container ports to loopback only

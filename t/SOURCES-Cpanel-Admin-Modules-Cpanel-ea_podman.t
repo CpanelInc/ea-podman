@@ -62,12 +62,22 @@ $| = 1;
 
 describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
     describe "_actions" => sub {
-        it "should keep every legacy action, in order, then the lifecycle actions" => sub {
+        it "should keep every legacy action but the API-token pair, in order, then the lifecycle actions" => sub {
             my @ret = Cpanel::Admin::Modules::Cpanel::ea_podman::_actions();
             is_deeply \@ret, [
-                qw(LIST GIVE TAKE ENSURE_USER RELEASE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS MINT_API_TOKEN REVOKE_API_TOKEN EXEC_IN_CONTAINER),
+                qw(LIST GIVE TAKE ENSURE_USER RELEASE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS EXEC_IN_CONTAINER),
                 qw(LIST_CONTAINERS INSTALL UPGRADE UNINSTALL START STOP RESTART STATUS CMD),
             ];
+        };
+
+        # With _allowed_parents at '*', MINT_API_TOKEN would hand a full-access
+        # API token to any process the account owns. (EA4-314)
+        it "should not offer the API-token actions" => sub {
+            my %actions = map { $_ => 1 } Cpanel::Admin::Modules::Cpanel::ea_podman::_actions();
+            for my $action (qw(MINT_API_TOKEN REVOKE_API_TOKEN)) {
+                ok( !$actions{$action},                                       "$action is not an action" );
+                ok( !Cpanel::Admin::Modules::Cpanel::ea_podman->can($action), '... and is not defined' );
+            }
         };
     };
 
@@ -603,7 +613,6 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
             [ REGISTER          => 'container.cptest1.01' ],
             [ ENSURE_USER       => 1 ],
             [ EXEC_IN_CONTAINER => 'container.cptest1.01', '', 'true' ],
-            [ MINT_API_TOKEN    => () ],
             [ INSTALL           => { name           => 'ea-memcached16' } ],
             [ UPGRADE           => { container_name => 'container.cptest1.01' } ],
             [ START             => { container_name => 'container.cptest1.01' } ],
@@ -633,7 +642,6 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
             [ RELEASE_USER          => () ],
             [ DEREGISTER            => 'container.cptest1.01' ],
             [ REGISTERED_CONTAINERS => () ],
-            [ REVOKE_API_TOKEN      => 'not_ours' ],
             [ LIST_CONTAINERS       => () ],
             [ UNINSTALL             => { container_name => 'container.cptest1.01' } ],
             [ STOP                  => { container_name => 'container.cptest1.01' } ],

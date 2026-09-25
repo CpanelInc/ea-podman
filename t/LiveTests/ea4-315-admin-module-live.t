@@ -11,7 +11,7 @@
 # WHAT THIS PROVES. The ea_podman adminbin became an in-process admin module
 # (Cpanel::Admin::Modules::Cpanel::ea_podman), the CLI stopped being compiled,
 # and jailshell/CageFS CLI commands moved from a full-access API token onto
-# new lifecycle admin actions. The promise is that nothing outside ea-podman
+# new lifecycle admin actions, so the token actions are gone. The promise is that nothing outside ea-podman
 # has to change how it calls in. This checks that promise on a real server:
 #
 #   1. packaging   - the module is installed; the legacy bin, compile.sh and
@@ -21,14 +21,17 @@
 #                    uncompiled perl process reaches ea_podman while a
 #                    default-parents core module (Cpanel/user) refuses it.
 #   3. old callers - the legacy call('Cpanel','ea_podman',ACTION,...) triple,
-#                    return shapes, and error text (not bare error IDs).
+#                    return shapes, and error text (not bare error IDs); the
+#                    token actions refused and no token minted.
 #   4. lifecycle   - from inside a real jail: INSTALL ... UNINSTALL through
 #                    the new actions, redis actually serving, ports and the
 #                    registry cleaned up, other accounts' containers refused,
 #                    and no API token minted (cpwrapd_log).
 #   5. feature     - untouched, everything works; with ea_podman=0 in the
 #                    account's feature list, installs are refused through the
-#                    UAPI, the admin action and the CLI, and uninstall works.
+#                    UAPI, the admin action and the CLI, start/restart/cmd
+#                    through the UAPI and the admin actions, and stop and
+#                    uninstall work.
 #   6. demo        - a demo account is refused.
 #   7. upgrade     - OPTIONAL, with EAPODMAN_UPGRADE_FROM/_TO: old package
 #                    with a live container, upgraded in place.
@@ -157,6 +160,10 @@ sub uapi {
     die "uapi $func: could not parse JSON (exit $rc):\nSTDOUT:\n$out\nSTDERR:\n$err\n" if !$decoded;
     return $decoded->{result} // $decoded;
 }
+
+# The UAPI declares the feature on the verbs that need it, so cpsrvd refuses
+# them before the admin module's own "must enable" check is ever reached.
+my $UAPI_NO_FEATURE = qr/do not have the feature\b.*ea_podman/i;
 
 sub uapi_errors {
     my ($res) = @_;
@@ -564,8 +571,15 @@ subtest 'outside callers see the legacy actions unchanged' => sub {
     $res = admin_call( $NUSER, 'RELEASE_USER', [] );
     ok( $res->{ok}, 'RELEASE_USER' ) or diag explain $res;
 
-    $res = admin_call( $NUSER, 'REVOKE_API_TOKEN', ['not_ours'] );
-    ok( $res->{ok} && !$res->{data}, 'REVOKE_API_TOKEN ignores a name that is not ours' ) or diag explain $res;
+    # Gone (EA4-314): any process the account owns may call this module, so a
+    # MINT_API_TOKEN would hand it a full-access API token.
+    for my $action (qw(MINT_API_TOKEN REVOKE_API_TOKEN)) {
+        $res = admin_call( $NUSER, $action, $action eq 'REVOKE_API_TOKEN' ? ['ea_podman_cli_1_1'] : [] );
+        ok( !$res->{ok}, "$action is refused" ) or diag explain $res;
+    }
+    my ( $trc, $tres ) = run_json( $UAPI, "--user=$NUSER", '--output=json', 'Tokens', 'list' );
+    my @tokens = map { $_->{name} // '' } @{ ( $tres && $tres->{result}{data} ) || [] };
+    ok( !grep( { /^ea_podman_cli_/ } @tokens ), '... and no ea_podman_cli_ token was minted' ) or diag "@tokens";
 
     $res = admin_call( $NUSER, 'GIVE', [ 1, 'not a container name' ] );
     ok( !$res->{ok}, 'GIVE with a bad container name fails' );
@@ -721,7 +735,7 @@ subtest 'the ea_podman feature' => sub {
 
     my $res = uapi( $NUSER, 'install', "name=${CBASE}x", "image=$IMAGE", "cpuser_port=$PORT", 'accept_arbitrary_image_risk=1' );
     ok( !$res->{status}, 'UAPI install is refused' );
-    like( uapi_errors($res), qr/must enable/i, '... with the feature message' );
+    like( uapi_errors($res), $UAPI_NO_FEATURE, '... with the feature message' );
 
     $res = admin_call( $NUSER, 'INSTALL', [ { name => "${CBASE}x", image => $IMAGE, accept_arbitrary_image_risk => 1 } ] );
     like( $res->{error} // '', qr/must enable/i, 'the INSTALL action is refused with the feature message' );
@@ -732,6 +746,29 @@ subtest 'the ea_podman feature' => sub {
 
     $res = uapi( $NUSER, 'list' );
     ok( $res->{status} && exists $res->{data}{$ncontainer}, 'listing still works without the feature' );
+
+    # start and restart reach the admin module only through the ungated
+    # ENSURE_USER(0), so the UAPI has to refuse them itself.
+    $res = uapi( $NUSER, 'stop', "container_name=$ncontainer" );
+    ok( $res->{status},                                                    'UAPI stop still works without the feature' ) or diag uapi_errors($res);
+    ok( wait_for( sub { !container_running( $NUSER, $ncontainer ) }, 30 ), '... the container is stopped' );
+
+    for my $verb (qw(start restart)) {
+        $res = uapi( $NUSER, $verb, "container_name=$ncontainer" );
+        ok( !$res->{status}, "UAPI $verb of the stopped container is refused" );
+        like( uapi_errors($res), $UAPI_NO_FEATURE, '... with the feature message' );
+
+        $res = admin_call( $NUSER, uc $verb, [ { container_name => $ncontainer } ] );
+        like( $res->{error} // '', qr/must enable/i, "the \U$verb\E action is refused with the feature message" );
+    }
+    ok( !container_running( $NUSER, $ncontainer ), '... and it is still stopped' );
+
+    $res = uapi( $NUSER, 'cmd', "container_name=$ncontainer", 'arg=true' );
+    ok( !$res->{status}, 'UAPI cmd is refused' );
+    like( uapi_errors($res), $UAPI_NO_FEATURE, '... with the feature message' );
+
+    $res = uapi( $NUSER, 'status', "container_name=$ncontainer" );
+    ok( $res->{status}, 'UAPI status still works without the feature' ) or diag uapi_errors($res);
 
     $res = uapi( $NUSER, 'uninstall', "container_name=$ncontainer" );
     ok( $res->{status},                                                    'uninstall still works without the feature (the cleanup carve-out)' ) or diag uapi_errors($res);

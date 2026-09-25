@@ -58,11 +58,11 @@ to call it. See `DESIGN.md` for the internals.
   ("EA4 - Containers (ea-podman)" in WHM's Feature Manager). It is on for every
   account unless a feature list turns it off (a list saved before the feature
   existed leaves it on). With it off, `install`, `upgrade` and `cmd` are
-  refused on every path; `list`, `status`, `stop` and `uninstall` keep working
-  so an account can still see and remove what it has. `start` and `restart` are
-  refused through a jailshell/CageFS `ea-podman` CLI but, for now, still allowed
-  through this UAPI, which declares no feature of its own (TI-205). (EA4-315;
-  the gate lives in the ea-podman admin module these verbs call into.)
+  refused on every path, and `start` and `restart` through this UAPI and a
+  jailshell/CageFS `ea-podman` CLI; `list`, `status`, `stop` and `uninstall`
+  keep working so an account can still see and remove what it has. (EA4-315;
+  this UAPI declares the feature on those verbs, and the ea-podman admin
+  module enforces it on its actions of the same name.)
 
 > **Host recommendation — cgroups:** ea-podman manages containers through the
 > user's `systemd` manager and runs on either cgroup hierarchy; bring-up and

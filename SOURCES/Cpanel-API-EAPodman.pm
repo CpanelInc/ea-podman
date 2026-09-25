@@ -55,22 +55,26 @@ sub _require_ea_podman_or_die {
 
 # NOTE (gating): UAPI requires an authenticated cpsrvd session (or API token)
 # for the calling cPanel user, and every operation acts only on that user's
-# own containers — the same trust level as the existing ea-podman adminbin. A
-# dedicated feature/role ACL for container management is a product decision
-# (TI-205) and intentionally not invented here.
-my $mutating     = {};
-my $non_mutating = { allow_demo => 0 };
+# own containers. The verbs that create or run something also need the
+# ea_podman feature, matching the ea_podman admin module's actions of the same
+# name; the ones that only read or remove the caller's own state do not, so an
+# account whose feature is turned off can still see and remove what it has.
+# start and restart need the gate here: they reach the admin module only
+# through the ungated ENSURE_USER(0). (EA4-315)
+my $feature_gated = { needs_feature => 'ea_podman' };
+my $mutating      = {};
+my $non_mutating  = { allow_demo => 0 };
 
 our %API = (
     list      => $non_mutating,
-    install   => $mutating,
-    upgrade   => $mutating,
+    install   => $feature_gated,
+    upgrade   => $feature_gated,
     uninstall => $mutating,
-    start     => $mutating,
+    start     => $feature_gated,
     stop      => $mutating,
-    restart   => $mutating,
+    restart   => $feature_gated,
     status    => $non_mutating,
-    cmd       => $mutating,
+    cmd       => $feature_gated,
 );
 
 =head1 FUNCTIONS
