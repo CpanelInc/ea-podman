@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 30
+%define release_prefix 31
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -21,16 +21,11 @@ Source0:        ea-podman.pl
 Source1:        subids.pm
 Source2:        util.pm
 
-Source3:       ea-podman-adminbin
-Source4:       ea-podman-adminbin.conf
-
 Source5:       pkg.postinst
 Source6:       pkg.prerm
-Source7:       compile.sh
 Source8:       PodmanHooks.pm
 Source9:       pkg.preinst
 Source10:      _update-public-hub-to-internal-hub
-Source11:      EAPodman.pm
 Source12:      Cpanel-API-EAPodman.pm
 
 # OpenAPI documents for the EAPodman UAPI verbs; shipped next to the module in
@@ -53,18 +48,15 @@ Source22:      webapp-dir-setup
 # needs. Only actually necessary where `user@.service` is masked (CageFS 7.6.39+
 # / CloudLinux CLOS-4517), but it is a cheap no-op everywhere else. (EA4-319)
 Source23:      ea-podman-user-managers.service
-%if 0%{?rhel} == 8
-Requires:       gcc-toolset-11
-%endif
 
-%if 0%{?rhel} == 9
-Requires:       gcc >= 11
-%endif
+# The root-side actions, as an in-process cpsrvd admin module. Replaces the
+# bin/admin/Cpanel/ea_podman script under the same call name, so nothing that
+# calls in changes; lets the CLI ship uncompiled (no perlcc). (EA4-315)
+Source24:      Cpanel-Admin-Modules-Cpanel-ea_podman.pm
 
-%if 0%{?rhel} >= 8
-Requires:       libnsl2
-Requires:       libnsl2-devel
-%endif
+# The ea_podman feature that gates creating and running containers. Enabled
+# for every account until an administrator disables it. (EA4-315)
+Source25:      ea-podman.addonfeature
 
 %description
 Ensures container based EA4 packages have podman available as well as any common helpers.
@@ -84,9 +76,6 @@ echo "Nothing to build"
 mkdir -p %{buildroot}/usr/local/cpanel/scripts
 ln -s /opt/cpanel/ea-podman/bin/ea-podman %{buildroot}/usr/local/cpanel/scripts/ea-podman
 
-mkdir -p %{buildroot}/usr/local/cpanel/install
-install %{SOURCE11} %{buildroot}/usr/local/cpanel/install/EAPodman.pm
-
 mkdir -p %{buildroot}/usr/local/cpanel/Cpanel/API
 install %{SOURCE12} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman.pm
 
@@ -103,21 +92,22 @@ install -p -m 0644 %{SOURCE21} %{buildroot}/usr/local/cpanel/Cpanel/API/EAPodman
 
 mkdir -p %{buildroot}/opt/cpanel/ea-podman/bin
 install %{SOURCE0} %{buildroot}/opt/cpanel/ea-podman/bin/ea-podman.pl
+# The CLI itself, uncompiled. The same script under the path everything
+# already calls (EA4 packages' prerm, /scripts/ea-podman). (EA4-315)
+install -m 0755 %{SOURCE0} %{buildroot}/opt/cpanel/ea-podman/bin/ea-podman
 install %{SOURCE10} %{buildroot}/opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub
 
 mkdir -p %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman
 install %{SOURCE1} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/subids.pm
 install %{SOURCE2} %{buildroot}/opt/cpanel/ea-podman/lib/ea_podman/util.pm
 
-cp -f %{SOURCE3} .
-cp -f %{SOURCE4} .
 cp -f %{SOURCE8} .
 
-mkdir -p %{buildroot}/usr/local/cpanel/bin/admin/Cpanel
-install -p %{SOURCE3} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman
-install -p %{SOURCE4} %{buildroot}/usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
+mkdir -p %{buildroot}/usr/local/cpanel/Cpanel/Admin/Modules/Cpanel
+install -p -m 0644 %{SOURCE24} %{buildroot}/usr/local/cpanel/Cpanel/Admin/Modules/Cpanel/ea_podman.pm
 
-install %{SOURCE7} %{buildroot}/opt/cpanel/ea-podman/bin
+mkdir -p %{buildroot}/usr/local/cpanel/whostmgr/addonfeatures
+install -p -m 0644 %{SOURCE25} %{buildroot}/usr/local/cpanel/whostmgr/addonfeatures/ea_podman
 
 install %{SOURCE22} %{buildroot}/opt/cpanel/ea-podman/webapp-dir-setup
 
@@ -144,14 +134,13 @@ rm -rf %{buildroot}
 %ghost /opt/cpanel/ea-podman/user-manager-mask.lock
 %ghost /opt/cpanel/ea-podman/user-manager-mask.state
 /usr/local/cpanel/scripts/ea-podman
-%attr(0755,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman
-%attr(0744,root,root) /usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
+%attr(0755,root,root) /opt/cpanel/ea-podman/bin/ea-podman
+%attr(0644,root,root) /usr/local/cpanel/Cpanel/Admin/Modules/Cpanel/ea_podman.pm
+%attr(0644,root,root) /usr/local/cpanel/whostmgr/addonfeatures/ea_podman
 %attr(0600,root,root) /opt/cpanel/ea-podman/registered-containers.json
-%attr(0700,root,root) /opt/cpanel/ea-podman/bin/compile.sh
 %attr(0700,root,root) /opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub
 %attr(0755,root,root) /opt/cpanel/ea-podman/webapp-dir-setup
 %attr(0755, root, root) /var/cpanel/perl5/lib/PodmanHooks.pm
-%attr(0644, root, root) /usr/local/cpanel/install/EAPodman.pm
 %attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman.pm
 %attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-list.openapi.yaml
 %attr(0644, root, root) /usr/local/cpanel/Cpanel/API/EAPodman-install.openapi.yaml
@@ -165,6 +154,13 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
+* Fri Sep 25 2026 Julian Brown <julian.brown@webpros.com> - 1.0-31
+- EA4-315: Convert the ea_podman adminbin to an in-process admin module
+- EA4-315: Ship the ea-podman CLI uncompiled (no more perlcc)
+- EA4-315: Route jailshell and CageFS CLI commands through admin actions
+  instead of a full-access API token
+- EA4-315: Add the ea_podman feature
+
 * Fri Sep 18 2026 Chris Castillo <chris.castillo@webpros.com> - 1.0-30
 - EA4-327: Bind web app container ports to loopback only
 

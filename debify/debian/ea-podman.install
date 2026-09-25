@@ -10,13 +10,14 @@
 # _install_static_debian_files runs after the autogen spew), so it wins.
 # Keep it in sync with SPECS/ea-podman.spec %files when the file list changes.
 debian/tmp/opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub /opt/cpanel/ea-podman/bin
-debian/tmp/opt/cpanel/ea-podman/bin/compile.sh /opt/cpanel/ea-podman/bin
+debian/tmp/opt/cpanel/ea-podman/bin/ea-podman /opt/cpanel/ea-podman/bin
 debian/tmp/opt/cpanel/ea-podman/bin/ea-podman.pl /opt/cpanel/ea-podman/bin
 debian/tmp/opt/cpanel/ea-podman/lib/ea_podman/subids.pm /opt/cpanel/ea-podman/lib/ea_podman
 debian/tmp/opt/cpanel/ea-podman/lib/ea_podman/util.pm /opt/cpanel/ea-podman/lib/ea_podman
 debian/tmp/opt/cpanel/ea-podman/registered-containers.json /opt/cpanel/ea-podman
 debian/tmp/opt/cpanel/ea-podman/webapp-dir-setup /opt/cpanel/ea-podman
 debian/tmp/usr/lib/systemd/system/ea-podman-user-managers.service /usr/lib/systemd/system
+debian/tmp/usr/local/cpanel/Cpanel/Admin/Modules/Cpanel/ea_podman.pm /usr/local/cpanel/Cpanel/Admin/Modules/Cpanel
 debian/tmp/usr/local/cpanel/Cpanel/API/EAPodman-cmd.openapi.yaml /usr/local/cpanel/Cpanel/API
 debian/tmp/usr/local/cpanel/Cpanel/API/EAPodman-install.openapi.yaml /usr/local/cpanel/Cpanel/API
 debian/tmp/usr/local/cpanel/Cpanel/API/EAPodman-list.openapi.yaml /usr/local/cpanel/Cpanel/API
@@ -27,7 +28,5 @@ debian/tmp/usr/local/cpanel/Cpanel/API/EAPodman-stop.openapi.yaml /usr/local/cpa
 debian/tmp/usr/local/cpanel/Cpanel/API/EAPodman-uninstall.openapi.yaml /usr/local/cpanel/Cpanel/API
 debian/tmp/usr/local/cpanel/Cpanel/API/EAPodman-upgrade.openapi.yaml /usr/local/cpanel/Cpanel/API
 debian/tmp/usr/local/cpanel/Cpanel/API/EAPodman.pm /usr/local/cpanel/Cpanel/API
-debian/tmp/usr/local/cpanel/bin/admin/Cpanel/ea_podman /usr/local/cpanel/bin/admin/Cpanel
-debian/tmp/usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf /usr/local/cpanel/bin/admin/Cpanel
-debian/tmp/usr/local/cpanel/install/EAPodman.pm /usr/local/cpanel/install
+debian/tmp/usr/local/cpanel/whostmgr/addonfeatures/ea_podman /usr/local/cpanel/whostmgr/addonfeatures
 debian/tmp/var/cpanel/perl5/lib/PodmanHooks.pm /var/cpanel/perl5/lib

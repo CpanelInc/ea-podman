@@ -14,8 +14,7 @@ Documentation=https://webpros.atlassian.net/browse/EA4-319
 After=systemd-logind.service systemd-user-sessions.service
 Wants=systemd-logind.service
 
-# The CLI is compiled at install time (bin/compile.sh, run from %post), so on a
-# half-installed box there is nothing to run.
+# On a half-installed box there is no CLI, so nothing to run.
 ConditionPathExists=/opt/cpanel/ea-podman/bin/ea-podman
 
 [Service]

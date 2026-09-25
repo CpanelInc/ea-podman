@@ -48,66 +48,10 @@ sub _require_ea_podman_or_die {
     return 1;
 }
 
-# Prime this (already unprivileged, cpuser) process for rootless podman the
-# way the CPANEL-54037 verification showed is required, then run $code.
-#
-# init_user() does the real work: as root (via the ENSURE_USER adminbin) it
-# allocates subuid/subgid and runs `loginctl enable-linger`, which creates
-# /run/user/<uid> and starts the user systemd manager; then it points this
-# process's XDG_RUNTIME_DIR/DBUS at that runtime dir. We clear any inherited
-# DBUS_SESSION_BUS_ADDRESS first so a stale value can't point podman at the
-# wrong bus.
-#
-# ea_podman::util (and init_user's check_proc) print progress/warnings to
-# STDOUT/STDERR. Under a synchronous UAPI call that output would be
-# interleaved into — and corrupt — the JSON response, so capture it. On
-# failure the captured text is appended to the exception so the real error is
-# debuggable instead of a bare "Failed to create container".
-sub _run_in_user_session ( $code, %opts ) {
-    _require_ea_podman_or_die();
-
-    local $ENV{XDG_RUNTIME_DIR} = "/run/user/$>";
-    local $ENV{DBUS_SESSION_BUS_ADDRESS};
-    delete $ENV{DBUS_SESSION_BUS_ADDRESS};
-
-    # Run from a working directory the cpuser can stat. cpsrvd may hand us a
-    # cwd inherited from root (e.g. /root, mode 0700) that the dropped cpuser
-    # cannot enter, which breaks rootless podman. (CPANEL-54037: the cpsrvd
-    # UAPI context runs OUTSIDE any CageFS cage, so this — plus the privileged
-    # enable-linger bootstrap — is all that jailshell/cagefs users need.)
-    if ( my $home = ( getpwuid($>) )[7] ) {
-        chdir($home);    # best-effort; a failed chdir simply leaves cwd as-is
-    }
-
-    require Capture::Tiny;
-    my ( @rv, $err );
-    my $output = &Capture::Tiny::capture_merged(
-        sub {
-            local $@;
-            eval {
-                ea_podman::util::init_user( creating => $opts{creating} );
-                @rv = $code->();
-                1;
-            } or $err = $@ || "ea-podman: unknown error";
-        }
-    );
-
-    if ( defined $err ) {
-        chomp $err;
-        die length($output) ? "$err\n$output" : "$err\n";
-    }
-
-    return wantarray ? @rv : $rv[0];
-}
-
-# Ownership: act only on a container that is registered to the caller. Mirrors
-# the EXEC_IN_CONTAINER adminbin's check so a well-formed but foreign (or
-# entirely made up) name cannot reach the destructive helpers (CPANEL-55336).
-sub _verify_own_container ($container_name) {
-    my $entry = ea_podman::util::load_known_containers()->{$container_name};
-    die "No such container for this account.\n" if !$entry || ( $entry->{user} // '' ) ne scalar getpwuid($>);
-    return 1;
-}
+# The verb bodies — including the rootless-session priming that used to live
+# here as _run_in_user_session() — are shared with the ea_podman admin module's
+# lifecycle actions, so both entry points behave the same. See
+# ea_podman::util::run_in_user_session(). (EA4-315)
 
 # NOTE (gating): UAPI requires an authenticated cpsrvd session (or API token)
 # for the calling cPanel user, and every operation acts only on that user's
@@ -141,15 +85,7 @@ container name. Read-only; does not require the rootless session.
 sub list ( $args, $result ) {
     _require_ea_podman_or_die();
 
-    my $user          = scalar getpwuid($>);
-    my $containers_hr = ea_podman::util::load_known_containers();
-
-    my %mine;
-    for my $c ( grep { $_->{user} eq $user } values %{$containers_hr} ) {
-        $mine{ $c->{container_name} } = $c;
-    }
-
-    $result->data( \%mine );
+    $result->data( ea_podman::util::api_list() );
     return 1;
 }
 
@@ -188,33 +124,19 @@ fine synchronous.
 =cut
 
 sub install ( $args, $result ) {
-    my $name  = $args->get_length_required('name');
-    my $image = $args->get('image');
+    my $name = $args->get_length_required('name');
 
-    my @cpuser_ports = grep { length } $args->get_multiple('cpuser_port');
-    my @envs         = grep { length } $args->get_multiple('env');
+    _require_ea_podman_or_die();
 
-    my @start_args;
-    push @start_args, map { "--cpuser-port=$_" } @cpuser_ports;
-    push @start_args, map { ( '-e' => $_ ) } @envs;
-
-    if ( $args->get('accept_arbitrary_image_risk') ) {
-        push @start_args, '--i-understand-the-risks-do-it-anyway';
-    }
-
-    # The image, when given, must be the last start arg.
-    push @start_args, $image if length($image);
-
-    # The one verb that needs a rootless session for an account that may not
-    # have a container yet, so it is the one that asks for it. (CPANEL-55309)
-    my $container_name = _run_in_user_session(
-        sub {
-            return ea_podman::util::install_container( $name, @start_args );
-        },
-        creating => 1,
+    my $data = ea_podman::util::api_install(
+        name                        => $name,
+        image                       => scalar $args->get('image'),
+        cpuser_port                 => [ $args->get_multiple('cpuser_port') ],
+        env                         => [ $args->get_multiple('env') ],
+        accept_arbitrary_image_risk => scalar $args->get('accept_arbitrary_image_risk'),
     );
 
-    $result->data( { container_name => $container_name } );
+    $result->data($data);
     return 1;
 }
 
@@ -232,12 +154,8 @@ writing to a deploy log) applies.
 sub upgrade ( $args, $result ) {
     my $container_name = $args->get_length_required('container_name');
 
-    _run_in_user_session(
-        sub {
-            ea_podman::util::upgrade_container($container_name);
-            return 1;
-        }
-    );
+    _require_ea_podman_or_die();
+    ea_podman::util::api_upgrade($container_name);
 
     return 1;
 }
@@ -252,14 +170,8 @@ ARGUMENTS: C<container_name> (required).
 sub uninstall ( $args, $result ) {
     my $container_name = $args->get_length_required('container_name');
 
-    _run_in_user_session(
-        sub {
-            ea_podman::util::validate_user_container_name($container_name);
-            _verify_own_container($container_name);
-            ea_podman::util::remove_container_by_name($container_name);
-            return 1;
-        }
-    );
+    _require_ea_podman_or_die();
+    ea_podman::util::api_uninstall($container_name);
 
     return 1;
 }
@@ -278,21 +190,8 @@ sub restart ( $args, $result ) { return _lifecycle( $args, 'restart' ); }
 sub _lifecycle ( $args, $action ) {
     my $container_name = $args->get_length_required('container_name');
 
-    _run_in_user_session(
-        sub {
-            ea_podman::util::validate_user_container_name($container_name);
-            my $service = ea_podman::util::get_container_service_name($container_name);
-
-            # Before a bring-up and after a stop, never after a start — that
-            # would hide a real failure from status().
-            my $stopping = $action eq 'stop';
-            ea_podman::util::reset_container_unit_failure($container_name) if !$stopping;
-            my $rv = ea_podman::util::sysctl( $action => $service );
-            ea_podman::util::reset_container_unit_failure($container_name) if $stopping;
-
-            return $rv;
-        }
-    );
+    _require_ea_podman_or_die();
+    ea_podman::util::api_lifecycle( $container_name, $action );
 
     return 1;
 }
@@ -308,22 +207,9 @@ booleans.
 sub status ( $args, $result ) {
     my $container_name = $args->get_length_required('container_name');
 
-    # is-active/is-enabled communicate purely through their exit code (and,
-    # unlike start/restart/enable, sysctl emits no cgroup warnings for them), so
-    # we read the boolean result rather than the human-readable status text —
-    # more useful to an API consumer than `systemctl status` output.
-    my $state = _run_in_user_session(
-        sub {
-            ea_podman::util::validate_user_container_name($container_name);
-            my $service = ea_podman::util::get_container_service_name($container_name);
-            return {
-                running => ea_podman::util::sysctl( 'is-active'  => $service ),
-                enabled => ea_podman::util::sysctl( 'is-enabled' => $service ),
-            };
-        }
-    );
+    _require_ea_podman_or_die();
+    $result->data( ea_podman::util::api_status($container_name) );
 
-    $result->data($state);
     return 1;
 }
 
@@ -370,13 +256,9 @@ sub cmd ( $args, $result ) {
     my @cmd_argv = $args->get_multiple('arg');
     die "cmd requires a command to run (the “arg” parameter)\n" if !@cmd_argv;
 
-    my $state = _run_in_user_session(
-        sub {
-            return ea_podman::util::exec_in_container( $container_name, \@cmd_argv, cd => $cd );
-        }
-    );
+    _require_ea_podman_or_die();
+    $result->data( ea_podman::util::api_cmd( $container_name, \@cmd_argv, $cd ) );
 
-    $result->data($state);
     return 1;
 }
 

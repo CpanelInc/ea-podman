@@ -2018,6 +2018,188 @@ The ports currently assigned to the container are: $new_ports
     }
 }
 
+##################################################
+#### verbs shared by the UAPI and admin module ##
+##################################################
+#
+# The EAPodman UAPI (Cpanel::API::EAPodman, cpsrvd as the cpuser) and the
+# ea_podman admin module's lifecycle actions (root in cpsrvd, forked and fully
+# dropped to the cpuser) run the same verb bodies, so a verb behaves the same
+# whichever way the call arrives. Each expects to already be running as the
+# cpuser. (EA4-315)
+
+# Prime this (already unprivileged, cpuser) process for rootless podman the
+# way the CPANEL-54037 verification showed is required, then run $code.
+#
+# init_user() does the real work: as root (via the ENSURE_USER admin action) it
+# allocates subuid/subgid and runs `loginctl enable-linger`, which creates
+# /run/user/<uid> and starts the user systemd manager; then it points this
+# process's XDG_RUNTIME_DIR/DBUS at that runtime dir. We clear any inherited
+# DBUS_SESSION_BUS_ADDRESS first so a stale value can't point podman at the
+# wrong bus.
+#
+# ea_podman::util (and init_user's check_proc) print progress/warnings to
+# STDOUT/STDERR. Under a synchronous API call that output would be
+# interleaved into — and corrupt — the response, so capture it. On failure the
+# captured text is appended to the exception so the real error is debuggable
+# instead of a bare "Failed to create container".
+sub run_in_user_session {
+    my ( $code, %opts ) = @_;
+
+    local $ENV{XDG_RUNTIME_DIR} = "/run/user/$>";
+    local $ENV{DBUS_SESSION_BUS_ADDRESS};
+    delete $ENV{DBUS_SESSION_BUS_ADDRESS};
+
+    # Run from a working directory the cpuser can stat. cpsrvd may hand us a
+    # cwd inherited from root (e.g. /root, mode 0700) that the dropped cpuser
+    # cannot enter, which breaks rootless podman. (CPANEL-54037: cpsrvd runs
+    # OUTSIDE any CageFS cage, so this — plus the privileged enable-linger
+    # bootstrap — is all that jailshell/cagefs users need.)
+    if ( my $home = ( getpwuid($>) )[7] ) {
+        chdir($home);    # best-effort; a failed chdir simply leaves cwd as-is
+    }
+
+    require Capture::Tiny;
+    my ( @rv, $err );
+    my $output = Capture::Tiny::capture_merged(
+        sub {
+            local $@;
+            eval {
+                init_user( creating => $opts{creating} );
+                @rv = $code->();
+                1;
+            } or $err = $@ || "ea-podman: unknown error";
+        }
+    );
+
+    if ( defined $err ) {
+        chomp $err;
+        die length($output) ? "$err\n$output" : "$err\n";
+    }
+
+    return wantarray ? @rv : $rv[0];
+}
+
+# Ownership: act only on a container that is registered to the caller, so a
+# well-formed but foreign (or entirely made up) name cannot reach the
+# destructive helpers (CPANEL-55336).
+sub verify_own_container {
+    my ($container_name) = @_;
+
+    my $entry = load_known_containers()->{$container_name};
+    die "No such container for this account.\n" if !$entry || ( $entry->{user} // '' ) ne scalar getpwuid($>);
+    return 1;
+}
+
+sub api_list {
+    my $user          = scalar getpwuid($>);
+    my $containers_hr = load_known_containers();
+
+    my %mine;
+    for my $c ( grep { $_->{user} eq $user } values %{$containers_hr} ) {
+        $mine{ $c->{container_name} } = $c;
+    }
+
+    return \%mine;
+}
+
+# %args are the UAPI parameter names: name, image, cpuser_port (arrayref),
+# env (arrayref), accept_arbitrary_image_risk.
+sub api_install {
+    my (%args) = @_;
+
+    my $name = $args{name};
+    die "install requires a package or container name\n" if !length( $name // '' );
+
+    my @start_args;
+    push @start_args, map { "--cpuser-port=$_" } grep { length } @{ $args{cpuser_port} || [] };
+    push @start_args, map { ( '-e' => $_ ) } grep     { length } @{ $args{env}         || [] };
+    push @start_args, '--i-understand-the-risks-do-it-anyway' if $args{accept_arbitrary_image_risk};
+
+    # The image, when given, must be the last start arg.
+    push @start_args, $args{image} if length( $args{image} // '' );
+
+    # The one verb that needs a rootless session for an account that may not
+    # have a container yet, so it is the one that asks for it. (CPANEL-55309)
+    my $container_name = run_in_user_session(
+        sub { return install_container( $name, @start_args ) },
+        creating => 1,
+    );
+
+    return { container_name => $container_name };
+}
+
+sub api_upgrade {
+    my ($container_name) = @_;
+
+    run_in_user_session( sub { upgrade_container($container_name); return 1; } );
+    return 1;
+}
+
+sub api_uninstall {
+    my ($container_name) = @_;
+
+    run_in_user_session(
+        sub {
+            validate_user_container_name($container_name);
+            verify_own_container($container_name);
+            remove_container_by_name($container_name);
+            return 1;
+        }
+    );
+
+    return 1;
+}
+
+# start / stop / restart
+sub api_lifecycle {
+    my ( $container_name, $action ) = @_;
+
+    die "Invalid action “$action”\n" if !grep { $_ eq $action } qw(start stop restart);
+
+    return run_in_user_session(
+        sub {
+            validate_user_container_name($container_name);
+            my $service = get_container_service_name($container_name);
+
+            # Before a bring-up and after a stop, never after a start — that
+            # would hide a real failure from status.
+            my $stopping = $action eq 'stop';
+            reset_container_unit_failure($container_name) if !$stopping;
+            my $rv = sysctl( $action => $service );
+            reset_container_unit_failure($container_name) if $stopping;
+
+            return $rv;
+        }
+    );
+}
+
+# is-active/is-enabled communicate purely through their exit code (and, unlike
+# start/restart/enable, sysctl emits no cgroup warnings for them), so read the
+# boolean result rather than the human-readable status text.
+sub api_status {
+    my ($container_name) = @_;
+
+    return run_in_user_session(
+        sub {
+            validate_user_container_name($container_name);
+            my $service = get_container_service_name($container_name);
+            return {
+                running => sysctl( 'is-active'  => $service ),
+                enabled => sysctl( 'is-enabled' => $service ),
+            };
+        }
+    );
+}
+
+sub api_cmd {
+    my ( $container_name, $cmd_argv, $cd ) = @_;
+
+    die "cmd requires a command to run (the “arg” parameter)\n" if ref($cmd_argv) ne 'ARRAY' || !@{$cmd_argv};
+
+    return run_in_user_session( sub { return exec_in_container( $container_name, $cmd_argv, cd => $cd ) } );
+}
+
 1;
 
 __END__
