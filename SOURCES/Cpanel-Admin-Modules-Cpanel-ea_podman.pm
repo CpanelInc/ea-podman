@@ -366,7 +366,8 @@ sub UPGRADE ( $self, $args = undef ) {
     $self->cpuser_has_feature_or_die(FEATURE);
 
     my $container_name = $self->_own_container_arg( $args, registered => 1 );
-    return $self->_as_cpuser( sub { ea_podman::util::api_upgrade($container_name) } );
+    my $force          = _string_arg( $args, 'force' ) ? 1 : 0;
+    return $self->_as_cpuser( sub { ea_podman::util::api_upgrade( $container_name, force => $force ) } );
 }
 
 # Not feature-gated (removes own state): an account that loses the feature must

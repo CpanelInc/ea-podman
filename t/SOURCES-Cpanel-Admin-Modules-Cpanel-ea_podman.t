@@ -763,6 +763,18 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
             };
         }
 
+        it "should pass UPGRADE's force through to api_upgrade" => sub {
+            _obj_for('UPGRADE')->UPGRADE( { container_name => 'container.cptest1.01' } );
+            _obj_for('UPGRADE')->UPGRADE( { container_name => 'container.cptest1.01', force => 1 } );
+            is_deeply(
+                $mi{calls},
+                [
+                    [ 'api_upgrade', 'container.cptest1.01', force => 0 ],
+                    [ 'api_upgrade', 'container.cptest1.01', force => 1 ],
+                ]
+            );
+        };
+
         it "should map START/STOP/RESTART onto api_lifecycle" => sub {
             _obj_for($_)->$_( { container_name => 'container.cptest1.01' } ) for qw(START STOP RESTART);
             is_deeply( [ map { $_->[2] } @{ $mi{calls} } ], [qw(start stop restart)] );

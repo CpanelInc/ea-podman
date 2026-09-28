@@ -244,10 +244,11 @@ sub _cli_args_to_params {
 
     # upgrade / start / stop / restart / uninstall / status: a single
     # container_name positional (ignore the CLI's --verify; UAPI uninstall has
-    # no interactive gate).
-    my ($container_name) = grep { defined && length && $_ ne '--verify' } @args;
+    # no interactive gate). upgrade's --force is the one flag that carries over.
+    my $force            = $verb eq 'upgrade' && grep { defined && $_ eq '--force' } @args;
+    my ($container_name) = grep { defined && length && $_ ne '--verify' && $_ ne '--force' } @args;
     die "$verb requires a container name\n" if !defined $container_name;
-    return { container_name => $container_name };
+    return { container_name => $container_name, ( $force ? ( force => 1 ) : () ) };
 }
 
 # Shared by the direct-CLI `cmd` verb and its admin-action delegation: parses
