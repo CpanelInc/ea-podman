@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 30
+%define release_prefix 31
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -165,6 +165,41 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
+* Tue Sep 22 2026 Julian Brown <julian.brown@webpros.com> - 1.0-31
+- EA4-325: Make `ea-podman upgrade` report a container that did not come back up,
+  instead of exiting 0 with the application down
+- EA4-325: Recreate the previous container when an upgrade's create fails, and
+  never deregister it or release its ports
+- EA4-325: Stop a failed `ea-podman restore` deleting the container directory it
+  had just extracted from the user's backup
+- EA4-325: Let `upgrade_containers` survive a deleted account or a single failed
+  container, reporting each and exiting non-zero
+- EA4-325: Fix the trailing newline on the image name `ea-podman list` reports
+- EA4-325: Make the EAPodman UAPI report a failed `start` or `restart` rather
+  than always reporting success
+- EA4-325: Correct `ea-podman backup`/`restore` help, which named a manifest file
+  that does not survive the run instead of the tarball restore actually wants
+- EA4-325: `ea-podman upgrade` now pulls the image and only recreates the
+  container when something actually moved, so it no longer restarts every
+  application every run while never fetching anything; `--force` recreates
+  unconditionally
+- EA4-325: New `ea-podman clean` lists the `<container>.bak` directories left
+  behind when a container is removed, with their age and size, and removes them
+  with `--run`
+- EA4-325: Fix `ea-podman clean` as root, which reclaimed nothing: it looked only
+  at accounts the container registry still listed, reported nothing back across
+  the privilege boundary, and refused any account whose rootless session was down
+  — which is every account that had just removed its last container
+- EA4-325: Make `ea-podman upgrade` still recreate a web app container that is
+  published on every interface, so it picks up EA4-327's loopback-only binding
+  even when its image has not changed
+- EA4-325: Make `ea-podman clean` report a backup directory, or an account's
+  `~/ea-podman.d`, that it could not examine, and show a size it could not
+  measure as unknown rather than 0 bytes
+- EA4-325: Stop `ea-podman clean` as root allocating subuid/subgid ranges for
+  every account on the server, even on a plain listing; it now only visits
+  accounts that have a `.bak` to report
+
 * Fri Sep 18 2026 Chris Castillo <chris.castillo@webpros.com> - 1.0-30
 - EA4-327: Bind web app container ports to loopback only
 

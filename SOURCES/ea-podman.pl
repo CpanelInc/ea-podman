@@ -118,6 +118,21 @@ sub run {
     return App::CmdDispatch->new( get_dispatch_args() )->run(@args);
 }
 
+sub _age_str {
+    my ($secs) = @_;
+    my $days = int( $secs / 86400 );
+    return $days >= 1 ? "$days day" . ( $days == 1 ? "" : "s" ) : "less than a day";
+}
+
+sub _size_str {
+    my ($bytes) = @_;
+    return "size unknown" if !defined $bytes;
+    return sprintf( "%.1f GiB", $bytes / ( 1024**3 ) ) if $bytes >= 1024**3;
+    return sprintf( "%.1f MiB", $bytes / ( 1024**2 ) ) if $bytes >= 1024**2;
+    return sprintf( "%.1f KiB", $bytes / 1024 )        if $bytes >= 1024;
+    return "$bytes bytes";
+}
+
 sub _has_unrestricted_shell {
     my ($user) = @_;
     if ( defined &Whostmgr::Accounts::Shell::has_unrestricted_shell ) {
@@ -402,14 +417,31 @@ sub get_dispatch_args {
             },
         },
         upgrade => {
-            clue     => "upgrade <CONTAINER_NAME>",
+            clue     => "upgrade <CONTAINER_NAME> [--force]",
             abstract => "Upgrade a container",
-            help     => "Upgrade the container named CONTAINER_NAME",
+            help     => qq{Upgrade the container named CONTAINER_NAME.
+
+Pulls the image the container's configuration names, and recreates the container only if something actually moved — a newer image for the tag it tracks, or, for an EasyApache 4 package, a newer version of the package. When nothing has changed this does nothing at all: the container is not torn down, recreated, or restarted.
+
+A container that is not running is recreated and LEFT not running, because a stop cannot be told from a crash and starting it would override a deliberate stop.
+
+--force skips the comparison and recreates unconditionally, and starts the container afterwards. Use it to re-apply a configuration change that does not move the image, or to rebuild from the locally cached image when the registry cannot be reached.
+
+If the pull fails, this reports the failure and leaves the container untouched rather than guessing; --force falls back to the cached image instead.},
             code     => sub {
-                my ( $app, $container_name ) = @_;
+                my ( $app, @args ) = @_;
+
+                my ( $container_name, $force );
+                for my $arg (@args) {
+                    if    ( $arg eq '--force' ) { $force = 1 }
+                    elsif ( !defined $container_name ) { $container_name = $arg }
+                    else                        { die "Unknown argument “$arg”\n" }
+                }
+
+                die "Please provide the name of the container to upgrade.\n" if !defined $container_name;
 
                 ea_podman::util::init_user();
-                ea_podman::util::upgrade_container($container_name);
+                ea_podman::util::upgrade_container( $container_name, force => $force );
             },
         },
         uninstall => {
@@ -665,16 +697,32 @@ This is intended to make it easier for a user to purge their ea-podman based con
             },
         },
         upgrade_containers => {
-            clue     => "upgrade_containers [<PKG|NON-PKG-NAME>|--all]",
+            clue     => "upgrade_containers [<PKG|NON-PKG-NAME>|--all] [--force]",
             abstract => "Upgrade containers",
             help     => qq{Upgrade ea-podman registered containers by EA4 package, an arbitrary non-package name, or all via `--all`.
     - as non-root will only affect only the user
     - as root this will effect all users
+
+One account's or one container's failure no longer stops the sweep: the rest are still attempted, each failure is reported as it happens, and the command exits non-zero if anything failed.
+
+Each container is only recreated if something actually moved; see `ea-podman help upgrade`. --force recreates every one of them unconditionally, which on a large server means restarting every application it touches.
             },
             code => sub {
-                my ( $app, $pkg ) = @_;
+                my ( $app, @args ) = @_;
+
+                my ( $pkg, $force );
+                for my $arg (@args) {
+                    if    ( $arg eq '--force' )  { $force = 1 }
+                    elsif ( !defined $pkg )      { $pkg   = $arg }
+                    else                         { die "Unknown argument “$arg”\n" }
+                }
 
                 die "Please provide a package name or the flag `--all`\n" if ( !$pkg );
+
+                # Before the registry read, as remove_containers does. Without it
+                # the root branch below reaches upgrade_containers_for_a_user()
+                # having never run check_proc()/ensure_user()/ensure_su_login().
+                ea_podman::util::init_user();
 
                 my $user          = getpwuid($>);
                 my $containers_hr = ea_podman::util::load_known_containers();
@@ -697,6 +745,8 @@ This is intended to make it easier for a user to purge their ea-podman based con
                     exit 0;
                 }
 
+                my @failed;
+
                 if ( $user eq "root" ) {
                     my %user_breakdown;
 
@@ -705,12 +755,165 @@ This is intended to make it easier for a user to purge their ea-podman based con
                         push( @{ $user_breakdown{$c_user} }, $container );
                     }
 
-                    foreach my $c_user ( keys %user_breakdown ) {
-                        if ( $c_user eq "root" ) {
-                            ea_podman::util::upgrade_containers_for_a_user( @{ $user_breakdown{$c_user} } );
+                    # `sort` matters. @containers is sorted above, but building
+                    # %user_breakdown throws that order away and bare `keys` is
+                    # randomised per process — so which accounts a mid-sweep
+                    # failure skipped used to vary run to run, making the failure
+                    # list unreproducible. (EA4-325)
+                    foreach my $c_user ( sort keys %user_breakdown ) {
+                        my @c_containers = @{ $user_breakdown{$c_user} };
+
+                        try {
+                            if ( $c_user eq "root" ) {
+                                ea_podman::util::upgrade_containers_for_a_user( $force, @c_containers );
+                            }
+                            else {
+                                Cpanel::AccessIds::do_as_user_with_exception(
+                                    $c_user,
+                                    sub {
+                                        my $homedir = ( getpwuid($>) )[7];
+                                        local $ENV{HOME} = $homedir;
+                                        local $ENV{USER} = $c_user;
+
+                                        chdir($homedir);
+
+                                        ea_podman::util::init_user();
+                                        ea_podman::util::upgrade_containers_for_a_user( $force, @c_containers );
+                                    }
+                                );
+                            }
                         }
-                        else {
-                            Cpanel::AccessIds::do_as_user_with_exception(
+                        catch {
+                            my $err = $_;
+
+                            # ref() first: unlike remove_containers, what arrives
+                            # here can be a plain string — the aggregate die from
+                            # upgrade_containers_for_a_user() — and ->isa on a
+                            # string is a trap waiting to be sprung.
+                            if ( ref($err) && eval { $err->isa("Cpanel::Exception::UserNotFound") } ) {
+
+                                # No deleted-user fallback of the kind
+                                # remove_containers has (ZC-10958): there is
+                                # nothing to upgrade for an account that is gone,
+                                # and an upgrade sweep must never deregister
+                                # anything — that is remove's job, and doing it
+                                # here would make `upgrade` silently destructive.
+                                # Skipped, but counted: a registry entry for a
+                                # vanished account is a real problem and must not
+                                # exit 0.
+                                warn "ea-podman: skipping “$c_user”: the account no longer exists, so its registered containers ("
+                                  . join( ", ", map { $_->{container_name} } @c_containers )
+                                  . ") cannot be upgraded.\n"
+                                  . "They are still registered. Clean them up as root with `ea-podman remove_containers --all`, which handles containers whose account was deleted uncleanly.\n";
+                            }
+                            else {
+                                warn "ea-podman: upgrading containers for “$c_user” failed: $err";
+                            }
+
+                            push @failed, $c_user;
+                        };
+                    }
+                }
+                else {
+                    try { ea_podman::util::upgrade_containers_for_a_user( $force, @containers ) }
+                    catch { warn "ea-podman: $_"; push @failed, $user };
+                }
+
+                # Survive a bad account or a bad container, but never silently.
+                # Accumulating without this exit would re-create the defect the
+                # rest of EA4-325 exists to kill. Shape follows
+                # ensure_user_sessions below.
+                if (@failed) {
+                    warn "ea-podman: upgrade_containers did not complete for: " . join( ", ", sort @failed ) . "\n";
+                    exit 1;
+                }
+
+                return 1;
+            },
+        },
+        clean => {
+            clue     => "clean [--run] [--days=N]",
+            abstract => "List (or remove) leftover <CONTAINER_NAME>.bak directories",
+            help     => qq{List the `<CONTAINER_NAME>.bak` directories left behind under ~/ea-podman.d/ when a container is uninstalled or removed.
+
+Lists only, with each one's age and size, unless you pass `--run`. `--run` removes them.
+
+    - as non-root this covers only your own account
+    - as root it covers every account with a `.bak` under ~/ea-podman.d/, whether or not the container registry still lists it
+
+A `.bak` is only removed when its container name is otherwise COMPLETELY gone: no registry entry, nothing in `podman ps -a`, no port still assigned to it, and no systemd unit. Anything still holding the name is reported and left alone -- freeing the name early would hand it to the next install with stale state attached.
+
+Age is measured from when the directory BECAME a `.bak`, not from when its contents were last written, so a backup made moments ago is never mistaken for an old one. Default is 30 days; `--days=N` uses a different threshold, and `--days=0` considers every one of them.
+
+WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains that container's read-write /app directory -- runtime state such as SQLite files, uploads and generated content, its `.env`, and for a zip-sourced application the entire source. Nothing reads a `.bak`, but nothing else keeps a copy either. Read the listing before you pass `--run`.},
+            code     => sub {
+                my ( $app, @args ) = @_;
+
+                my $run  = 0;
+                my $days = undef;
+                for my $arg (@args) {
+                    if    ( $arg eq '--run' )              { $run  = 1 }
+                    elsif ( $arg =~ m/^--days=([0-9]+)$/ ) { $days = $1 }
+                    else                                   { die "Unknown argument “$arg”\n" }
+                }
+
+                my %age = defined $days ? ( max_age => $days * 24 * 60 * 60 ) : ();
+
+                my $user = getpwuid($>);
+
+                # Warned in the DEFAULT listing, not only under --run (EA4-325
+                # C8). `--run` is the only safeguard, so the warning has to be in
+                # front of the operator while they are still deciding.
+                print "Note: a “.bak” can hold the only copy of an application's runtime state, its .env, and a zip-sourced application's entire source.\n";
+                print "Considering backups older than " . ( defined $days ? "$days day" . ( $days == 1 ? "" : "s" ) : "30 days" ) . ".\n";
+                print $run ? "Removing.\n\n" : "Listing only. Pass `--run` to remove.\n\n";
+
+                my @reports;
+                if ( $user eq "root" ) {
+
+                    # init_user() allocates a subuid/subgid range, so a
+                    # look-only listing must not run it for an account -- root
+                    # included -- that has no `.bak` to report. See
+                    # user_may_have_backups_as_root().
+                    if ( ea_podman::util::user_may_have_backups_as_root("root") ) {
+                        ea_podman::util::init_user();
+                        push @reports, ea_podman::util::clean_backups( run => $run, %age );
+                    }
+
+                    # Every cPanel account, NOT the ones the container registry
+                    # knows about.
+                    #
+                    # A `.bak` exists precisely BECAUSE a container was removed,
+                    # and removing one deregisters it. So an account that removed
+                    # all of its containers has no registry entries at all -- and
+                    # `remove_containers --all` is exactly how a pile of backups
+                    # appears. Driving this from the registry would skip the
+                    # accounts most likely to have something to clean, and skip
+                    # them silently.
+                    #
+                    # ensure_user_sessions() does use the registry list, and is
+                    # right to: only an account WITH containers needs a systemd
+                    # manager. This wants the opposite set. Same shape as the
+                    # `check` verb below. Sorted so a failure list is
+                    # reproducible.
+                    #
+                    # Every account is CONSIDERED, but only the ones that may
+                    # have a `.bak` are visited, checked as root before
+                    # privileges are dropped. Visiting means init_user(), and
+                    # doing that to every account allocated subids for accounts
+                    # that never used ea-podman, on a plain listing. Skipping
+                    # them also spares a fork per account on a large server.
+                    for my $c_user ( sort( Cpanel::Config::Users::getcpusers() ) ) {
+                        next if !ea_podman::util::user_may_have_backups_as_root($c_user);
+
+                        try {
+                            # RETURNED, not pushed. do_as_user_with_exception runs
+                            # the closure in a forked child (Cpanel::ForkSync), so
+                            # anything pushed to a lexical in there dies with the
+                            # child and root reports nothing for the account it
+                            # just swept. ForkSync serialises the return value
+                            # back, so that is the way across.
+                            my $report = Cpanel::AccessIds::do_as_user_with_exception(
                                 $c_user,
                                 sub {
                                     my $homedir = ( getpwuid($>) )[7];
@@ -718,26 +921,92 @@ This is intended to make it easier for a user to purge their ea-podman based con
                                     local $ENV{USER} = $c_user;
 
                                     chdir($homedir);
-
                                     ea_podman::util::init_user();
-                                    ea_podman::util::upgrade_containers_for_a_user( @{ $user_breakdown{$c_user} } );
+                                    return ea_podman::util::clean_backups( run => $run, %age );
                                 }
                             );
+
+                            # clean_backups() returns a hash on every path, so this
+                            # is the serialisation back across the fork failing
+                            # quietly. Say so, rather than dropping the account
+                            # from the listing as if it had had nothing to clean.
+                            if ( ref $report eq 'HASH' ) {
+                                push @reports, $report;
+                            }
+                            else {
+                                warn "ea-podman: no report came back for “$c_user”\n";
+                                push @reports, { user => $c_user, unreachable => 1, removable => [], skipped => [] };
+                            }
                         }
+                        catch {
+                            my $err = $_;
+                            warn "ea-podman: could not clean up for “$c_user”: $err";
+                            push @reports, { user => $c_user, unreachable => 1, removable => [], skipped => [] };
+                        };
                     }
                 }
                 else {
                     ea_podman::util::init_user();
-                    ea_podman::util::upgrade_containers_for_a_user(@containers);
+                    push @reports, ea_podman::util::clean_backups( run => $run, %age );
                 }
+
+                my $total         = 0;
+                my $bytes         = 0;
+                my $bytes_unknown = 0;
+                for my $r (@reports) {
+                    if ( $r->{unreachable} ) {
+                        print "$r->{user}: UNKNOWN — the account could not be reached, so nothing was examined.\n";
+                        next;
+                    }
+                    if ( $r->{unreadable} ) {
+                        print "$r->{user}: UNKNOWN — “$r->{unreadable}” could not be read, so nothing was examined.\n";
+                        next;
+                    }
+                    if ( $r->{podman_unverifiable} ) {
+                        print "$r->{user}: note — this account's rootless session is not up, so podman could not be asked. A container that exists only in podman's storage, with no registry entry, no ports and no unit, would not be seen here; that is an orphan for `ea-podman orphan` to reconcile.\n";
+                    }
+
+                    for my $b ( @{ $r->{removable} } ) {
+                        printf( "%s: %s  (%s old, %s)%s\n", $r->{user}, $b->{path}, _age_str( $b->{age} ), _size_str( $b->{size} ), $run ? " — REMOVED" : "" );
+                        $total++;
+                        if   ( defined $b->{size} ) { $bytes += $b->{size} }
+                        else                        { $bytes_unknown++ }
+                    }
+                    for my $sk ( @{ $r->{skipped} } ) {
+                        next if $sk->{reason} eq 'too_recent' || $sk->{reason} eq 'not_a_container_backup';
+                        if ( $sk->{reason} eq 'remove_failed' ) {
+                            print "$r->{user}: $sk->{path} — could not be removed; see the warning above.\n";
+                        }
+                        elsif ( $sk->{reason} eq 'unreadable' ) {
+                            print "$r->{user}: $sk->{path} — could not be examined, so it was left alone.\n";
+                        }
+                        else {
+                            print "$r->{user}: $sk->{path} — kept, the name is still in use ($sk->{reason}); that is an orphan-reconciliation matter, not a cleanup one.\n";
+                        }
+                    }
+                }
+
+                if ( !$total ) {
+                    print "Nothing to clean up.\n";
+                }
+                else {
+                    my $size = $bytes_unknown ? "at least " . _size_str($bytes) . " ($bytes_unknown of unknown size)" : _size_str($bytes);
+                    printf( "\n%d backup director%s%s, %s.\n", $total, ( $total == 1 ? "y" : "ies" ), ( $run ? " removed" : " could be removed" ), $size );
+                }
+
+                return 1;
             },
         },
         backup => {
             clue     => "backup",
             abstract => "Backup containers",
-            help     => qq{Backup all ea-podman registered containers for a user.
+            help     => qq{Backup all ea-podman registered containers for a user. Cannot be run as root.
 
-                  Outputs a file ea_podman_backup_<USER>.json
+Writes ~/ea-podman-backups/backup-<YYYYMMDDHHMMSS>.tar.gz, holding each container's directory plus a manifest of its registry entry. That tarball is the path to hand to `ea-podman restore` — list them newest first with `ls -t ~/ea-podman-backups/`.
+
+Only the newest 3 are kept; older ones are removed on each run. pkgacct takes a backup too, so an automatic run can age out one you meant to keep — copy it elsewhere if it matters.
+
+The ~/ea_podman_backup_<USER>.json manifest is written, tarred, and then removed, so it does not survive the run and is not what `restore` wants.
             },
             code => sub {
                 my ($app) = @_;
@@ -747,15 +1016,18 @@ This is intended to make it easier for a user to purge their ea-podman based con
             },
         },
         restore => {
-            clue     => "restore <BACKUP_FILE_PATH> [--verify]",
+            clue     => "restore <BACKUP_TARBALL> [--verify]",
             abstract => "Restore containers that have been backed up.",
-            help     => qq{Will restore containers that bave been backed up.
+            help     => qq{Will restore containers that have been backed up. Cannot be run as root.
 
-                  NOTE:
+BACKUP_TARBALL is a tarball written by `ea-podman backup`, e.g. ~/ea-podman-backups/backup-20260803120000.tar.gz — not the ea_podman_backup_<USER>.json manifest, which only ever exists inside that tarball.
 
-                  * Will remove existing containers
-                  * Will destroy the ea-podman.d directory
-                  * This is a destructive operation, you are required to pass ”--verify”
+NOTE:
+
+    * Will remove existing containers
+    * Will destroy the ea-podman.d directory
+    * This is a destructive operation, you are required to pass ”--verify”
+    * Restored containers get a NEW set of ports, so anything pointing at the old ones needs updating
             },
             code => sub {
                 my ( $app, $backup_file, $verify ) = @_;

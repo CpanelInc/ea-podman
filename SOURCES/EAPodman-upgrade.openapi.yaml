@@ -24,8 +24,11 @@ openapi: 3.0.2
 paths:
   /EAPodman/upgrade:
     get:
-      description: Pull the latest image for the named container and recreate it. Synchronous, so it can
-        take a while like install.
+      description: Pull the image the named container's configuration names, and recreate the container
+        only if something actually moved - a newer image for the tag it tracks, or a newer version of
+        the EasyApache 4 package that owns it. Does nothing at all when nothing has changed. A container
+        that is not running is recreated and left not running. Synchronous, so it can take a while like
+        install.
       operationId: EAPodman-upgrade
       parameters:
       - description: The generated name of the container to act on.
@@ -35,6 +38,15 @@ paths:
         schema:
           example: myredis.bob.01
           type: string
+      - description: Skip the comparison, recreate the container unconditionally, and start it afterwards.
+          Re-applies a configuration change that does not move the image. On failure to pull, falls back
+          to the locally cached image instead of leaving the container untouched.
+        in: query
+        name: force
+        required: false
+        schema:
+          example: 1
+          type: integer
       responses:
         '200':
           content:
