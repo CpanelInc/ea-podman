@@ -48,8 +48,8 @@
 #   ssh root@VM 'EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl /root/ea4-315-admin-module-live.t'
 #
 #   # with the upgrade section (rpm or deb, both files already on the VM):
-#   ssh root@VM 'EAPODMAN_LIVE=1 EAPODMAN_UPGRADE_FROM=/root/ea-podman-1.0-30.rpm \
-#       EAPODMAN_UPGRADE_TO=/root/ea-podman-1.0-31.rpm \
+#   ssh root@VM 'EAPODMAN_LIVE=1 EAPODMAN_UPGRADE_FROM=/root/ea-podman-1.0-31.rpm \
+#       EAPODMAN_UPGRADE_TO=/root/ea-podman-1.0-32.rpm \
 #       /usr/local/cpanel/3rdparty/bin/perl /root/ea4-315-admin-module-live.t'
 #
 # Environment variables:

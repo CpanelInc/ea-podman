@@ -44,8 +44,8 @@ as well as v2 (AlmaLinux 9/10 and Ubuntu 24.04, which default to v2).
 | `ea-memcached16-cli-live.t` | A **normal** account uses the `ea-podman` CLI directly (`install <PKG>` mode) to install a real EA4 container-based package, `ea-memcached16`. | A live cPanel VM (cgroup v1 or v2), with `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
 | `ea-memcached16-cagefs-cli-live.t` | Sister to the above, but the account is **CageFS**-enabled: the CLI is driven through a real CageFS login, exercising the CPANEL-54672 fallback to the bridge (the ea_podman admin actions since EA4-315). | CloudLinux (cgroup v1 or v2), with CageFS installed + initialized, and `ea-memcached16` (or another EA4 container-based package, via `EAPODMAN_TEST_PKG`) already installed locally. |
 | `ea4-315-admin-module-live.t` | The EA4-315 contract: the adminbin became the `Cpanel::Admin::Modules::Cpanel::ea_podman` admin module and the CLI is no longer compiled, with nothing outside ea-podman changing how it calls in. Checks packaging, that an uncompiled caller gets through with the parent check enforced, the legacy actions' return shapes and error text, the lifecycle actions from inside a real jail (and that no API token is minted), the `ea_podman` feature gate and its cleanup carve-outs, demo refusal, and — with `EAPODMAN_UPGRADE_FROM`/`_TO` — an in-place upgrade from the previous package with a running container. | A live cPanel VM (rpm or deb). Creates two throwaway accounts, and temporarily moves `/var/cpanel/skipparentcheck`, adds a feature list and package, and sets `DEMO` on an account; all undone at the end. |
-| `ea4-325-upgrade-live.t` | `ea-podman upgrade` reports a container that did not come back up, recreates the previous one when a create fails, and no longer lets a failed `restore` delete the directory it just extracted. Also covers `upgrade_containers --all` surviving a deleted account, and the EAPodman UAPI's `start`/`stop`. | A live cPanel VM (cgroup v1 or v2), with an ea-podman build carrying EA4-325 **recompiled** (see below). `ea-memcached16` optional — the packaged-container subtest skips without it. |
-| `cpanel-54868-e2e-live.t` | **The two halves against each other.** Drives `uapi WebApp stage/deploy/redeploy` as a real account against the installed plugin AND ea-podman: a configuration change that does not move the image reaches the container (CPANEL-56732), while a plain `ea-podman upgrade` on that same container does nothing at all (EA4-325 B2). Then `webapp_cleanup.pl` (CPANEL-56733) and `ea-podman clean` (CPANEL-54870) over what a real delete leaves. | A live cPanel VM on **cgroup v2**, with `zip`, the webapp plugin >= 1.5.0 installed and its feature flag present, and an ea-podman carrying EA4-325 **recompiled**. Needs to pull a `node` image once. |
+| `ea4-325-upgrade-live.t` | `ea-podman upgrade` reports a container that did not come back up, recreates the previous one when a create fails, and no longer lets a failed `restore` delete the directory it just extracted. Also covers `upgrade_containers --all` surviving a deleted account, and the EAPodman UAPI's `start`/`stop`. | A live cPanel VM (cgroup v1 or v2), with an ea-podman build carrying EA4-325 installed (and **recompiled**, on a build older than EA4-315 — see the test's header). `ea-memcached16` optional — the packaged-container subtest skips without it. |
+| `cpanel-54868-e2e-live.t` | **The two halves against each other.** Drives `uapi WebApp stage/deploy/redeploy` as a real account against the installed plugin AND ea-podman: a configuration change that does not move the image reaches the container (CPANEL-56732), while a plain `ea-podman upgrade` on that same container does nothing at all (EA4-325 B2). Then `webapp_cleanup.pl` (CPANEL-56733) and `ea-podman clean` (CPANEL-54870) over what a real delete leaves. | A live cPanel VM on **cgroup v2**, with `zip`, the webapp plugin >= 1.5.0 installed and its feature flag present, and an ea-podman carrying EA4-325 installed (and **recompiled**, on a build older than EA4-315). Needs to pull a `node` image once. |
 
 The CLI-driving tests above also check `cpwrapd_log` for the delegated CLI going
 through the lifecycle actions without ever calling `MINT_API_TOKEN` (skipped on
@@ -253,10 +253,22 @@ Same safety story as the POC — the mask is host-wide while it is on, and the
 startup state is restored on every exit path including the trap. Throwaway VM
 only.
 
-## Installing a build to test (the `ea-podman` binary embeds `util.pm`)
+## Installing a build to test
 
-`/opt/cpanel/ea-podman/bin/ea-podman` is a **compiled** binary that embeds its
-own copy of `util.pm`. Copying `SOURCES/util.pm` over
+From EA4-315 `/opt/cpanel/ea-podman/bin/ea-podman` is the perl script itself and
+reads `util.pm` from `lib/`, so a build is installed by copying files:
+
+```sh
+scp SOURCES/util.pm                root@VM:/opt/cpanel/ea-podman/lib/ea_podman/
+scp SOURCES/ea-podman.pl           root@VM:/opt/cpanel/ea-podman/bin/ea-podman
+scp SOURCES/ea-podman.pl           root@VM:/opt/cpanel/ea-podman/bin/ea-podman.pl
+scp SOURCES/Cpanel-API-EAPodman.pm root@VM:/usr/local/cpanel/Cpanel/API/EAPodman.pm
+scp SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm \
+    root@VM:/usr/local/cpanel/Cpanel/Admin/Modules/Cpanel/ea_podman.pm
+```
+
+Before EA4-315 it is a **compiled** binary that embeds its own copy of
+`util.pm`. Copying `SOURCES/util.pm` over
 `/opt/cpanel/ea-podman/lib/ea_podman/util.pm` therefore changes nothing the CLI
 runs — the library copy is what other consumers `require`, not what the binary
 uses. Copy, then recompile:
@@ -268,14 +280,15 @@ scp SOURCES/Cpanel-API-EAPodman.pm root@VM:/usr/local/cpanel/Cpanel/API/EAPodman
 ssh root@VM 'bash /opt/cpanel/ea-podman/bin/compile.sh'
 ```
 
-`ea4-325-upgrade-live.t` checks both the library and the compiled binary and
-skips with a specific message if only the library was updated.
+`ea4-325-upgrade-live.t` checks the library, and the binary too when the CLI is
+compiled, and skips with a specific message if only the library was updated.
 
 ### Or let the setup script do it
 
-`setup-remote-live.pl` does the above — including the recompile and the UAPI
-module — and checks everything else the live tests need before you find out the
-hard way. It is self-contained: no repo checkout, no CPAN, core modules only.
+`setup-remote-live.pl` does the above — including the recompile when the CLI
+is compiled, and the UAPI and admin modules — and checks everything else the
+live tests need before you find out the hard way. It is self-contained: no repo
+checkout, no CPAN, core modules only.
 
 ```sh
 scp t/LiveTests/setup-remote-live.pl root@VM:/root/

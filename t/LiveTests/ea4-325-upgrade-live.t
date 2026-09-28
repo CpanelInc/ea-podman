@@ -116,14 +116,18 @@
 #
 #   EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea4-325-upgrade-live.t
 #
-# NOTE ON INSTALLING A BUILD TO TEST. The `ea-podman` CLI is a COMPILED
-# binary that EMBEDS util.pm — copying SOURCES/util.pm over
+# NOTE ON INSTALLING A BUILD TO TEST. Before EA4-315 the `ea-podman` CLI is
+# a COMPILED binary that EMBEDS util.pm — copying SOURCES/util.pm over
 # /opt/cpanel/ea-podman/lib/ea_podman/util.pm does nothing on its own.
 # Copy it, then recompile:
 #
 #   scp SOURCES/util.pm    root@VM:/opt/cpanel/ea-podman/lib/ea_podman/
 #   scp SOURCES/ea-podman.pl root@VM:/opt/cpanel/ea-podman/bin/
 #   ssh root@VM 'bash /opt/cpanel/ea-podman/bin/compile.sh'
+#
+# From EA4-315 there is nothing to compile: bin/ea-podman is the script, so
+# copy SOURCES/ea-podman.pl over bin/ea-podman as well. setup-remote-live.pl
+# --deploy does the right thing for either.
 #
 # Environment variables:
 #   EAPODMAN_LIVE=1      REQUIRED opt-in.
@@ -388,17 +392,23 @@ plan skip_all => "ea-podman CLI not found" if !$CLI;
 $CLI_PATHS[0] = $CLI;
 
 # The installed build must actually carry EA4-325, or every assertion below is
-# testing the old behaviour and "failing" for the wrong reason. Checked against
-# the compiled binary as well as the library, because the binary embeds its own
-# copy of util.pm and is what the CLI actually runs.
+# testing the old behaviour and "failing" for the wrong reason. Before EA4-315
+# the CLI is a compiled binary that embeds its own copy of util.pm, so it is
+# checked as well as the library; from EA4-315 the CLI is the perl script and
+# reads util.pm from lib/, so the library is the whole answer.
 {
     my $src = slurp("$EAP_LIB/util.pm") // plan skip_all => "cannot read $EAP_LIB/util.pm";
-    plan skip_all => "installed ea-podman predates EA4-325 (no verify_container_started in util.pm); install and RECOMPILE the build under test"
+    plan skip_all => "installed ea-podman predates EA4-325 (no verify_container_started in util.pm); install the build under test (and RECOMPILE it if the CLI is compiled)"
       if $src !~ /verify_container_started/;
 
-    my ( $rc, $out ) = run_cmd( 'grep', '-c', 'did not come back up', $CLI );
-    plan skip_all => "the compiled ea-podman binary predates EA4-325 — util.pm was updated but compile.sh was not run"
-      if $rc != 0;
+    open( my $fh, '<', $CLI ) or plan skip_all => "cannot read $CLI: $!";
+    read( $fh, my $magic, 4 );
+    close $fh;
+    if ( ( $magic // '' ) eq "\x7fELF" ) {
+        my ( $rc, $out ) = run_cmd( 'grep', '-c', 'did not come back up', $CLI );
+        plan skip_all => "the compiled ea-podman binary predates EA4-325 — util.pm was updated but compile.sh was not run"
+          if $rc != 0;
+    }
 }
 
 # Increment B made `upgrade` PULL on every run, so this suite now consumes Docker
