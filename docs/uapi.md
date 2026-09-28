@@ -63,6 +63,17 @@ to call it. See `DESIGN.md` for the internals.
   keep working so an account can still see and remove what it has. (EA4-315;
   this UAPI declares the feature on those verbs, and the ea-podman admin
   module enforces it on its actions of the same name.)
+- The gate is enforced where ea-podman crosses into root, not in the CLI. An
+  unrestricted-shell account runs `ea-podman` as itself, so a check in the
+  script would only be advisory: the account could run a copy without it, or
+  run `podman` directly. What the gate withholds is root's help. `install`
+  needs a rootless session, ports, and a registry entry; `upgrade` needs the
+  registry; `cmd` needs root to enter the container. Each of those is a gated
+  admin action, so `install`, `upgrade`, and `cmd` are refused on the direct
+  CLI too. `start`, `restart`, and `bash` need nothing from root — they are
+  `systemctl --user` and `podman exec` as the account — so the direct CLI
+  does not gate them. They can only act on containers the account already
+  has: with the feature off from the start, it cannot create any.
 
 > **Host recommendation — cgroups:** ea-podman manages containers through the
 > user's `systemd` manager and runs on either cgroup hierarchy; bring-up and
