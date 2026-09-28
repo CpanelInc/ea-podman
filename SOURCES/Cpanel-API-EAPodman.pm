@@ -146,20 +146,36 @@ sub install ( $args, $result ) {
 
 =head2 upgrade
 
-Pull the latest image for the named container and recreate it.
-ARGUMENTS: C<container_name> (required).
+Pull the image the named container's configuration names, and recreate the
+container only if something actually moved — a newer image for the tag it
+tracks, or, for an EasyApache 4 package, a newer version of that package. When
+nothing has changed this does nothing at all: the container is not torn down,
+recreated, or restarted.
 
-NOTE: like C<install>, this is synchronous and pulls a new image, so it can be
-slow for large/remote images. The same async follow-up (a UserTasks worker
+A container that is not running is recreated and left not running, since a
+deliberate stop cannot be told from a crash.
+
+ARGUMENTS: C<container_name> (required), C<force> (optional).
+
+C<force> skips the comparison, recreates unconditionally, and starts the
+container afterwards. It is what re-applies a configuration change that does not
+move the image — which is why C<Cpanel::WebApps::Podman::redeploy_app> passes it
+(CPANEL-56732). On C<force> a failed pull warns and falls back to the locally
+cached image rather than failing, so a registry outage cannot break a redeploy;
+without it a failed pull leaves the container untouched and reports why.
+
+NOTE: like C<install>, this is synchronous and now really does pull, so it can be
+slow for large or remote images. The same async follow-up (a UserTasks worker
 writing to a deploy log) applies.
 
 =cut
 
 sub upgrade ( $args, $result ) {
     my $container_name = $args->get_length_required('container_name');
+    my $force          = $args->get('force');
 
     _require_ea_podman_or_die();
-    ea_podman::util::api_upgrade($container_name);
+    ea_podman::util::api_upgrade( $container_name, force => $force );
 
     return 1;
 }

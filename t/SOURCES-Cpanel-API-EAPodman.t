@@ -105,13 +105,25 @@ sub with_mocks {
             my ( undef, %p ) = @{ $calls[0] };
             is_deeply( \%p, { name => 'redis', image => 'docker.io/library/redis:alpine', cpuser_port => [ 6379, '' ], env => ['A=1'], accept_arbitrary_image_risk => 1 }, 'install: the UAPI parameters, by the same names' );
 
-            for my $func (qw(upgrade uninstall status)) {
+            for my $func (qw(uninstall status)) {
                 @calls = ();
                 ( $rv, $data ) = uapi( $func, container_name => "redis.$ME.01" );
                 is( $rv, 1, "$func succeeds" );
                 is_deeply( $calls[0], [ "api_$func", "redis.$ME.01" ], "$func: api_$func(container_name)" );
             }
             is_deeply( $data, { running => 1, enabled => 0 }, 'status: data is api_status()' );
+
+            @calls = ();
+            ( $rv, $data ) = uapi( 'upgrade', container_name => "redis.$ME.01" );
+            is( $rv, 1, 'upgrade succeeds' );
+            my ( undef, $name, %opts ) = @{ $calls[0] };
+            is( $name, "redis.$ME.01", 'upgrade: api_upgrade(container_name, ...)' );
+            ok( !$opts{force}, 'upgrade: not forced by default' );
+
+            @calls = ();
+            uapi( 'upgrade', container_name => "redis.$ME.01", force => 1 );
+            ( undef, undef, %opts ) = @{ $calls[0] };
+            ok( $opts{force}, 'upgrade: force is passed through (CPANEL-56732)' );
 
             for my $func (qw(start stop restart)) {
                 @calls = ();
@@ -195,20 +207,36 @@ sub with_mocks {
 
 {
     my @sysctl;
+    my @verified;
+    my $sysctl_rv = 1;
     with_mocks(
         {
             init_user                    => sub { return 1 },
-            sysctl                       => sub { push @sysctl, [@_];             return 1 },
+            sysctl                       => sub { push @sysctl, [@_];             return $sysctl_rv },
             reset_container_unit_failure => sub { push @sysctl, ['reset-failed']; return 1 },
             get_container_service_name   => sub { return "svc-$_[0]" },
+            verify_container_started     => sub { push @verified, $_[0]; return 1 },
         },
         sub {
             ea_podman::util::api_lifecycle( "redis.$ME.01", 'start' );
-            is_deeply( \@sysctl, [ ['reset-failed'], [ start => "svc-redis.$ME.01" ] ], 'start: clear the failed state first' );
+            is_deeply( \@sysctl,   [ ['reset-failed'], [ start => "svc-redis.$ME.01" ] ], 'start: clear the failed state first' );
+            is_deeply( \@verified, ["redis.$ME.01"],                                      'start: checks the container really came up (EA4-325)' );
 
-            @sysctl = ();
+            @verified = ();
+            ea_podman::util::api_lifecycle( "redis.$ME.01", 'restart' );
+            is_deeply( \@verified, ["redis.$ME.01"], 'restart: checks the container really came up (EA4-325)' );
+
+            $sysctl_rv = 0;
+            ok( !eval { ea_podman::util::api_lifecycle( "redis.$ME.01", 'start' ); 1 }, 'start: a refused job dies' );
+            like( $@, qr/systemd refused the job/, '... saying so' );
+            ok( eval { ea_podman::util::api_lifecycle( "redis.$ME.01", 'stop' ); 1 }, 'stop: a non-zero exit does not die' );
+            $sysctl_rv = 1;
+
+            @verified = ();
+            @sysctl   = ();
             ea_podman::util::api_lifecycle( "redis.$ME.01", 'stop' );
-            is_deeply( \@sysctl, [ [ stop => "svc-redis.$ME.01" ], ['reset-failed'] ], 'stop: clear it after' );
+            is_deeply( \@sysctl,   [ [ stop => "svc-redis.$ME.01" ], ['reset-failed'] ], 'stop: clear it after' );
+            is_deeply( \@verified, [],                                                   'stop: no start check' );
 
             ok( !eval { ea_podman::util::api_lifecycle( "redis.$ME.01", 'enable' ); 1 }, 'only start, stop and restart' );
             ok( !eval { ea_podman::util::api_lifecycle( 'bad name',     'start' );  1 }, 'a malformed name is refused' );

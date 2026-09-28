@@ -51,6 +51,17 @@ sub _run {
     local *ea_podman::util::_get_new_ports                        = sub { return ( $args{port} ) };
     local *ea_podman::util::_get_current_ports                    = sub { return ( $args{port} ) };
 
+    # EA4-325 made upgrade pull and compare image IDs before it recreates
+    # anything, so without these an upgrade subtest shells out to the registry
+    # for real and dies whenever the pull fails. The IDs differ on purpose:
+    # these subtests are about the -p args of the recreate, not about the gate.
+    local *ea_podman::util::_podman_pull                          = sub { return 1 };
+    local *ea_podman::util::_get_image_id                         = sub { return "sha-new" };
+    local *ea_podman::util::_get_container_image_id               = sub { return "sha-old" };
+    local *ea_podman::util::_get_container_image_ref              = sub { return };
+    local *ea_podman::util::is_user_container_name_running        = sub { return 1 };
+    local *ea_podman::util::_container_ports_all_loopback         = sub { return 0 };
+
     my @podman_calls;
     local *ea_podman::util::podman = sub {
         push @podman_calls, [@_];

@@ -64,7 +64,7 @@ Now `bob`:
 2. Can use `mymongo.bob.01` for various `ea-podman` subcommands, e.g.
    * `ea-podman restart mymongo.bob.01` restart the container
    * `ea-podman bash mymongo.bob.01` get a shell inside the container (if it has bash)
-   * `ea-podman upgrade mymongo.bob.01` upgrade the image
+   * `ea-podman upgrade mymongo.bob.01` pull the image and recreate the container if it moved (`--force` to recreate regardless)
 
 ## How can I use the `ea-podman` CLI?
 
