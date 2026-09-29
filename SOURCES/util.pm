@@ -509,6 +509,22 @@ sub _podman_create_captured {
 
     pipe( my $reader, my $writer ) or return ( podman(@args), '' );
 
+    # What system() did for free, and this fork/exec no longer does:
+    #   * INT and QUIT are ignored in the parent while the child runs. A Ctrl-C
+    #     reaches podman through the terminal's process group; ea-podman must
+    #     outlive it to see the create fail and run its cleanup / rollback.
+    #   * TERM and HUP (system() never covered these) are forwarded to podman,
+    #     which is the only process that could act on them, and ea-podman then
+    #     waits for it. Without that, a kill aimed at ea-podman alone would end
+    #     it mid-create with the pipe and the child both orphaned.
+    # `local`, so every return path restores the caller's handlers.
+    my ( $child, @got );
+    my $forward = sub {
+        push @got, $_[0];
+        kill( $_[0], $child ) if $child;
+    };
+    local @SIG{qw(INT QUIT TERM HUP)} = ( 'IGNORE', 'IGNORE', $forward, $forward );
+
     my $pid = fork();
     if ( !defined $pid ) {
         close $reader;
@@ -517,6 +533,11 @@ sub _podman_create_captured {
     }
 
     if ( !$pid ) {
+
+        # IGNORE survives exec, so podman would never see a Ctrl-C. Put every
+        # disposition back before anything else.
+        @SIG{qw(INT QUIT TERM HUP)} = ('DEFAULT') x 4;
+
         close $reader;
         open( STDOUT, ">&", $writer ) or kill( "KILL", $$ );
         open( STDERR, ">&", $writer ) or kill( "KILL", $$ );
@@ -528,6 +549,10 @@ sub _podman_create_captured {
     }
 
     close $writer;
+
+    # A TERM or HUP that landed between fork() and this line had no pid to go to.
+    $child = $pid;
+    kill( $_, $pid ) for grep { $_ eq 'TERM' || $_ eq 'HUP' } @got;
 
     my $said = '';
     while (1) {
@@ -546,8 +571,18 @@ sub _podman_create_captured {
     }
     close $reader;
 
-    waitpid( $pid, 0 );
-    return ( $? == 0 ? 1 : 0, $said );
+    1 while waitpid( $pid, 0 ) == -1 && $! + 0 == 4;    # EINTR
+
+    # If podman finished anyway the create worked and is reported as such; the
+    # note is only for the failure the interruption caused.
+    my $ok = $? == 0 ? 1 : 0;
+    if ( !$ok && @got ) {
+        my %seen;
+        my $names = join( ", ", map { "SIG$_" } grep { !$seen{$_}++ } @got );
+        $said .= "\n" if length($said) && $said !~ /\n\z/;
+        $said .= "ea-podman was interrupted ($names) while podman was creating the container.\n";
+    }
+    return ( $ok, $said );
 }
 
 # The RLIMIT_NPROC hard cap of the calling user's systemd --user manager (which

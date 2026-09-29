@@ -165,6 +165,82 @@ subtest 'a very chatty podman is not held in memory whole' => sub {
     cmp_ok( length $said, '<=', 131072, "and it is bounded" );
 };
 
+# EA4-335, review follow-up. system() ignored INT and QUIT in the parent while its
+# child ran; the fork/exec that replaced it did not, so Ctrl-C ended ea-podman
+# before it could clean up. TERM and HUP are forwarded to podman and waited on.
+# A sibling process delivers the signal to this one, mid-create.
+sub _signal_me_after {
+    my ( $delay, @sigs ) = @_;
+    my $me  = $$;
+    my $kid = fork() // die $!;
+    if ( !$kid ) {
+        select( undef, undef, undef, $delay );
+        kill( $_, $me ) for @sigs;
+        POSIX::_exit(0);    # not exit(): no Test::More END block in the helper
+    }
+    return $kid;
+}
+
+subtest 'Ctrl-C at ea-podman does not end it while podman runs' => sub {
+    require POSIX;
+    my $bin = _fake_podman('sleep 1; echo finished; exit 0');
+    local $ENV{PATH} = "$bin:$ENV{PATH}";
+
+    my $kid = _signal_me_after( 0.3, 'INT', 'QUIT' );
+    my ( undef, $ok, $said ) = _stderr_of( sub { ea_podman::util::_podman_create_captured("create") } );
+    waitpid( $kid, 0 );
+
+    ok( $ok, "still here, and podman's own outcome is what is reported" );
+    like( $said, qr/finished/, "podman was left to finish" );
+    unlike( $said, qr/interrupted/, "INT and QUIT are not reported as an interruption of the create" );
+};
+
+subtest 'podman gets default INT and QUIT handling, not the parent\'s IGNORE' => sub {
+    my $bin = _fake_podman('kill -INT $$; sleep 1; echo survived; exit 0');
+    local $ENV{PATH} = "$bin:$ENV{PATH}";
+
+    my ( undef, $ok, $said ) = _stderr_of( sub { ea_podman::util::_podman_create_captured("create") } );
+
+    ok( !$ok, "podman died of its own SIGINT" );
+    unlike( $said, qr/survived/, "so IGNORE did not leak across the exec" );
+};
+
+for my $sig (qw(TERM HUP)) {
+    subtest "SIG$sig at ea-podman is forwarded to podman and the create fails cleanly" => sub {
+        require POSIX;
+        my $bin = _fake_podman('echo started; exec sleep 30');
+        local $ENV{PATH} = "$bin:$ENV{PATH}";
+
+        my $t0  = time;
+        my $kid = _signal_me_after( 0.5, $sig );
+        my ( undef, $ok, $said ) = _stderr_of( sub { ea_podman::util::_podman_create_captured("create") } );
+        waitpid( $kid, 0 );
+
+        ok( !$ok, "the create is reported as failed, so the caller's cleanup runs" );
+        cmp_ok( time - $t0, '<', 20, "and podman was signalled rather than waited out" );
+        like( $said, qr/interrupted \(SIG$sig\)/, "and the message says what interrupted it" );
+        is( waitpid( -1, POSIX::WNOHANG() ), -1, "no podman child is left behind" );
+    };
+}
+
+subtest 'the caller\'s signal handlers are put back on every path' => sub {
+    my $bin = _fake_podman('exit 0');
+    local $ENV{PATH} = "$bin:$ENV{PATH}";
+
+    my $mine = sub { 1 };
+    local @SIG{qw(INT QUIT TERM HUP)} = ( $mine, 'DEFAULT', $mine, 'IGNORE' );
+
+    _stderr_of( sub { ea_podman::util::_podman_create_captured("create") } );
+    is_deeply( [ @SIG{qw(INT QUIT TERM HUP)} ], [ $mine, 'DEFAULT', $mine, 'IGNORE' ], "after a success" );
+
+    my $empty = File::Temp->newdir();
+    {
+        local $ENV{PATH} = "$empty";
+        _stderr_of( sub { ea_podman::util::_podman_create_captured("create") } );
+    }
+    is_deeply( [ @SIG{qw(INT QUIT TERM HUP)} ], [ $mine, 'DEFAULT', $mine, 'IGNORE' ], "and after a failure" );
+};
+
 subtest 'create_user_container keeps a boolean return and remembers a failure' => sub {
     no warnings 'redefine';
     local $ea_podman::util::_create_output;

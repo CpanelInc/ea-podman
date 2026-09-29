@@ -50,6 +50,15 @@
 #      in A could be anything; with it the small filesystem is the only variable.
 #      It also proves a failed first install left the staged source intact for a
 #      retry.
+#   D. AN INTERRUPT DURING `podman create` STILL RUNS THE CLEANUP. A `podman`
+#      shim makes create sleep; SIGINT (to the process group, like Ctrl-C),
+#      SIGTERM and SIGHUP (to ea-podman alone) are then sent. ea-podman must exit,
+#      report the failed create, and leave no container directory, registration
+#      or sleeping podman. The unit tests pin the signal dispositions; only a
+#      real box shows the install's cleanup actually running afterwards. Runs
+#      after C because it needs the big filesystem. (The upgrade rollback is
+#      the same code path as the install cleanup once create returns false, and
+#      is covered by the unit tests, not here.)
 #
 # WHICH LOG "THE DEPLOY LOG" IS
 #
@@ -324,6 +333,9 @@ my $WANT_NEW_EAP = $EXPECT_OLD ? 0 : 1;
 
 check_marker( "ea-podman library ($EAP_LIB)", marker_in_file( $EAP_LIB, '_podman_create_captured' ), $WANT_NEW_EAP );
 check_marker( "ea-podman binary ($EAP_BIN)",  marker_in_binary('_podman_create_captured'),            $WANT_NEW_EAP )
+  if !$ENV{E2E335_SKIP_BINARY_CHECK};
+check_marker( "ea-podman library ($EAP_LIB) interrupt handling", marker_in_file( $EAP_LIB, 'while podman was creating the container' ), $WANT_NEW_EAP );
+check_marker( "ea-podman binary ($EAP_BIN) interrupt handling", marker_in_binary('while podman was creating the container'),            $WANT_NEW_EAP )
   if !$ENV{E2E335_SKIP_BINARY_CHECK};
 check_marker( "plugin Podman.pm ($PLUGIN_PM)", marker_in_file( $PLUGIN_PM, '_quietly_explaining' ), 1 );
 check_marker( "plugin Deploy.pm ($DEPLOY_PM)", marker_in_file( $DEPLOY_PM, '_log_failure_hint' ),  1 );
@@ -757,6 +769,122 @@ subtest 'C: the same application deploys once the filesystem is big enough' => s
     if ( length $port ) {
         my ( $crc, $body ) = run_cmd( 'curl', '-s', '--max-time', '15', "http://127.0.0.1:$port/" );
         like( $body, qr/E2E335_OK/, 'and it serves the application' );
+    }
+
+    return;
+};
+
+#=============================================================================
+# Stage D -- an interrupt during `podman create` still runs the install cleanup
+#
+# The create is made slow and deterministic with a `podman` shim first in the
+# account's PATH: every subcommand goes to the real podman except `create`, which
+# announces itself and then sleeps (exec, so a signal reaches the sleeper and not
+# a shell that would leave it holding the output pipe). Needs the big filesystem
+# from stage C, because the image has to pull for the install to get as far as
+# create -- on the full disk it never does.
+#
+#   INT   goes to the whole process group, as a terminal's Ctrl-C does
+#   TERM  goes to ea-podman ALONE, as `kill` does; HUP likewise
+#
+# For each: ea-podman must exit non-zero, having reported the failed create (which
+# proves it survived long enough to run its own error path), and must leave no
+# container directory, no registration and no sleeping shim behind.
+#=============================================================================
+
+sub _start_interruptible_install {
+    my ($shim) = @_;
+
+    my $cmd = "rm -f $HOME/e2e335-create-started $HOME/e2e335-install.pid $HOME/e2e335-install.out; "
+      . "PATH=" . _sh($shim) . ":\$PATH setsid bash -c "
+      . _sh( "echo \$\$ > $HOME/e2e335-install.pid; exec /opt/cpanel/ea-podman/bin/ea-podman install $CLI_NAME --i-understand-the-risks-do-it-anyway --cpuser-port=80 " . _sh($IMAGE) )
+      . " > $HOME/e2e335-install.out 2>&1 < /dev/null &";
+    as_user( $USER, $cmd );
+    return;
+}
+
+sub _wait_for {
+    my ( $timeout, $test ) = @_;
+    my $deadline = time + $timeout;
+    while ( time < $deadline ) {
+        return 1 if $test->();
+        sleep 1;
+    }
+    return $test->() ? 1 : 0;
+}
+
+subtest 'D: an interrupt during create still runs the install cleanup' => sub {
+    if ( $RATE_LIMITED || !$MOUNTED ) {
+        pass('skipped: stage A did not establish a working filesystem');
+        return;
+    }
+    if ($EXPECT_OLD) {
+        pass('skipped: this run expects the older ea-podman, which has no interrupt handling');
+        return;
+    }
+    if ( !-x '/usr/bin/podman' ) {
+        pass('skipped: no /usr/bin/podman for the shim to hand off to');
+        return;
+    }
+
+    my $shim = "$HOME/e2e335-shim";
+    File::Path::make_path($shim);
+    spew(
+        "$shim/podman", <<'SH'
+#!/bin/sh
+if [ "$1" = create ]; then
+    : > "$HOME/e2e335-create-started"
+    exec sleep 300
+fi
+exec /usr/bin/podman "$@"
+SH
+    );
+    chmod 0755, "$shim/podman";
+    run_cmd( 'chown', '-R', "$USER:$USER", $shim );
+
+    for my $case ( [ 'INT', 'the whole process group (a terminal Ctrl-C)' ], [ 'TERM', 'ea-podman alone (kill)' ], [ 'HUP', 'ea-podman alone (hangup)' ] ) {
+        my ( $sig, $how ) = @{$case};
+
+        _start_interruptible_install($shim);
+
+        my $started = _wait_for( $TIMEOUT, sub { -e "$HOME/e2e335-create-started" } );
+        if ( !$started ) {
+            $LAST_BUILD_LOG = slurp("$HOME/e2e335-install.out");
+            if ( $LAST_BUILD_LOG =~ /toomanyrequests|rate limit/i ) {
+                pass("SIG$sig: skipped, registry rate limit before create was reached");
+                next;
+            }
+            fail("SIG$sig: the install reached `podman create` (through the shim)");
+            note_both("install output so far:\n$LAST_BUILD_LOG");
+            run_cmd( 'pkill', '-KILL', '-u', $USER, '-x', 'sleep' );
+            next;
+        }
+
+        chomp( my $pid = slurp("$HOME/e2e335-install.pid") );
+        ok( $pid =~ /^\d+$/ && kill( 0, $pid ), "SIG$sig: ea-podman is running, in its own session" ) or next;
+
+        # A negative pid signals the whole process group, which setsid made the pid.
+        kill( $sig, $sig eq 'INT' ? -$pid : $pid );
+        note_both("sent SIG$sig to $how");
+
+        my $gone = _wait_for( 60, sub { !kill( 0, $pid ) } );
+        ok( $gone, "SIG$sig: ea-podman exits instead of hanging on the sleeping podman" );
+        kill( 'KILL', -$pid ) if !$gone;
+
+        my $out = slurp("$HOME/e2e335-install.out");
+        $LAST_BUILD_LOG = $out;
+        like( $out, qr/Failed to create container/, "SIG$sig: it reached its own failed-create path, so cleanup ran" );
+        like( $out, qr/interrupted \(SIG$sig\)/,     "SIG$sig: and said what interrupted it" ) if $sig ne 'INT';
+
+        my @left = glob("$HOME/ea-podman.d/${CLI_NAME}*");
+        is( scalar @left, 0, "SIG$sig: no container directory is left behind" ) or note_both( 'left: ' . join( ', ', @left ) );
+
+        my ( undef, $list ) = as_user( $USER, '/opt/cpanel/ea-podman/bin/ea-podman list 2>&1' );
+        unlike( $list, qr/\Q$CLI_NAME\E/, "SIG$sig: and nothing is registered" );
+
+        my ($prc) = run_cmd( 'pgrep', '-u', $USER, '-x', 'sleep' );
+        isnt( $prc, 0, "SIG$sig: and no sleeping podman shim is left running" );
+        run_cmd( 'pkill', '-KILL', '-u', $USER, '-x', 'sleep' );
     }
 
     return;
