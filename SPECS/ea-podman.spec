@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 30
+%define release_prefix 31
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -165,6 +165,20 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
+* Tue Sep 22 2026 Julian Brown <julian.brown@webpros.com> - 1.0-31
+- EA4-325: Make `ea-podman upgrade` skip a recreate when nothing has moved,
+  recreate a container whose backup failed to come back up or whose create
+  failed without deregistering it or releasing its ports, and still recreate a
+  web app published on every interface so it picks up EA4-327's loopback-only
+  binding; make `upgrade_containers` and the EAPodman UAPI report a failed
+  container, backup, restore, or start/restart instead of exiting 0 or always
+  reporting success; add a new `ea-podman clean` that lists and (with
+  `--run`) removes leftover `<container>.bak` directories, working correctly
+  as root without allocating subuid/subgid ranges for every account or
+  reporting an unexamined directory's size as 0 bytes; and fix the trailing
+  newline on `ea-podman list`'s image name and the manifest filename named in
+  `ea-podman backup`/`restore` help
+
 * Fri Sep 18 2026 Chris Castillo <chris.castillo@webpros.com> - 1.0-30
 - EA4-327: Bind web app container ports to loopback only
 

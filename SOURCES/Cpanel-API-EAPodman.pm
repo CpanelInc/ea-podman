@@ -220,21 +220,37 @@ sub install ( $args, $result ) {
 
 =head2 upgrade
 
-Pull the latest image for the named container and recreate it.
-ARGUMENTS: C<container_name> (required).
+Pull the image the named container's configuration names, and recreate the
+container only if something actually moved — a newer image for the tag it
+tracks, or, for an EasyApache 4 package, a newer version of that package. When
+nothing has changed this does nothing at all: the container is not torn down,
+recreated, or restarted.
 
-NOTE: like C<install>, this is synchronous and pulls a new image, so it can be
-slow for large/remote images. The same async follow-up (a UserTasks worker
+A container that is not running is recreated and left not running, since a
+deliberate stop cannot be told from a crash.
+
+ARGUMENTS: C<container_name> (required), C<force> (optional).
+
+C<force> skips the comparison, recreates unconditionally, and starts the
+container afterwards. It is what re-applies a configuration change that does not
+move the image — which is why C<Cpanel::WebApps::Podman::redeploy_app> passes it
+(CPANEL-56732). On C<force> a failed pull warns and falls back to the locally
+cached image rather than failing, so a registry outage cannot break a redeploy;
+without it a failed pull leaves the container untouched and reports why.
+
+NOTE: like C<install>, this is synchronous and now really does pull, so it can be
+slow for large or remote images. The same async follow-up (a UserTasks worker
 writing to a deploy log) applies.
 
 =cut
 
 sub upgrade ( $args, $result ) {
     my $container_name = $args->get_length_required('container_name');
+    my $force          = $args->get('force');
 
     _run_in_user_session(
         sub {
-            ea_podman::util::upgrade_container($container_name);
+            ea_podman::util::upgrade_container( $container_name, force => ( $force ? 1 : 0 ) );
             return 1;
         }
     );
@@ -289,6 +305,30 @@ sub _lifecycle ( $args, $action ) {
             ea_podman::util::reset_container_unit_failure($container_name) if !$stopping;
             my $rv = ea_podman::util::sysctl( $action => $service );
             ea_podman::util::reset_container_unit_failure($container_name) if $stopping;
+
+            # Asymmetric on purpose (EA4-325). $rv used to be returned here and
+            # then thrown away by the unconditional `return 1` below, so every
+            # verb reported success whatever systemd did.
+            #
+            # A bring-up that did not happen is a failure the caller has to know
+            # about. A `stop` that returns non-zero is not the same thing: an
+            # already-stopped unit, a unit file that is gone, a container that has
+            # already been removed all land here, and all of them mean the thing
+            # the caller asked for is true. Raising on those would break teardown
+            # paths for no gain — the same reasoning as the reset_failed above.
+            if ( !$stopping ) {
+                die "Failed to $action “$container_name”: systemd refused the job. Check `systemctl --user status $service`.\n" if !$rv;
+
+                # $rv on its own is not enough, and this is the trap the CLI hit
+                # too: `systemctl start` reports success for a container that
+                # starts and then dies, so a bring-up that leaves the application
+                # down still looked like a win. Same poll the upgrade path uses.
+                ea_podman::util::verify_container_started(
+                    $container_name,
+                    lead => "“$container_name” did not $action",
+                    note => "",
+                );
+            }
 
             return $rv;
         }

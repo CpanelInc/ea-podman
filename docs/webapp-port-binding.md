@@ -85,6 +85,13 @@ binding the next time it's recreated — through a normal package
 upgrade/reinstall — with no separate migration step required. Containers
 already running keep their current binding until then.
 
+`ea-podman upgrade` only recreates a container when something has changed
+(EA4-325), and the image is not the only thing it checks. A registered web app
+whose published ports are not all bound to `127.0.0.1` counts as needing a
+recreate even when its image has not moved. So the next upgrade, or
+`upgrade_containers` sweep, still moves every pre-existing web app to loopback.
+An upgrade that finds the web app already on loopback leaves it alone.
+
 ### Verification
 
 - Install (or upgrade) a web app container and confirm its published port is
