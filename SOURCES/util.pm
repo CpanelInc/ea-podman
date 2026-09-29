@@ -493,17 +493,61 @@ sub create_user_container {
 }
 
 # The shell-out create_user_container() goes through. Its own sub so a test can
-# supply what podman said without podman. Tees rather than swallows, so a person
-# at a terminal sees exactly what they saw before; stdout first and stderr last,
-# so the error is at the end of what is kept. (EA4-335)
+# supply what podman said without podman.
+#
+# Runs podman in a child whose stdout and stderr are one pipe, and echoes what
+# arrives as it arrives, so a person at a terminal still sees an image pull's
+# progress live and keeps what podman said for the error message. Deliberately
+# not Capture::Tiny::tee: that starts helper subprocesses, which time out inside
+# the compiled ea-podman binary ("Timed out waiting for subprocesses to start"),
+# and that aborted the install before its cleanup ran. (EA4-335)
+#
+# Falls back to a plain, uncaptured podman() if the pipe or the fork is refused,
+# so this can only ever lose the message, never the create.
 sub _podman_create_captured {
     my @args = @_;
 
-    require Capture::Tiny;
-    my $ok;
-    my ( $stdout, $stderr ) = Capture::Tiny::tee( sub { $ok = podman(@args) } );
+    pipe( my $reader, my $writer ) or return ( podman(@args), '' );
 
-    return ( $ok, ( $stdout // '' ) . ( $stderr // '' ) );
+    my $pid = fork();
+    if ( !defined $pid ) {
+        close $reader;
+        close $writer;
+        return ( podman(@args), '' );
+    }
+
+    if ( !$pid ) {
+        close $reader;
+        open( STDOUT, ">&", $writer ) or kill( "KILL", $$ );
+        open( STDERR, ">&", $writer ) or kill( "KILL", $$ );
+        close $writer;
+
+        # If exec fails, KILL rather than exit so a child never runs the
+        # parent's END blocks or destructors.
+        exec( "podman", @args ) or kill( "KILL", $$ );
+    }
+
+    close $writer;
+
+    my $said = '';
+    while (1) {
+        my $n = sysread( $reader, my $chunk, 65536 );
+        if ( !defined $n ) {
+            next if $! + 0 == 4;    # EINTR
+            last;
+        }
+        last if !$n;
+
+        print STDERR $chunk;
+        $said .= $chunk;
+
+        # Only the tail is ever used; do not hold a whole verbose pull.
+        $said = substr( $said, -65536 ) if length($said) > 131072;
+    }
+    close $reader;
+
+    waitpid( $pid, 0 );
+    return ( $? == 0 ? 1 : 0, $said );
 }
 
 # The RLIMIT_NPROC hard cap of the calling user's systemd --user manager (which

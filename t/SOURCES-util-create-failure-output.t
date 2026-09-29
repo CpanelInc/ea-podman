@@ -97,31 +97,72 @@ sub _fails {
     return do { local $@; eval { ea_podman::util::_ensure_latest_container( $name, { op => $op }, @extra ) }; $@ };
 }
 
-subtest 'the capture seam returns what podman said and whether it worked' => sub {
-    no warnings 'redefine';
-    local *ea_podman::util::podman = sub {
-        print STDERR "first\n";
-        print STDOUT "second\n";
-        return 0;
-    };
+# A stand-in `podman` first in PATH, so the real fork, pipe and exec are what is
+# tested -- not a mock of the sub under test.
+sub _fake_podman {
+    my ($body) = @_;
+    my $dir = File::Temp->newdir();
+    open( my $fh, ">", "$dir/podman" ) or die $!;
+    print {$fh} "#!/bin/sh\n$body\n";
+    close $fh;
+    chmod 0755, "$dir/podman";
+    return $dir;
+}
 
-    # The seam tees, so a CLI user still sees it too; silence the copy here.
-    my ( $ok, $said ) = do {
-        open( my $save, ">&", \*STDERR ) or die $!;
-        open( STDERR, ">", File::Spec->devnull ) or die $!;
-        open( my $saveo, ">&", \*STDOUT ) or die $!;
-        open( STDOUT, ">", File::Spec->devnull ) or die $!;
-        my @r = ea_podman::util::_podman_create_captured( "create", "--name", "x" );
-        open( STDERR, ">&", $save )  or die $!;
-        open( STDOUT, ">&", $saveo ) or die $!;
-        @r;
-    };
+# Run $code with STDERR pointed at a file, returning what was echoed to it.
+sub _stderr_of {
+    my ($code) = @_;
+    my $tmp = File::Temp->new();
+    open( my $save, ">&", \*STDERR ) or die $!;
+    open( STDERR, ">", $tmp->filename ) or die $!;
+    my @r = $code->();
+    open( STDERR, ">&", $save ) or die $!;
+    open( my $in, "<", $tmp->filename ) or die $!;
+    local $/;
+    return ( scalar(<$in>), @r );
+}
+
+subtest 'the capture seam returns what podman said and whether it worked' => sub {
+    my $bin = _fake_podman('echo "to stdout"; echo "to stderr" >&2; exit 1');
+    local $ENV{PATH} = "$bin:$ENV{PATH}";
+
+    my ( $echoed, $ok, $said ) = _stderr_of( sub { ea_podman::util::_podman_create_captured( "create", "--name", "x" ) } );
 
     ok( !$ok, "the failure is reported" );
-    like( $said, qr/first/,  "stderr is captured" );
-    like( $said, qr/second/, "and so is stdout" );
-    like( $said, qr/second.*first|first.*second/s, "both are present" );
-    is( ( $said =~ /(first|second)\s*\z/ )[0], "first", "stderr comes last, so the error is at the end of the tail" );
+    like( $said, qr/to stdout/, "stdout is captured" );
+    like( $said, qr/to stderr/, "and so is stderr" );
+    like( $echoed, qr/to stdout.*to stderr|to stderr.*to stdout/s, "and both are still shown to whoever is watching" );
+};
+
+subtest 'the capture seam passes podman its arguments and reports success' => sub {
+    my $bin = _fake_podman('echo "args: $*"; exit 0');
+    local $ENV{PATH} = "$bin:$ENV{PATH}";
+
+    my ( undef, $ok, $said ) = _stderr_of( sub { ea_podman::util::_podman_create_captured( "create", "--name", "x y", "img" ) } );
+
+    ok( $ok, "success is reported as true" );
+    like( $said, qr/args: create --name x y img/, "the arguments arrive intact" );
+};
+
+subtest 'the capture seam never loses the create when podman cannot be run' => sub {
+    my $empty = File::Temp->newdir();
+    local $ENV{PATH} = "$empty";
+
+    my ( undef, $ok, $said ) = _stderr_of( sub { ea_podman::util::_podman_create_captured( "create", "x" ) } );
+
+    ok( !$ok, "a missing podman is a failure, not a hang or a crash" );
+    like( $said, qr/Can't exec "podman"/, "and the reason it could not run is what gets reported" );
+};
+
+subtest 'a very chatty podman is not held in memory whole' => sub {
+    my $bin = _fake_podman('i=0; while [ $i -lt 4000 ]; do echo "layer $i xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; i=$((i+1)); done; echo "the end" >&2; exit 1');
+    local $ENV{PATH} = "$bin:$ENV{PATH}";
+
+    my ( undef, $ok, $said ) = _stderr_of( sub { ea_podman::util::_podman_create_captured("create") } );
+
+    ok( !$ok, "still a failure" );
+    like( $said, qr/the end\s*\z/, "the end of the output is kept" );
+    cmp_ok( length $said, '<=', 131072, "and it is bounded" );
 };
 
 subtest 'create_user_container keeps a boolean return and remembers a failure' => sub {

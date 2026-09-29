@@ -34,8 +34,7 @@
 # WHAT IT PROVES
 #
 #   A. a Web App deploy on a full disk fails as build_failed (unchanged for
-#      callers that only check the category) AND its deploy log, read back
-#      through WebApp::fetch_logs, contains:
+#      callers that only check the category) AND its deploy log contains:
 #        - the original "Could not provision the container (build_failed)" line
 #        - a plain-words sentence saying the account is out of disk space or
 #          quota, EXACTLY ONCE
@@ -52,14 +51,25 @@
 #      It also proves a failed first install left the staged source intact for a
 #      retry.
 #
+# WHICH LOG "THE DEPLOY LOG" IS
+#
+# The deploy task writes ~/.cpanel/logs/<epoch>-deploy-<name>.log, and that is the
+# file the SSE stream tails and the UI shows while a deploy runs. It is NOT what
+# WebApp::fetch_logs reads: that returns app.log or the build container's
+# build-<deploy_id>.log, which exists only if the build container ran. A first
+# deploy that fails while provisioning never gets that far, so fetch_logs has
+# nothing for it (CPANEL-55804's ticket assumed otherwise). This file therefore
+# reads the task log directly and reports what fetch_logs returned, without
+# asserting on it.
+#
 # WHAT IT DELIBERATELY DOES NOT PROVE
 #
 #   * The upgrade and rollback path. Live, the failed create and the rollback's
 #     create both die with the same out-of-space error, so a test cannot tell
 #     the first failure from the second. The unit tests cover it with distinct
 #     outputs (t/SOURCES-util-create-failure-output.t).
-#   * The UI panel, and the live SSE log stream. fetch_logs reads the same file
-#     they do; nothing here renders a page.
+#   * The UI panel, and the live SSE stream. It reads the file the stream tails;
+#     nothing here renders a page or opens the stream.
 #   * A real disk quota (EDQUOT). See above.
 #
 # RUN IT
@@ -572,12 +582,23 @@ sub wait_for_result {
     return ( $app, ( $app && ref $app->{last_deploy} eq 'HASH' ) ? { %{ $app->{last_deploy} }, result => 'timeout' } : { result => 'timeout' } );
 }
 
-sub build_log_lines {
+# The deploy task's own log: ~/.cpanel/logs/<epoch>-deploy-<name>.log, the newest
+# one. This is what the SSE stream tails. (WebApp::fetch_logs does not read it.)
+sub deploy_log_lines {
+    my @files = sort { ( stat($b) )[9] <=> ( stat($a) )[9] } glob("$HOME/.cpanel/logs/*-deploy-$SLUG.log");
+    return [] if !@files;
+    my @lines = split /\n/, slurp( $files[0] );
+    return \@lines;
+}
+
+# What fetch_logs says for a deploy. Reported, never asserted on: it reads the
+# build container's log, which a provisioning failure never produces.
+sub fetch_logs_count {
     my ($deploy_id) = @_;
     my ($json) = webapp( $USER, 'fetch_logs', "name=$SLUG", 'log_type=build', 'lines=1000', ( length( $deploy_id // '' ) ? "deploy_id=$deploy_id" : () ) );
-    return [] if !uapi_ok($json);
+    return 'n/a' if !uapi_ok($json);
     my $lines = $json->{result}{data}{lines};
-    return ref $lines eq 'ARRAY' ? $lines : [];
+    return ref $lines eq 'ARRAY' ? scalar @$lines : 0;
 }
 
 sub count_matching {
@@ -617,8 +638,9 @@ subtest 'A: a deploy on a full disk fails as build_failed and its log says why' 
 
     my ( $app, $last ) = wait_for_result('');
     $LAST_ID = $last->{deploy_id};
-    my @lines = @{ build_log_lines($LAST_ID) };
+    my @lines = @{ deploy_log_lines() };
     $LAST_BUILD_LOG = join( "\n", @lines );
+    note_both( 'WebApp::fetch_logs(build) returned ' . fetch_logs_count($LAST_ID) . ' line(s) for this failed deploy (it reads the build container log, not the task log)' );
 
     if ( $LAST_BUILD_LOG =~ /toomanyrequests|rate limit/i ) {
         $RATE_LIMITED = 1;
@@ -631,13 +653,13 @@ subtest 'A: a deploy on a full disk fails as build_failed and its log says why' 
     is( $last->{result}, 'failure', 'it failed rather than timing out' );
     is( $last->{error_category} // '', 'build_failed', 'and the category is still build_failed, for callers that only check it' );
 
-    cmp_ok( scalar @lines, '>', 0, 'fetch_logs returned the deploy log' );
+    cmp_ok( scalar @lines, '>', 0, 'the deploy task wrote a log' );
     cmp_ok( count_matching( qr/Could not provision the container \(build_failed\)/, @lines ), '==', 1, 'the original "Could not provision" line is there once' );
 
     is( count_matching( $HINT_RE, @lines ), 1, 'a plain-words sentence names the account being out of disk space or quota -- exactly once' );
 
     # THE live-only risk. This line is on the second-or-later line of a
-    # multi-line message, so finding it also proves the log writer keeps the
+    # multi-line message, so finding it also proves the log keeps the
     # continuation lines.
     is( count_matching( $PODMAN_ERROR_RE, @lines ), 1, "podman's own error line is in the log -- exactly once" )
       or note_both('a count of 2 means the text was appended twice: ea-podman printed something AFTER podman\'s error, defeating the last-line duplicate check');
@@ -719,7 +741,7 @@ subtest 'C: the same application deploys once the filesystem is big enough' => s
     ok( uapi_ok($redeployed), 'WebApp::deploy is accepted again' ) or return note_both( uapi_why($redeployed) );
 
     my ( $app, $last ) = wait_for_result($LAST_ID);
-    my @lines = @{ build_log_lines( $last->{deploy_id} ) };
+    my @lines = @{ deploy_log_lines() };
     $LAST_BUILD_LOG = join( "\n", @lines );
 
     if ( $LAST_BUILD_LOG =~ /toomanyrequests|rate limit/i ) {
