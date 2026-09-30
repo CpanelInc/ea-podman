@@ -446,18 +446,21 @@ ok( -S "/run/user/$uid/bus", "user dbus socket /run/user/$uid/bus exists" );
     like( $out, qr/\bactive\b/, "user\@$uid.service (user systemd manager) is active" );
 }
 
-# EA4-319: the manager above had to be started through a masked template, so the
-# mask was lifted to do it. The remask-survival check is the property the whole
-# approach rests on: masking does not stop an already-running instance.
+# EA4-319 / EA4-321: the manager above had to be started on a host whose template
+# is masked. ea-podman does that from a unit file of its own for the account and
+# leaves the mask alone (before EA4-321 it lifted and restored the mask, which
+# on systemd 252 tore the manager down). What this checks is that the mask is
+# exactly as it was and the manager is still running.
 {
     my $after = _user_manager_mask_file();
 
     if ($MASK_BEFORE) {
-        is( $after,                         $MASK_BEFORE, "the user\@.service mask is back in the same location after the deploy (no /etc <-> /run relocation)" );
+        is( $after,                         $MASK_BEFORE, "the user\@.service mask is still in the same location after the deploy (no /etc <-> /run relocation)" );
         is( readlink( $after // '' ) // '', "/dev/null",  "as the canonical mask symlink" );
 
         my ( $rc, $out ) = run_cmd( 'systemctl', 'is-active', "user\@$uid.service" );
-        like( $out, qr/\bactive\b/, "and the manager started inside the window survives the remask" );
+        like( $out, qr/\bactive\b/, "and the manager survives it" );
+        ok( -f "/run/systemd/system/user\@$uid.service" && !-l "/run/systemd/system/user\@$uid.service", "started from a unit of its own for the account, a real file (EA4-321)" );
     }
     else {
         is( $after, undef, "nothing was masked before the deploy, and nothing is masked after it" );
@@ -497,7 +500,7 @@ SKIP: {
 
     my ( $rc, $out ) = run_cmd( $CLI, 'ensure_user_sessions' );
     is( $rc, 0, "`ea-podman ensure_user_sessions` exits 0 on a healthy host" ) or diag($out);
-    like( $out, qr/^\Q$USER\E:\s+ok\b/m, "…reports $USER as already ok, so it opened no window for it" ) or diag($out);
+    like( $out, qr/^\Q$USER\E:\s+ok\b/m, "…reports $USER as already ok, so it wrote nothing for it" ) or diag($out);
     ok( !-e "/opt/cpanel/ea-podman/user-manager-mask.state", "…and left no in-progress unmask record behind" );
 }
 

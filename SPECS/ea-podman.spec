@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 31
+%define release_prefix 32
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -165,6 +165,15 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
+* Wed Sep 30 2026 Julian Brown <julian.brown@webpros.com> - 1.0-32
+- EA4-321: Start an account's user systemd manager from a unit file of its own
+  instead of unmasking and remasking `user@.service`, which on systemd 252
+  (CloudLinux 9, AlmaLinux 9) tore down the runtime directory of every running
+  manager, leaving rootless containers with no session bus
+  Finish taking the unit back for an account released while a login session
+  still held its manager, and reload after a `daemon-reload` that failed instead
+  of treating a matching file as done
+
 * Tue Sep 22 2026 Julian Brown <julian.brown@webpros.com> - 1.0-31
 - EA4-325: Make `ea-podman upgrade` skip a recreate when nothing has moved,
   recreate a container whose backup failed to come back up or whose create

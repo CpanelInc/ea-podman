@@ -154,7 +154,7 @@ sub ensure_su_login {    # needed when $user is from root `su - $user` / AccessI
 # dir/manager — not something the privileged setup the die above names can be
 # blamed for. This note is printed *because* the root-side bypass did not get
 # the manager up, so it must not claim that it did. (EA4-319; the bypass is
-# ea_podman::subids::with_user_manager_unmasked().)
+# ea_podman::subids::ensure_user_manager_carveouts().)
 sub _masked_user_manager_note {
 
     # subids.pm is loaded by the guarded sibling require at the top of this file,
@@ -2420,6 +2420,12 @@ sub _release_deleted_user_session {
 
     return 0 if !defined $user || $user eq "root";
 
+    # The account's own user-manager unit does not depend on whether we ever
+    # granted a linger, only on whether we wrote the unit: enable-linger can fail
+    # after it. getpwnam() cannot find the uid of a deleted account, so it is
+    # found among the units we wrote by having no account left. (EA4-321)
+    ea_podman::subids::release_deleted_user_carveout($user) if !defined getpwnam($user);
+
     # Only a linger we recorded granting is ours to disable, even for an account
     # that is gone.
     return 0 if !ea_podman::subids::user_has_granted_linger($user);
@@ -2666,6 +2672,11 @@ sub _user_session_is_releasable {
 
 sub release_user_session_as_root {
     my ($user) = @_;
+
+    # Whichever account this is for, it is a chance to finish taking back the unit
+    # file of one released earlier while a login session still held its manager.
+    # Nothing else calls back for that account. (EA4-321)
+    eval { ea_podman::subids::reconcile_carveouts(); 1 } or warn "Could not finish removing released accounts' user manager units: $@";
 
     return 0 if !_user_session_is_releasable($user);
 
