@@ -40,8 +40,7 @@ use Cpanel::Config::Users ();
 use Cpanel::JSON          ();
 use Cpanel::AccessIds     ();
 
-use Whostmgr::Accounts::Shell ();
-use Cpanel::Shell             ();
+use Cpanel::Shell ();
 
 use Term::ReadLine   ();
 use App::CmdDispatch ();
@@ -134,12 +133,19 @@ sub _size_str {
     return "$bytes bytes";
 }
 
+# Cpanel::Shell is where current cPanel keeps this; Whostmgr::Accounts::Shell
+# had it before (ZC-12610). Only load the latter when it is actually needed: it
+# pulls in AcctLock.pm, which a jailshell jail does not contain, and the CLI is
+# no longer compiled with it bundled, so a compile-time `use` killed the CLI in
+# the jail before it could delegate (EA4-315).
 sub _has_unrestricted_shell {
     my ($user) = @_;
-    if ( defined &Whostmgr::Accounts::Shell::has_unrestricted_shell ) {
-        return Whostmgr::Accounts::Shell::has_unrestricted_shell($user);
+    if ( defined &Cpanel::Shell::has_unrestricted_shell ) {
+        return Cpanel::Shell::has_unrestricted_shell($user);
     }
-    return Cpanel::Shell::has_unrestricted_shell($user);
+
+    require Whostmgr::Accounts::Shell;
+    return Whostmgr::Accounts::Shell::has_unrestricted_shell($user);
 }
 
 ######################################
@@ -397,14 +403,14 @@ A container that is not running is recreated and LEFT not running, because a sto
 --force skips the comparison and recreates unconditionally, and starts the container afterwards. Use it to re-apply a configuration change that does not move the image, or to rebuild from the locally cached image when the registry cannot be reached.
 
 If the pull fails, this reports the failure and leaves the container untouched rather than guessing; --force falls back to the cached image instead.},
-            code     => sub {
+            code => sub {
                 my ( $app, @args ) = @_;
 
                 my ( $container_name, $force );
                 for my $arg (@args) {
-                    if    ( $arg eq '--force' ) { $force = 1 }
+                    if    ( $arg eq '--force' )        { $force = 1 }
                     elsif ( !defined $container_name ) { $container_name = $arg }
-                    else                        { die "Unknown argument “$arg”\n" }
+                    else                               { die "Unknown argument “$arg”\n" }
                 }
 
                 die "Please provide the name of the container to upgrade.\n" if !defined $container_name;
@@ -682,9 +688,9 @@ Each container is only recreated if something actually moved; see `ea-podman hel
 
                 my ( $pkg, $force );
                 for my $arg (@args) {
-                    if    ( $arg eq '--force' )  { $force = 1 }
-                    elsif ( !defined $pkg )      { $pkg   = $arg }
-                    else                         { die "Unknown argument “$arg”\n" }
+                    if    ( $arg eq '--force' ) { $force = 1 }
+                    elsif ( !defined $pkg )     { $pkg = $arg }
+                    else                        { die "Unknown argument “$arg”\n" }
                 }
 
                 die "Please provide a package name or the flag `--all`\n" if ( !$pkg );
@@ -771,10 +777,7 @@ Each container is only recreated if something actually moved; see `ea-podman hel
                                 # Skipped, but counted: a registry entry for a
                                 # vanished account is a real problem and must not
                                 # exit 0.
-                                warn "ea-podman: skipping “$c_user”: the account no longer exists, so its registered containers ("
-                                  . join( ", ", map { $_->{container_name} } @c_containers )
-                                  . ") cannot be upgraded.\n"
-                                  . "They are still registered. Clean them up as root with `ea-podman remove_containers --all`, which handles containers whose account was deleted uncleanly.\n";
+                                warn "ea-podman: skipping “$c_user”: the account no longer exists, so its registered containers (" . join( ", ", map { $_->{container_name} } @c_containers ) . ") cannot be upgraded.\n" . "They are still registered. Clean them up as root with `ea-podman remove_containers --all`, which handles containers whose account was deleted uncleanly.\n";
                             }
                             else {
                                 warn "ea-podman: upgrading containers for “$c_user” failed: $err";
@@ -816,13 +819,13 @@ A `.bak` is only removed when its container name is otherwise COMPLETELY gone: n
 Age is measured from when the directory BECAME a `.bak`, not from when its contents were last written, so a backup made moments ago is never mistaken for an old one. Default is 30 days; `--days=N` uses a different threshold, and `--days=0` considers every one of them.
 
 WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains that container's read-write /app directory -- runtime state such as SQLite files, uploads and generated content, its `.env`, and for a zip-sourced application the entire source. Nothing reads a `.bak`, but nothing else keeps a copy either. Read the listing before you pass `--run`.},
-            code     => sub {
+            code => sub {
                 my ( $app, @args ) = @_;
 
                 my $run  = 0;
                 my $days = undef;
                 for my $arg (@args) {
-                    if    ( $arg eq '--run' )              { $run  = 1 }
+                    if    ( $arg eq '--run' )              { $run = 1 }
                     elsif ( $arg =~ m/^--days=([0-9]+)$/ ) { $days = $1 }
                     else                                   { die "Unknown argument “$arg”\n" }
                 }
@@ -939,8 +942,8 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
                     for my $b ( @{ $r->{removable} } ) {
                         printf( "%s: %s  (%s old, %s)%s\n", $r->{user}, $b->{path}, _age_str( $b->{age} ), _size_str( $b->{size} ), $run ? " — REMOVED" : "" );
                         $total++;
-                        if   ( defined $b->{size} ) { $bytes += $b->{size} }
-                        else                        { $bytes_unknown++ }
+                        if ( defined $b->{size} ) { $bytes += $b->{size} }
+                        else                      { $bytes_unknown++ }
                     }
                     for my $sk ( @{ $r->{skipped} } ) {
                         next if $sk->{reason} eq 'too_recent' || $sk->{reason} eq 'not_a_container_backup';
