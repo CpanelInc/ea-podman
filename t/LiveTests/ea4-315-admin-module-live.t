@@ -174,11 +174,16 @@ sub uapi_errors {
 # A non-login su keeps root's environment, so drop what would point the
 # account's perl at root's paths (`prove -l` exports PERL5LIB=/root/lib, which
 # the account cannot read, and perl dies on that).
+#
+# setpriv, not su: su goes through PAM, and with CageFS enabled for the account
+# (e.g. "Enable All" mode) PAM puts it in the cage, which has no podman — so
+# every podman-backed check here read "not running". setpriv drops privileges
+# without PAM, so this runs on the host as the account, as cpsrvd's child does.
 sub run_as_user {
     my ( $user, $cmd ) = @_;
-    my $uid = ( getpwnam($user) )[2];
-    my $env = "unset PERL5LIB PERLLIB PERL5OPT; export XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus HOME=\"\$(getent passwd $user | cut -d: -f6)\"; cd \"\$HOME\" 2>/dev/null;";
-    return run_cmd( 'su', '-s', '/bin/bash', $user, '-c', "$env $cmd" );
+    my ( $uid, $gid ) = ( getpwnam($user) )[ 2, 3 ];
+    my $env = "unset PERL5LIB PERLLIB PERL5OPT; export USER=$user LOGNAME=$user XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus HOME=\"\$(getent passwd $user | cut -d: -f6)\"; cd \"\$HOME\" 2>/dev/null;";
+    return run_cmd( 'setpriv', "--reuid=$uid", "--regid=$gid", '--init-groups', '/bin/bash', '-c', "$env $cmd" );
 }
 
 # Through the account's LOGIN shell: for a jailshell account, inside the jail.
@@ -425,6 +430,7 @@ plan skip_all => "not a cPanel server (no $WHMAPI)" if !-x $WHMAPI;
 }
 
 plan skip_all => "podman is not installed"                                   if !_in_path('podman');
+plan skip_all => "setpriv (util-linux) is not installed"                     if !_in_path('setpriv');
 plan skip_all => "EAPODMAN_UPGRADE_FROM and EAPODMAN_UPGRADE_TO go together" if ( $UPGRADE_FROM xor $UPGRADE_TO );
 if ($UPGRADE_FROM) {
     plan skip_all => "EAPODMAN_UPGRADE_FROM ($UPGRADE_FROM) not found" if !-e $UPGRADE_FROM;
