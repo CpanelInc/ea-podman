@@ -68,6 +68,14 @@ sub _run {
         return 1;
     };
 
+    # create_user_container() runs podman in a forked child to capture what it
+    # says (EA4-335), so a mock of podman() would record into the child and
+    # never reach the parent -- and, worse, would not stop a real `podman create`.
+    local *ea_podman::util::_podman_create_captured = sub {
+        push @podman_calls, [@_];
+        return ( 1, "" );
+    };
+
     if ( $args{pre_register} ) {
         ea_podman::util::register_container_as_root( $args{container_name}, "root", 0, "image:1", $args{pre_register}{webapp} );
     }
