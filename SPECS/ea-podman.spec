@@ -164,7 +164,9 @@ rm -rf %{buildroot}
   `user@.service`, which on systemd 252 (CloudLinux 9, AlmaLinux 9) tore down
   the runtime directory of every running manager and left rootless containers
   with no session bus; and report why `podman create` failed, such as running
-  out of disk quota, instead of only "Failed to create container"
+  out of disk quota, instead of only "Failed to create container"; and release the host ports a failed first
+  install reserved, so a retry no longer ends up with a second port while the
+  Web App reverse proxy stays wired to the first (CPANEL-57608)
 
 * Tue Sep 22 2026 Julian Brown <julian.brown@webpros.com> - 1.0-31
 - EA4-325: Make `ea-podman upgrade` skip a recreate when nothing has moved,
