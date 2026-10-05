@@ -154,20 +154,16 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
-* Wed Sep 30 2026 Julian Brown <julian.brown@webpros.com> - 1.0-32
-- EA4-321: Start an account's user systemd manager from a unit file of its own
-  instead of unmasking and remasking `user@.service`, which on systemd 252
-  (CloudLinux 9, AlmaLinux 9) tore down the runtime directory of every running
-  manager, leaving rootless containers with no session bus
-  Finish taking the unit back for an account released while a login session
-  still held its manager, and reload after a `daemon-reload` that failed instead
-  of treating a matching file as done
-- EA4-315: Convert the ea_podman adminbin to an in-process admin module
-- EA4-315: Ship the ea-podman CLI uncompiled (no more perlcc)
-- EA4-315: Route jailshell and CageFS CLI commands through admin actions
-  instead of a full-access API token
-- EA4-315: Add the ea_podman feature
-- EA4-315: Remove the MINT_API_TOKEN and REVOKE_API_TOKEN admin actions
+* Mon Oct 05 2026 Julian Brown <julian.brown@webpros.com> - 1.0-32
+- EA4-315, EA4-321: Replace the ea_podman adminbin with an in-process admin
+  module and ship the ea-podman CLI uncompiled (no more perlcc); route
+  jailshell and CageFS CLI commands through admin actions instead of a
+  full-access API token, removing the MINT_API_TOKEN and REVOKE_API_TOKEN
+  actions; add the ea_podman feature; and start each account's user systemd
+  manager from a unit file of its own instead of unmasking and remasking
+  `user@.service`, which on systemd 252 (CloudLinux 9, AlmaLinux 9) tore down
+  the runtime directory of every running manager and left rootless containers
+  with no session bus
 
 * Tue Sep 22 2026 Julian Brown <julian.brown@webpros.com> - 1.0-31
 - EA4-325: Make `ea-podman upgrade` skip a recreate when nothing has moved,
