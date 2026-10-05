@@ -154,7 +154,7 @@ sub ensure_su_login {    # needed when $user is from root `su - $user` / AccessI
 # dir/manager — not something the privileged setup the die above names can be
 # blamed for. This note is printed *because* the root-side bypass did not get
 # the manager up, so it must not claim that it did. (EA4-319; the bypass is
-# ea_podman::subids::with_user_manager_unmasked().)
+# ea_podman::subids::ensure_user_manager_carveouts().)
 sub _masked_user_manager_note {
 
     # subids.pm is loaded by the guarded sibling require at the top of this file,
@@ -459,6 +459,12 @@ sub stop_user_container {
     return;
 }
 
+# What the last failed `podman create` said, for the caller to build its error
+# from. Undef after a success, so a later failure is never mistaken for it.
+# A package variable rather than a return value because create_user_container()
+# returns a boolean that two callers test.
+our $_create_output;
+
 sub create_user_container {
     my ( $container_name, @start_args ) = @_;
     validate_user_container_name($container_name);
@@ -480,7 +486,103 @@ sub create_user_container {
         @ulimit = ( "--ulimit" => "nproc=$cap:$cap" );
     }
 
-    return podman( 'create', "--name" => $container_name, @ulimit, @start_args );
+    my ( $ok, $said ) = _podman_create_captured( 'create', "--name" => $container_name, @ulimit, @start_args );
+    $_create_output = $ok ? undef : $said;
+
+    return $ok;
+}
+
+# The shell-out create_user_container() goes through. Its own sub so a test can
+# supply what podman said without podman.
+#
+# Runs podman in a child whose stdout and stderr are one pipe, and echoes what
+# arrives as it arrives, so a person at a terminal still sees an image pull's
+# progress live and keeps what podman said for the error message. Deliberately
+# not Capture::Tiny::tee: that starts helper subprocesses, which time out inside
+# the compiled ea-podman binary ("Timed out waiting for subprocesses to start"),
+# and that aborted the install before its cleanup ran. (EA4-335)
+#
+# Falls back to a plain, uncaptured podman() if the pipe or the fork is refused,
+# so this can only ever lose the message, never the create.
+sub _podman_create_captured {
+    my @args = @_;
+
+    pipe( my $reader, my $writer ) or return ( podman(@args), '' );
+
+    # What system() did for free, and this fork/exec no longer does:
+    #   * INT and QUIT are ignored in the parent while the child runs. A Ctrl-C
+    #     reaches podman through the terminal's process group; ea-podman must
+    #     outlive it to see the create fail and run its cleanup / rollback.
+    #   * TERM and HUP (system() never covered these) are forwarded to podman,
+    #     which is the only process that could act on them, and ea-podman then
+    #     waits for it. Without that, a kill aimed at ea-podman alone would end
+    #     it mid-create with the pipe and the child both orphaned.
+    # `local`, so every return path restores the caller's handlers.
+    my ( $child, @got );
+    my $forward = sub {
+        push @got, $_[0];
+        kill( $_[0], $child ) if $child;
+    };
+    local @SIG{qw(INT QUIT TERM HUP)} = ( 'IGNORE', 'IGNORE', $forward, $forward );
+
+    my $pid = fork();
+    if ( !defined $pid ) {
+        close $reader;
+        close $writer;
+        return ( podman(@args), '' );
+    }
+
+    if ( !$pid ) {
+
+        # IGNORE survives exec, so podman would never see a Ctrl-C. Put every
+        # disposition back before anything else.
+        @SIG{qw(INT QUIT TERM HUP)} = ('DEFAULT') x 4;
+
+        close $reader;
+        open( STDOUT, ">&", $writer ) or kill( "KILL", $$ );
+        open( STDERR, ">&", $writer ) or kill( "KILL", $$ );
+        close $writer;
+
+        # If exec fails, KILL rather than exit so a child never runs the
+        # parent's END blocks or destructors.
+        exec( "podman", @args ) or kill( "KILL", $$ );
+    }
+
+    close $writer;
+
+    # A TERM or HUP that landed between fork() and this line had no pid to go to.
+    $child = $pid;
+    kill( $_, $pid ) for grep { $_ eq 'TERM' || $_ eq 'HUP' } @got;
+
+    my $said = '';
+    while (1) {
+        my $n = sysread( $reader, my $chunk, 65536 );
+        if ( !defined $n ) {
+            next if $! + 0 == 4;    # EINTR
+            last;
+        }
+        last if !$n;
+
+        print STDERR $chunk;
+        $said .= $chunk;
+
+        # Only the tail is ever used; do not hold a whole verbose pull.
+        $said = substr( $said, -65536 ) if length($said) > 131072;
+    }
+    close $reader;
+
+    1 while waitpid( $pid, 0 ) == -1 && $! + 0 == 4;    # EINTR
+
+    # If podman finished anyway the create worked and is reported as such; the
+    # note is only for the failure the interruption caused.
+    my $ok = $? == 0 ? 1 : 0;
+    if ( !$ok && @got ) {
+        my %seen;
+        my $names = join( ", ", map { "SIG$_" } grep { !$seen{$_}++ } @got );
+        $said .= "\n" if length($said) && $said !~ /\n\z/;
+        $said .= "ea-podman was interrupted ($names) while podman was creating the container.\n";
+    }
+    return ( $ok, $said );
 }
 
 # The RLIMIT_NPROC hard cap of the calling user's systemd --user manager (which
@@ -729,19 +831,68 @@ sub _podman_pull_once {
     return 0;
 }
 
-# Why the last pull of this reference failed, as far as we can tell.
+# What podman's own words say went wrong, as far as we can tell. One classifier
+# for a failed pull and a failed create, because `podman create` pulls the image
+# itself when it is not cached and so fails for the same reasons (EA4-335).
 #
-# A registry rate limit is a distinguishable and actionable condition, and it is
+# A registry rate limit and a full disk are distinguishable and actionable, and
 # worth telling apart from a typo'd image or a DNS failure -- the remedies are
-# nothing alike. It also became much easier to hit: since EA4-325 Increment B
-# every `upgrade` pulls, where none did before.
+# nothing alike. The rate limit also became much easier to hit: since EA4-325
+# Increment B every `upgrade` pulls, where none did before.
+sub _podman_failure_reason {
+    my ($out) = @_;
+
+    $out //= '';
+    return "rate_limit" if $out =~ m/toomanyrequests|rate limit/i;
+    return "disk_quota" if $out =~ m/disk quota exceeded|no space left on device/i;
+
+    return "unknown";
+}
+
+# Why the last pull of this reference failed, as far as we can tell.
 sub _pull_failure_reason {
     my ($image_ref) = @_;
 
-    my $out = $_pull_error{$image_ref} // '';
-    return "rate_limit" if $out =~ m/toomanyrequests|rate limit/i;
+    return _podman_failure_reason( $_pull_error{$image_ref} );
+}
 
-    return "unknown";
+# The most of podman's output worth putting in an error message.
+my $CREATE_OUTPUT_CAP = 2048;
+
+# podman's output made safe to put in an exception: bounded to its tail (the
+# error is at the end), and stripped of what would corrupt a log or a terminal.
+sub _podman_output_tail {
+    my ($out) = @_;
+
+    return '' if !defined $out;
+
+    $out =~ s/\r\n?/\n/g;                          # a progress bar redraws with \r
+    $out =~ s/\e\[[0-9;?]*[ -\/]*[@-~]//g;          # ANSI escape sequences
+    $out =~ tr/\x00-\x08\x0b-\x1f\x7f//d;           # other control characters, keeping \n and \t
+    $out =~ s/\s+\z//;
+
+    if ( length($out) > $CREATE_OUTPUT_CAP ) {
+        $out = substr( $out, -$CREATE_OUTPUT_CAP );
+        $out =~ s/\A[\x80-\xBF]+//;                   # do not start on half a UTF-8 character
+    }
+
+    $out =~ s/\A\s+//;
+    return $out;
+}
+
+# The text a failed create appends to its error: a plain sentence when the cause
+# is one the account owner can act on, then what podman said. Empty when podman
+# said nothing, so the message is exactly what it was. Argument-pure so it is
+# unit-testable. (EA4-335)
+sub _create_failure_note {
+    my ($out) = @_;
+
+    my $tail = _podman_output_tail($out);
+    return '' if !length $tail;
+
+    my $lead = _podman_failure_reason($tail) eq "disk_quota" ? "The account has run out of disk space or reached its disk quota. Free up space, or ask your provider for a larger quota, then try again.\n" : '';
+
+    return $lead . "podman reported:\n$tail\n";
 }
 
 # The local image ID a reference currently resolves to, or undef when podman has
@@ -1335,7 +1486,8 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             # webapp plugin's Redeploy is the force caller (CPANEL-56732), and a
             # Docker Hub outage or a rate limit must not break Redeploy, so warn
             # and carry on from the cached image.
-            my $rate_limited = _pull_failure_reason($image_arg) eq "rate_limit";
+            my $pull_reason  = _pull_failure_reason($image_arg);
+            my $rate_limited = $pull_reason eq "rate_limit";
 
             # Deliberately vague when we do not know. A bad image name, a DNS
             # failure and an auth refusal all land here, and naming the wrong one
@@ -1344,7 +1496,8 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             my $why =
               $rate_limited
               ? "the registry is rate limiting this server"
-              : "the pull failed";
+              : $pull_reason eq "disk_quota" ? "the account has run out of disk space or reached its disk quota"
+              :                                "the pull failed";
 
             # Spelled out because the arithmetic is what an operator needs, and
             # nothing else tells them: the budget is per IP for an
@@ -1427,13 +1580,18 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
 
     if ( !create_user_container( $container_name, @start_args ) ) {
 
+        # What podman said about THIS create, taken before anything else runs:
+        # the upgrade rollback below creates a container again and would replace
+        # it with the rollback's own output. (EA4-335)
+        my $create_note = _create_failure_note($_create_output);
+
         # Three operations, three different right answers. This used to be one
         # `if ( !$isupgrade )`, which meant restore took the install cleanup —
         # deregistering and deleting the directory perform_user_restore() had just
         # extracted from the user's backup, their only copy of it. (EA4-325)
         if ($isupgrade) {
             my $rollback = _rollback_failed_upgrade( $container_name, $prev_image_ref, $prev_image_id, \@start_args );
-            die _failed_upgrade_message( $container_name, $container_dir, $prev_image_ref, $prev_image_id, $rollback );
+            die _failed_upgrade_message( $container_name, $container_dir, $prev_image_ref, $prev_image_id, $rollback, $create_note );
         }
         elsif ($isrestore) {
 
@@ -1441,7 +1599,7 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             # data just extracted from the backup, and perform_user_restore()
             # removed ~/ea-podman.d before the tarball went in, so there is no
             # other copy.
-            die _failed_restore_message( $container_name, $container_dir );
+            die _failed_restore_message( $container_name, $container_dir, $create_note );
         }
         else {
             deregister_container($container_name);
@@ -1461,7 +1619,7 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             chdir("/");
             eval { File::Path::Tiny::rm($container_dir) };
 
-            die "Failed to create container\n";
+            die "Failed to create container\n" . $create_note;
         }
     }
 
@@ -1577,13 +1735,13 @@ sub _pinned_image_description {
 # Kept argument-pure (names and what the rollback achieved in, string out) so it
 # is unit-testable. House style: name the condition, then name the recovery.
 sub _failed_upgrade_message {
-    my ( $container_name, $container_dir, $prev_image_ref, $prev_image_id, $status ) = @_;
+    my ( $container_name, $container_dir, $prev_image_ref, $prev_image_id, $status, $create_note ) = @_;
 
     my $pinned = _pinned_image_description( $prev_image_ref, $prev_image_id );
 
     my $intact = "Nothing was deregistered and nothing was deleted: “$container_name” is still registered at the version it was on, its assigned ports are still held, and “$container_dir” is untouched.\n" . "Re-run once the cause of the create failure is fixed:  ea-podman upgrade $container_name\n";
 
-    my $head = "Failed to upgrade “$container_name”: the new container could not be created.\n";
+    my $head = "Failed to upgrade “$container_name”: the new container could not be created.\n" . ( $create_note // '' );
 
     return $head . "The previous container could not be recreated from $pinned either, so “$container_name” is not running and has no systemd unit.\n" . $intact
       if !$status->{created};
@@ -1599,10 +1757,11 @@ sub _failed_upgrade_message {
 
 # Kept argument-pure so it is unit-testable.
 sub _failed_restore_message {
-    my ( $container_name, $container_dir ) = @_;
+    my ( $container_name, $container_dir, $create_note ) = @_;
 
     return
         "Failed to restore “$container_name”: the container could not be created.\n"
+      . ( $create_note // '' )
       . "“$container_dir” was left in place. It holds the data just extracted from the backup and is the only copy of it, so a failed restore never removes it. “$container_name” also stays registered, so it remains visible to `ea-podman containers` and to the account-removal hooks.\n"
       . "Ports were assigned to “$container_name” for this restore and are still held. `ea-podman restore` takes a fresh set every run, so retry with `upgrade` rather than re-running the restore, or the old reservations are stranded.\n"
       . "To retry in place:  ea-podman upgrade $container_name   (recreates it from “$container_dir/ea-podman.json” using the ports already assigned)\n"
@@ -2415,6 +2574,12 @@ sub _release_deleted_user_session {
 
     return 0 if !defined $user || $user eq "root";
 
+    # The account's own user-manager unit does not depend on whether we ever
+    # granted a linger, only on whether we wrote the unit: enable-linger can fail
+    # after it. getpwnam() cannot find the uid of a deleted account, so it is
+    # found among the units we wrote by having no account left. (EA4-321)
+    ea_podman::subids::release_deleted_user_carveout($user) if !defined getpwnam($user);
+
     # Only a linger we recorded granting is ours to disable, even for an account
     # that is gone.
     return 0 if !ea_podman::subids::user_has_granted_linger($user);
@@ -2660,6 +2825,11 @@ sub _user_session_is_releasable {
 
 sub release_user_session_as_root {
     my ($user) = @_;
+
+    # Whichever account this is for, it is a chance to finish taking back the unit
+    # file of one released earlier while a login session still held its manager.
+    # Nothing else calls back for that account. (EA4-321)
+    eval { ea_podman::subids::reconcile_carveouts(); 1 } or warn "Could not finish removing released accounts' user manager units: $@";
 
     return 0 if !_user_session_is_releasable($user);
 
