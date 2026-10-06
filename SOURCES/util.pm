@@ -2280,7 +2280,12 @@ sub remove_port_authority_ports {
     my ($container_name) = @_;
     if ( $> == 0 ) {
         my @container_ports = _get_current_ports($container_name);
+
+        # `take` refuses an empty list, and a container with no ports is not a failure
+        return if !@container_ports;
+
         system( "/scripts/cpuser_port_authority", take => root => @container_ports );
+        die "`cpuser_port_authority take` exited unclean ($?)\n" if $? != 0;
     }
     else {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'TAKE', $container_name );
@@ -2520,7 +2525,10 @@ sub remove_container_by_name {
 
     print "Removing $container_name\n";
 
-    ea_podman::util::remove_port_authority_ports($container_name);
+    # A failure here used to go unnoticed; keep it from stopping the removal
+    eval { ea_podman::util::remove_port_authority_ports($container_name) };
+    warn "Could not release the ports reserved for “$container_name”: $@" if $@;
+
     ea_podman::util::uninstall_container($container_name);
     ea_podman::util::deregister_container($container_name);
     ea_podman::util::move_container_dir($container_name);

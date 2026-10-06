@@ -45,6 +45,8 @@ our @FEATURE_CHECKS;
 }
 
 our @system_cmds;
+our $list_json = "{}\n";    # what a mocked `cpuser_port_authority list` prints
+our $take_rv;               # what a mocked `cpuser_port_authority take` returns (nonzero == it failed)
 
 BEGIN {
     use Test::Mock::Cmd 'system' => sub {
@@ -52,7 +54,8 @@ BEGIN {
         my $str = join( ":", @args );
         push( @system_cmds, $str );
         if ( @args > 0 ) {
-            print "{}\n" if ( $args[0] eq "/scripts/cpuser_port_authority" );
+            print $list_json if ( $args[0] eq "/scripts/cpuser_port_authority" && ( $args[1] // "" ) eq "list" );
+            return $take_rv if ( $args[0] eq "/scripts/cpuser_port_authority" && ( $args[1] // "" ) eq "take" );
         }
         return;
     };
@@ -381,6 +384,66 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
 
             ok( $@ =~ m/does not belong to this account/ );
             is_deeply( \@system_cmds, ['/scripts/cpuser_port_authority:list:cptest1'], 'and gives nothing' );
+        };
+    };
+
+    describe "TAKE" => sub {
+        share my %mi;
+        around {
+            %mi = %conf;
+
+            local $mi{mocks} = {};
+            @system_cmds = ();
+            local $list_json = qq({"10000":{"owner":"cptest1","service":"container.cptest1.01"},"10001":{"owner":"cptest1","service":"other.cptest1.01"}}\n);
+            local $take_rv;
+
+            # Cannot use Test::MockModule for this one
+            local *Cpanel::Admin::Modules::Cpanel::ea_podman::new = sub {
+                my ($class) = @_;
+                return bless {}, $class;
+            };
+
+            local *Cpanel::Admin::Modules::Cpanel::ea_podman::get_caller_username = sub {
+                return 'cptest1';
+            };
+
+            $mi{mocks}->{object} = Cpanel::Admin::Modules::Cpanel::ea_podman->new();
+
+            yield;
+        };
+
+        it "should take only the ports assigned to the container" => sub {
+            $mi{mocks}->{object}->TAKE("container.cptest1.01");
+
+            is_deeply(
+                \@system_cmds,
+                [
+                    '/scripts/cpuser_port_authority:list:cptest1',
+                    '/scripts/cpuser_port_authority:take:cptest1:10000',
+                ]
+            );
+        };
+
+        # `take` dies on an empty list, so asking it to would turn "nothing to release" into a failure
+        it "should not call take when the container has no ports" => sub {
+            local $list_json = "{}\n";
+
+            local $@;
+            eval { $mi{mocks}->{object}->TAKE("container.cptest1.01") };
+
+            is( $@, "" );
+            is_deeply( \@system_cmds, ['/scripts/cpuser_port_authority:list:cptest1'] );
+        };
+
+        # CPANEL-57608: a failed take used to be indistinguishable from a good one,
+        # so a failed install kept its ports and nothing said so
+        it "should die when the port authority fails to take the ports" => sub {
+            local $take_rv = 256;
+
+            local $@;
+            eval { $mi{mocks}->{object}->TAKE("container.cptest1.01") };
+
+            ok( $@ =~ m/cpuser_port_authority take. failed/ );
         };
     };
 
