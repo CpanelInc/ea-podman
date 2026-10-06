@@ -155,15 +155,16 @@ rm -rf %{buildroot}
 
 %changelog
 * Mon Oct 05 2026 Julian Brown <julian.brown@webpros.com> - 1.0-32
-- EA4-315, EA4-321: Replace the ea_podman adminbin with an in-process admin
-  module and ship the ea-podman CLI uncompiled (no more perlcc); route
+- EA4-315, EA4-321, EA4-335: Replace the ea_podman adminbin with an in-process
+  admin module and ship the ea-podman CLI uncompiled (no more perlcc); route
   jailshell and CageFS CLI commands through admin actions instead of a
   full-access API token, removing the MINT_API_TOKEN and REVOKE_API_TOKEN
-  actions; add the ea_podman feature; and start each account's user systemd
+  actions; add the ea_podman feature; start each account's user systemd
   manager from a unit file of its own instead of unmasking and remasking
   `user@.service`, which on systemd 252 (CloudLinux 9, AlmaLinux 9) tore down
   the runtime directory of every running manager and left rootless containers
-  with no session bus
+  with no session bus; and report why `podman create` failed, such as running
+  out of disk quota, instead of only "Failed to create container"
 
 * Tue Sep 22 2026 Julian Brown <julian.brown@webpros.com> - 1.0-31
 - EA4-325: Make `ea-podman upgrade` skip a recreate when nothing has moved,
