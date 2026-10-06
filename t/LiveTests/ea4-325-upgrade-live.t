@@ -132,8 +132,9 @@
 # Environment variables:
 #   EAPODMAN_LIVE=1      REQUIRED opt-in.
 #   EAPODMAN_TEST_USER   reuse an existing account instead of creating a
-#                        throwaway one (its shell is set unrestricted for
-#                        the test and restored afterward).
+#                        throwaway one (its shell is set unrestricted and it
+#                        is taken out of CageFS for the test; both are
+#                        restored afterward).
 #   EAPODMAN_TEST_IMAGE  image to install (default: httpd:2.4).
 #   EAPODMAN_TEST_PORT   container port to publish (default: 80).
 #   EAPODMAN_TEST_PKG    EA4 container package for the packaged-path
@@ -434,7 +435,8 @@ my $CGROUP = -e '/sys/fs/cgroup/cgroup.controllers' ? 'v2' : 'v1';
 our $USER;
 our $CREATED_USER = 0;
 our $ORIG_SHELL;
-our $DEAD_USER;          # A3: deleted uncleanly while still registered
+our $CAGEFS_WAS_ENABLED;
+our $DEAD_USER;         # A3: deleted uncleanly while still registered
 our $DEAD_CREATED = 0;
 our $CLEAN_USER;         # root-side clean: an account with no registered containers
 our $CLEAN_CREATED = 0;
@@ -444,6 +446,26 @@ sub make_account {
     my $pw = 'Eap0d' . substr( time, -6 ) . '!Xy';
     my ( $rc, $res, $out, $err ) = run_json( $WHMAPI, 'createacct', "username=$name", "domain=$domain", "password=$pw", '--output=json' );
     return ( $res && $res->{metadata} && $res->{metadata}{result} ) ? 1 : 0;
+}
+
+# Everything here runs as an ordinary, unrestricted account: the test drives
+# `systemctl --user`, `podman` and the full CLI directly as the user. A jailshell
+# or a cage hides those, and the CLI then takes the restricted path (admin
+# actions, no `clean`), so nearly every subtest fails for a reason that is not
+# EA4-325's. On a CloudLinux box in CageFS "Enable All" mode a new account is
+# caged by default, so the shell alone is not enough.
+#
+# Returns whether the account was in CageFS, so a reused account can be put back.
+my ($CAGEFSCTL) = grep { -x $_ } ( '/usr/sbin/cagefsctl', '/sbin/cagefsctl', '/usr/bin/cagefsctl' );
+
+sub unrestrict_account {
+    my ($user) = @_;
+    run_cmd( '/usr/sbin/usermod', '-s', $BASH, $user );
+    return 0 if !$CAGEFSCTL;
+    my ( $rc, $out ) = run_cmd( $CAGEFSCTL, '--user-status', $user );
+    my $was = ( $out =~ /enabled/i && $out !~ /disabled/i ) ? 1 : 0;
+    run_cmd( $CAGEFSCTL, '--disable', $user ) if $was;
+    return $was;
 }
 
 if ( $ENV{EAPODMAN_TEST_USER} ) {
@@ -460,10 +482,10 @@ else {
 }
 
 $ORIG_SHELL //= ( getpwnam($USER) )[8];
-run_cmd( '/usr/sbin/usermod', '-s', $BASH, $USER );
+$CAGEFS_WAS_ENABLED = unrestrict_account($USER);
 my $uid = ( getpwnam($USER) )[2];
 
-diag("Test user: $USER (uid=$uid), cgroup=$CGROUP, image=$IMAGE, port=$PORT");
+diag( "Test user: $USER (uid=$uid), cgroup=$CGROUP, image=$IMAGE, port=$PORT" . ( $CAGEFS_WAS_ENABLED ? ', taken out of CageFS for the test' : '' ) );
 
 #=====================================================================
 # the tests
@@ -1186,7 +1208,7 @@ subtest 'root: clean reaches an account with no registered containers left' => s
         return fail("could not create the second account");
     }
     $CLEAN_CREATED = 1;
-    run_cmd( '/usr/sbin/usermod', '-s', $BASH, $CLEAN_USER );
+    unrestrict_account($CLEAN_USER);
 
     my ( $irc, $iout ) = run_as_user( $CLEAN_USER, _sh($CLI) . " install lonely --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
     my ($cn) = $iout =~ m/Done, installed:\s*(\S+)/;
@@ -1302,7 +1324,7 @@ subtest 'A3: upgrade_containers --all survives a deleted account' => sub {
         return skip_all_in_subtest("could not create the second account");
     }
     $DEAD_CREATED = 1;
-    run_cmd( '/usr/sbin/usermod', '-s', $BASH, $DEAD_USER );
+    unrestrict_account($DEAD_USER);
 
     my ( $irc, $iout ) = run_as_user( $DEAD_USER, _sh($CLI) . " install $CBASE --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
     my ($dead_container) = $iout =~ m/Done, installed:\s*(\S+)/;
@@ -1389,8 +1411,9 @@ END {
     if ($CREATED_USER) {
         run_cmd( $WHMAPI, 'removeacct', "username=$USER", 'keepdns=0', '--output=json' );
     }
-    elsif ( $ORIG_SHELL && $ORIG_SHELL ne $BASH ) {
-        run_cmd( '/usr/sbin/usermod', '-s', $ORIG_SHELL, $USER );
+    else {
+        run_cmd( $CAGEFSCTL, '--enable', $USER ) if $CAGEFS_WAS_ENABLED;
+        run_cmd( '/usr/sbin/usermod', '-s', $ORIG_SHELL, $USER ) if $ORIG_SHELL && $ORIG_SHELL ne $BASH;
     }
 
     if ( $DEAD_CREATED && defined $DEAD_USER ) {
