@@ -319,13 +319,6 @@ sub spew_file {
     return 1;
 }
 
-sub skip_rest {
-    my ( $why, $detail ) = @_;
-    diag("SKIP: $why");
-    diag($detail) if defined $detail;
-    return;
-}
-
 sub container_dir {
     my ( $user, $container ) = @_;
     my $home = ( getpwnam($user) )[7];
@@ -804,15 +797,24 @@ subtest 'B: --force recreates even when nothing moved' => sub {
     return;
 };
 
+# Both subtests that move the container to the alternate image skip, rather than
+# fail, when it cannot be pulled: what they test is the upgrade, not the registry.
+sub alt_image_or_skip {
+    my $alt = $ENV{EAPODMAN_TEST_ALT_IMAGE} || 'docker.io/library/httpd:2.4-alpine';
+    my ( $prc, $pout ) = run_as_user( $USER, "podman pull " . _sh($alt) );
+    if ( $prc != 0 ) {
+        diag($pout);
+        skip_all_in_subtest("could not pull the alternate image $alt");
+    }
+    return $alt;
+}
+
 # "The image moved" without controlling a registry: install from one tag, then
 # point the container's persisted start args at another. The configured
 # reference now resolves to an image ID that is not the one the container was
 # created from, which is exactly the real-world condition.
 subtest 'B: a container whose configured image now resolves elsewhere is recreated' => sub {
-    my $alt = $ENV{EAPODMAN_TEST_ALT_IMAGE} || 'docker.io/library/httpd:2.4-alpine';
-
-    my ( $prc, $pout ) = run_as_user( $USER, "podman pull " . _sh($alt) );
-    skip_rest( "could not pull the alternate image $alt", $pout ), return if $prc != 0;
+    my $alt = alt_image_or_skip();
 
     my $id_before = container_field( $USER, $container, '{{.Id}}' );
     patch_start_args( $USER, $container, sub { my ($args) = @_; $args->[-1] = $alt } );
@@ -875,7 +877,7 @@ subtest 'B: force falls back to the cached image when the pull fails' => sub {
 # B7. A deliberate stop cannot be told from a crash, so the conditional path
 # must never start something the user stopped.
 subtest 'B: a stopped container is recreated but left stopped' => sub {
-    my $alt = $ENV{EAPODMAN_TEST_ALT_IMAGE} || 'docker.io/library/httpd:2.4-alpine';
+    my $alt = alt_image_or_skip();
 
     run_as_user( $USER, "systemctl --user stop container-$container.service" );
     is( unit_prop( $USER, $container, 'ActiveState' ), 'inactive', "the container is stopped to begin with" );
