@@ -1004,9 +1004,9 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
 
 Writes ~/ea-podman-backups/backup-<YYYYMMDDHHMMSS>.tar.gz, holding each container's directory plus a manifest of its registry entry. That tarball is the path to hand to `ea-podman restore` — list them newest first with `ls -t ~/ea-podman-backups/`.
 
-Only the newest 3 are kept; older ones are removed on each run. pkgacct takes a backup too, so an automatic run can age out one you meant to keep — copy it elsewhere if it matters.
+Only the newest 3 are kept; older ones are removed on each run. pkgacct no longer makes these tarballs, so only a run of this command can age one out.
 
-The ~/ea_podman_backup_<USER>.json manifest is written, tarred, and then removed, so it does not survive the run and is not what `restore` wants.
+The ~/ea_podman_backup_<USER>.json manifest is written, tarred, and then removed, so it does not survive the run and is not what `restore <BACKUP_TARBALL>` wants. pkgacct writes that manifest on its own and leaves it in the home directory, where `restore` with no tarball reads it.
             },
             code => sub {
                 my ($app) = @_;
@@ -1016,16 +1016,17 @@ The ~/ea_podman_backup_<USER>.json manifest is written, tarred, and then removed
             },
         },
         restore => {
-            clue     => "restore <BACKUP_TARBALL> [--verify]",
+            clue     => "restore [<BACKUP_TARBALL>] [--verify]",
             abstract => "Restore containers that have been backed up.",
             help     => qq{Will restore containers that have been backed up. Cannot be run as root.
+
+With no BACKUP_TARBALL, restores the containers listed in ~/ea_podman_backup_<USER>.json from the ~/ea-podman.d already in the home directory. That is the state after an account restore or transfer of a backup made by pkgacct. Nothing is removed or unpacked, and a container that is already registered is left as it is.
 
 BACKUP_TARBALL is a tarball written by `ea-podman backup`, e.g. ~/ea-podman-backups/backup-20260803120000.tar.gz — not the ea_podman_backup_<USER>.json manifest, which only ever exists inside that tarball.
 
 NOTE:
 
-    * Will remove existing containers
-    * Will destroy the ea-podman.d directory
+    * With a BACKUP_TARBALL: will remove existing containers and destroy the ea-podman.d directory
     * This is a destructive operation, you are required to pass ”--verify”
     * Restored containers get a NEW set of ports, so anything pointing at the old ones needs updating
             },
@@ -1034,10 +1035,12 @@ NOTE:
 
                 die "Restore is not allowed for the root user at this time.\n" if ( $> == 0 );
 
-                die "Please pass in the path to the backup file you want to restore.\n" if ( !$backup_file );
-                die "Backup file cannot be read\n"                                      if ( !-r $backup_file );
+                # `restore --verify` has no tarball, so --verify arrives first
+                ( $backup_file, $verify ) = ( undef, $backup_file ) if defined $backup_file && $backup_file eq "--verify";
 
-                if ( !length($verify) || $verify ne "--verify" ) {
+                die "Backup file cannot be read\n" if defined $backup_file && !-r $backup_file;
+
+                if ( !length( $verify // '' ) || $verify ne "--verify" ) {
                     print "This operation can not be undone! Please pass `--verify` to verify you really want to do this.\n";
                     return;
                 }
@@ -1138,7 +1141,7 @@ NOTE:
                         chdir($homedir);
 
                         ea_podman::util::init_user();
-                        ea_podman::util::perform_user_backup();
+                        ea_podman::util::write_user_manifest();
                     }
                 );
 

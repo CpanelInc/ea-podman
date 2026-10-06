@@ -8,7 +8,8 @@ an image pulled from a registry, plus a per-user podman store that ea-podman
 deliberately **excludes** from cPanel backups.
 
 So ea-podman ships its own `backup`/`restore` pair (ZC-9877) and a
-`PkgAcct::Create` hook that runs the backup automatically (ZC-11180).
+`PkgAcct::Create` hook that records what the account backup is missing
+(ZC-11180).
 
 Code references below name a file and a symbol, never a line number — grep for
 the symbol. `t/docs-backup-restore.t` enforces that and fails if one of them
@@ -30,13 +31,17 @@ stops resolving.
 2. **Pin version-specific image tags** (`:10.0.14`, not `:latest`). Restore
    re-pulls, so a floating tag comes back on a different version.
 3. **Let the hook do the rest** — every `pkgacct` run (account backup or
-   transfer) backs up containers automatically, including for jailshell/CageFS
-   accounts. Nothing to configure.
+   transfer) writes the container manifest into the account’s home directory,
+   where the account backup picks it up along with `~/ea-podman.d`, including for
+   jailshell/CageFS accounts. Nothing to configure. It does **not** make a
+   tarball: `~/ea-podman.d` is already in the account backup, and tarring it as
+   well put every container’s files in the backup twice over.
 4. **Run `ea-podman backup` by hand before anything risky**: `ea-podman upgrade`,
    a package upgrade/reinstall, hand-edits to `ea-podman.json` or the mounted
    data dirs, `ea-podman remove_containers`. Only **3** tarballs are kept in
-   `~/ea-podman-backups/`, and each automatic pkgacct run consumes a slot — copy
-   anything you want to keep longer somewhere else.
+   `~/ea-podman-backups/`, and only this command makes them — copy anything you
+   want to keep longer somewhere else. Tarballs that earlier versions’ pkgacct
+   runs left there are ordinary backups and safe to delete.
 
 **To restore** — nothing restores containers for you, not even `restorepkg`; a
 human must do this:
@@ -47,26 +52,36 @@ human must do this:
 2. As root, once the account itself has been restored:
 
    ```sh
-   ls -t ~bob/ea-podman-backups/       # newest tarball first
    ea-podman containers --all          # confirm bob has no registered containers
+   ls ~bob/ea_podman_backup_bob.json   # the manifest came back with the account
    ```
 
 3. As the account, from an unrestricted shell (see Limitations). `--verify` is
-   required because the teardown is destructive: it removes the account’s
-   existing containers and wipes `~/ea-podman.d` and `~/.config/systemd/user`
-   before unpacking.
+   required. This restores from the manifest and the `~/ea-podman.d` that came
+   back with the account; nothing is removed or unpacked, and a container that
+   is already registered is left as it is.
 
    ```sh
-   ea-podman restore ~/ea-podman-backups/backup-20260803120000.tar.gz --verify
+   ea-podman restore --verify
    ea-podman containers                # registry entries are back
    ea-podman list                      # running containers and their NEW ports
+   ```
+
+   To go back to a tarball you made with `ea-podman backup` (or one an earlier
+   version left behind) instead, name it. That path is destructive: it removes
+   the account’s existing containers and wipes `~/ea-podman.d` and
+   `~/.config/systemd/user` before unpacking.
+
+   ```sh
+   ls -t ~/ea-podman-backups/          # newest tarball first
+   ea-podman restore ~/ea-podman-backups/backup-20260803120000.tar.gz --verify
    ```
 
 4. Fix up what moved. **Ports are reallocated, not reclaimed** — restore warns
    per container when the numbers differ, and whatever referenced the old ones
    (proxy rules, app configs) needs updating. cPanel’s own firewall rules are
    rebuilt automatically as ports are released and assigned; a third-party
-   firewall is not. The registry’s `webapp` flag also comes back `false`.
+   firewall is not.
 
 These commands do not cover root’s own containers, restoring *as* a
 jailshell/CageFS account, or restoring under a different username. See
@@ -152,13 +167,31 @@ A manifest entry is a registry record plus ports:
 }
 ```
 
-The tarball lands **inside the homedir**, so cPanel’s own homedir archive carries
-it for free — which is the whole point of the hook.
+The tarball lands inside the homedir, so cPanel’s own homedir archive carries it
+too. That is why `pkgacct` does not run this command: it would put every
+container’s files in the account backup a second time (see the next section).
 
-### `ea-podman restore <TARBALL> --verify`
+### `ea-podman restore [<TARBALL>] --verify`
 
 The `restore` command in `SOURCES/ea-podman.pl` → `perform_user_restore()`
 (`SOURCES/util.pm`). Both refuse to run as root.
+
+**With no tarball** — the state after `restorepkg` or a transfer of a `pkgacct`
+backup — `perform_user_restore()` hands off to `_restore_from_manifest()`. The
+account’s files are already back, so there is nothing to unpack and nothing to
+tear down:
+
+1. Require `~/ea_podman_backup_<user>.json` in the homedir.
+2. Read the registry once. A container it already has is skipped and left as it
+   is: recreating it would take a second set of ports without releasing the
+   first, and releasing them (`remove_container_by_name()`) also moves the
+   directory aside to `<container>.bak`. If the registry cannot be read it dies
+   rather than guess.
+3. Require the directory of every remaining container, or die before anything is
+   created. With nothing left it prints `Nothing to restore`.
+4. Then steps 3 to 5 below, for those containers only.
+
+**With a tarball** it runs all five steps:
 
 1. **Tear down** — `remove_containers --all` (shelled out to the *installed*
    `/opt/cpanel/ea-podman/bin/ea-podman`, so even a checkout drives the installed
@@ -193,8 +226,12 @@ The `restore` command in `SOURCES/ea-podman.pl` → `perform_user_restore()`
 ### Automatic backup during pkgacct
 
 A **pre** `PkgAcct::Create` hook, registered in `describe()` → `_do_backup()`
-(both in `SOURCES/PodmanHooks.pm`). Pre-stage matters: the tarball must exist
-before cPanel archives the homedir.
+(both in `SOURCES/PodmanHooks.pm`). Pre-stage matters: the manifest must exist
+before cPanel archives the homedir. It is written by `write_user_manifest()`
+(`SOURCES/util.pm`): steps 1 to 3 of `ea-podman backup`, and the file is left in
+the homedir instead of being tarred and removed. `~/ea-podman.d` is already in the
+account backup, so the manifest is all that is missing, and it is a few KB.
+Accounts with no containers are skipped before any of this runs.
 
 For a non-root account the hook shells out to
 `/scripts/ea-podman rootbackupofuser <user>` (the `rootbackupofuser` command in
@@ -215,11 +252,16 @@ Two cPanel-side notes:
   `--userbackup`) — see the `$isbackup || $isuserbackup` guard around the
   `EXCLUSION_LIST_FILES` block in cPanel’s own `scripts/pkgacct`, and the
   `$OPTS->{'backup'}`/`{'userbackup'}` block that sets those flags. A plain
-  `cpmove-` run doesn’t, so a transfer archive can carry
-  `~/.local/share/containers` — bloat that restore ignores, since it rebuilds the
-  store from the image.
+  `cpmove-` run doesn’t, so a transfer archive carries
+  `~/.local/share/containers`. Restore does not ignore it: that store remembers
+  the account’s old uid, so when the account lands with a different one every
+  `podman` command fails (`RunRoot is pointing to a path
+  (/run/user/<old uid>/containers) which is not writable`) and restore stops
+  with `Could not restore N container(s)`. The data in `~/ea-podman.d` is left
+  alone and the containers stay registered. Delete `~/.local/share/containers`,
+  then `ea-podman upgrade --force <container>` for each one.
 * There is **no restore-side hook**. Nothing in this package or in cPanel reacts
-  to `restorepkg`; a restored account has its `~/ea-podman.d/` and its tarballs
+  to `restorepkg`; a restored account has its `~/ea-podman.d/` and the manifest
   back on disk and zero containers.
 
 ## Limitations and sharp edges
@@ -232,7 +274,9 @@ Two cPanel-side notes:
   without an `eval`, so the run stops there: earlier containers are up, the rest
   are simply gone, because the teardown already removed them. Install the package
   and re-run the same tarball; restore always starts from a full teardown, so
-  re-running is the recovery path.
+  re-running is the recovery path. Restoring without a tarball does not tear
+  anything down, so the containers that did come back are skipped as registered
+  and re-running it only picks up the rest.
 * **Ports are reallocated, not reclaimed.** The teardown releases the old
   assignments and `_get_new_ports()` takes the lowest free ones
   (`cpuser_port_authority`), so a same-host restore often lands back on the same
@@ -258,12 +302,13 @@ Two cPanel-side notes:
   directory, start it. Install without moving the restored directory aside and
   you get the *next* free name and an empty data dir — a directory (or its
   `.bak`) is one of the things `get_next_available_container_name()` skips on.
-* **The `webapp` registry flag never survives a restore.** It’s set at install
-  time only (`--webapp-dir`) and otherwise read back from the existing registry
-  entry (`register_container_as_root()`) — but restore’s teardown already
-  deregistered the container, so there is no entry left to read from and it is
-  recorded as `webapp: false`. Same host included. (Upgrade, which doesn’t
-  deregister, does preserve it.)
+* **The `webapp` registry flag comes from the manifest.** It’s set at install time
+  only (`--webapp-dir`) and otherwise read back from the existing registry entry
+  (`register_container_as_root()`), but a tarball restore’s teardown deregisters
+  the container, so there is no entry to read it back from.
+  `restore_containers_for_user()` passes the manifest’s value instead, which is
+  what keeps a restored web app bound to loopback only. The manifest is the
+  account’s own file, so that is the account’s word for it.
 * **Username changes are blocked, and cross-account restore isn’t implemented.**
   Container names embed the user, so `Accounts::Modify` is refused for any
   account with containers (`_pre_username_change()`, `SOURCES/PodmanHooks.pm`)
@@ -293,4 +338,5 @@ Two cPanel-side notes:
   mid-restore. See “Related hardening in ea-podman” in `VIRTFS-BUSY.md`.
 * **Removed containers leave `<container>.bak` directories** behind
   (`move_container_dir()`), so their data is recoverable by hand — and it also
-  rides along in every later tarball, which restore unpacks and ignores.
+  rides along in every later account backup and tarball, which restore ignores.
+  `ea-podman clean` lists them.

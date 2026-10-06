@@ -2966,10 +2966,10 @@ sub _get_tarball_name {
 
 our $num_backups_to_retain = 3;
 
-sub perform_user_backup {
+# This user's registry entries, each with the ports it holds now. The manifest
+# is the only place those ports are recorded.
+sub _user_manifest_entries {
     my $user = getpwuid($>);
-
-    die "Cannot be run as root\n" if ( $> == 0 );
 
     my $containers_hr = ea_podman::util::load_known_containers();
 
@@ -2977,14 +2977,42 @@ sub perform_user_backup {
     @containers = grep { $_->{user} eq $user } @containers;
     @containers = sort { $a->{user} cmp $b->{user} } @containers;
 
+    foreach my $container (@containers) {
+        my @curr_ports = ea_podman::util::_get_current_ports( $container->{container_name} );
+        $container->{curr_ports} = \@curr_ports;
+    }
+
+    return @containers;
+}
+
+# What the pkgacct hook runs. The homedir backup already carries ~/ea-podman.d,
+# so the manifest is all it is missing; a tarball of ea-podman.d would put every
+# container's files into the account backup a second time.
+sub write_user_manifest {
+    die "Cannot be run as root\n" if ( $> == 0 );
+
+    my @containers = _user_manifest_entries();
+
     if ( @containers == 0 ) {
         print "There are no containers\n";
         return 1;
     }
 
-    foreach my $container (@containers) {
-        my @curr_ports = ea_podman::util::_get_current_ports( $container->{container_name} );
-        $container->{curr_ports} = \@curr_ports;
+    Path::Tiny::path( ea_podman::util::get_backup_filename() )->spew( Cpanel::JSON::pretty_canonical_dump( \@containers ) );
+
+    return;
+}
+
+sub perform_user_backup {
+    my $user = getpwuid($>);
+
+    die "Cannot be run as root\n" if ( $> == 0 );
+
+    my @containers = _user_manifest_entries();
+
+    if ( @containers == 0 ) {
+        print "There are no containers\n";
+        return 1;
     }
 
     my $homedir = ( getpwuid($>) )[7];
@@ -3026,11 +3054,68 @@ sub perform_user_backup {
     return;
 }
 
+# Restore for an account whose files have already come back (restorepkg, a
+# transfer): ~/ea-podman.d and the manifest are in the homedir, but the registry
+# knows nothing of the containers. Nothing is torn down or unpacked, because the
+# directories are exactly what was just restored.
+#
+# A container the registry already has is left alone. Recreating it would
+# allocate it a second set of ports without releasing the first, and the only
+# thing that releases them (remove_container_by_name) also moves the directory
+# aside to .bak.
+sub _restore_from_manifest {
+    my ( $homedir, $user ) = @_;
+
+    die "Cannot be run as root\n" if ( $> == 0 );
+
+    my $backup_file = "$homedir/ea_podman_backup_$user.json";
+    if ( !-e $backup_file ) {
+        die "The container backup file is not present ($backup_file)\n";
+    }
+
+    my @containers = @{ Cpanel::JSON::LoadFile($backup_file) };
+
+    # Dies if the registry cannot be read: guessing would recreate containers it
+    # may already have.
+    my $registered = ea_podman::util::load_known_containers();
+
+    my @to_restore;
+    foreach my $container (@containers) {
+        if ( exists $registered->{ $container->{container_name} } ) {
+            print "“$container->{container_name}” is already registered; leaving it as it is\n";
+            next;
+        }
+        push @to_restore, $container;
+    }
+
+    # Every directory must be there before anything is created.
+    foreach my $container (@to_restore) {
+        my $container_dir = "$homedir/ea-podman.d/$container->{container_name}";
+
+        if ( !-d $container_dir ) {
+            die "Container dir ($container_dir) does not exist.\n";
+        }
+    }
+
+    if ( !@to_restore ) {
+        print "Nothing to restore\n";
+        return;
+    }
+
+    ea_podman::util::init_user( creating => 1 );
+    ea_podman::util::restore_containers_for_user(@to_restore);
+    _warn_if_ports_changed(@to_restore);
+
+    return;
+}
+
 sub perform_user_restore {
     my ($backup_tarball) = @_;
 
     my $homedir = ( getpwuid($>) )[7];
     my $user    = getpwuid($>);
+
+    return _restore_from_manifest( $homedir, $user ) if !defined $backup_tarball;
 
     $backup_tarball = Cwd::abs_path( $backup_tarball // '' ) || die "Please pass in the path to the backup file you want to restore.\n";
     die "The backup file is not a readable file ($backup_tarball)\n" if !-f $backup_tarball || !-r _;
@@ -3091,6 +3176,13 @@ sub perform_user_restore {
     # session is needed.
     ea_podman::util::init_user( creating => 1 );
     ea_podman::util::restore_containers_for_user(@containers);
+    _warn_if_ports_changed(@containers);
+
+    return;
+}
+
+sub _warn_if_ports_changed {
+    my (@containers) = @_;
 
     foreach my $container (@containers) {
         my @new_ports = ea_podman::util::_get_current_ports( $container->{container_name} );
