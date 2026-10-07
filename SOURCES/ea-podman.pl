@@ -40,8 +40,7 @@ use Cpanel::Config::Users ();
 use Cpanel::JSON          ();
 use Cpanel::AccessIds     ();
 
-use Whostmgr::Accounts::Shell ();
-use Cpanel::Shell             ();
+use Cpanel::Shell ();
 
 use Term::ReadLine   ();
 use App::CmdDispatch ();
@@ -58,12 +57,13 @@ sub run {
 
     # A restricted-shell (jailshell) account cannot run rootless podman from
     # inside the jail chroot. Rather than refuse, transparently route the
-    # supported verbs through the EAPodman UAPI: cpsrvd executes that request as
-    # this cpuser OUTSIDE the cage, so it "just works" the same as the CLI does
-    # for an unrestricted user. root and unrestricted-shell users keep the
-    # direct path below (and thus the full verb set). See CPANEL-54037.
+    # supported verbs through the ea_podman admin module's lifecycle actions:
+    # cpsrvd runs them OUTSIDE the cage and drops to this cpuser, so it "just
+    # works" the same as the CLI does for an unrestricted user. root and
+    # unrestricted-shell users keep the direct path below (and thus the full
+    # verb set). See CPANEL-54037 and EA4-315.
     if ( $> != 0 && !_has_unrestricted_shell($user) ) {
-        return delegate_to_uapi(@args);
+        return delegate_to_admin(@args);
     }
 
     if ( $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} && $ENV{'OPENSSL_NO_DEFAULT_ZLIB'} == 1 ) {
@@ -82,14 +82,14 @@ sub run {
     }
 
     # We are on the direct CLI path: only root or an unrestricted-shell user
-    # reaches here (restricted shells were routed to delegate_to_uapi above).
+    # reaches here (restricted shells were routed to delegate_to_admin above).
     # Stay silent about the cgroup config for them; the UAPI/restricted path
     # never runs through here and keeps the CloudLinux + cgroup v2 advisory.
     $ea_podman::util::EMIT_CGROUP_ADVISORY = 0;
 
     # An account can also be unreachable directly for a reason the shell check
     # above can't see: CageFS. A CageFS-caged account can have an unrestricted
-    # shell (so it isn't routed to delegate_to_uapi above), but a real login
+    # shell (so it isn't routed to delegate_to_admin above), but a real login
     # still runs inside the cage's own mount namespace, which does not expose
     # /run/user. The root-privileged bootstrap (ensure_user(), just above
     # ensure_su_login() in init_user()) still succeeds — it runs via the
@@ -97,7 +97,7 @@ sub run {
     # bootstrapped on the host while this process still can't see the result.
     # ensure_su_login() (util.pm) surfaces that as a specific, distinctive die.
     # Rather than inventing cage-detection, catch that exact symptom and fall
-    # back to the same UAPI bridge jailshell already uses (cpsrvd also runs
+    # back to the same admin actions jailshell already uses (cpsrvd also runs
     # outside the cage, so it can see what we just bootstrapped). See CPANEL-54672.
     if ( $> != 0 ) {
         my $ok = eval {
@@ -107,8 +107,8 @@ sub run {
         if ( !$ok ) {
             my $err = $@;
             if ( $err =~ /rootless runtime directory .* does not exist/ ) {
-                warn "ea-podman: could not see this account's rootless runtime directory directly " . "(typical of a CageFS-enabled account) - retrying through the EAPodman UAPI...\n";
-                return delegate_to_uapi(@args);
+                warn "ea-podman: could not see this account's rootless runtime directory directly " . "(typical of a CageFS-enabled account) - retrying through the ea-podman admin actions...\n";
+                return delegate_to_admin(@args);
             }
             die $err;
         }
@@ -133,36 +133,43 @@ sub _size_str {
     return "$bytes bytes";
 }
 
+# Cpanel::Shell is where current cPanel keeps this; Whostmgr::Accounts::Shell
+# had it before (ZC-12610). Only load the latter when it is actually needed: it
+# pulls in AcctLock.pm, which a jailshell jail does not contain, and the CLI is
+# no longer compiled with it bundled, so a compile-time `use` killed the CLI in
+# the jail before it could delegate (EA4-315).
 sub _has_unrestricted_shell {
     my ($user) = @_;
-    if ( defined &Whostmgr::Accounts::Shell::has_unrestricted_shell ) {
-        return Whostmgr::Accounts::Shell::has_unrestricted_shell($user);
+    if ( defined &Cpanel::Shell::has_unrestricted_shell ) {
+        return Cpanel::Shell::has_unrestricted_shell($user);
     }
-    return Cpanel::Shell::has_unrestricted_shell($user);
+
+    require Whostmgr::Accounts::Shell;
+    return Whostmgr::Accounts::Shell::has_unrestricted_shell($user);
 }
 
-#####################################
-#### restricted-shell UAPI bridge ###
-#####################################
+######################################
+#### restricted-shell admin bridge ###
+######################################
 #
-# For a restricted-shell account the CLI cannot drive podman directly, so it
-# delegates to the EAPodman UAPI over localhost HTTPS. Auth: a cpuser shell has
-# no ambient cpsrvd credential, so the (root) ea-podman adminbin mints a
-# short-lived API token for the caller; the CLI makes one authenticated request
-# (`Authorization: cpanel user:token`) to /execute/EAPodman/<verb> and then has
-# the adminbin revoke the token. See CPANEL-54037 and docs/uapi.md.
+# For a restricted-shell or caged account the CLI cannot drive podman directly,
+# so it asks the ea_podman admin module to: each supported verb has a lifecycle
+# action that runs as root outside the jail/cage, drops fully to this cpuser
+# and runs the same verb body the EAPodman UAPI runs. One call, no credential
+# to mint. See EA4-315 (previously a full-access API token and a localhost
+# UAPI request, CPANEL-54037).
 
-sub delegate_to_uapi {
+sub delegate_to_admin {
     my (@args) = @_;
 
     # Built locally (not file-scoped) so they are populated regardless of where
     # `run(@ARGV)` sits relative to a file-scope initializer.
     #
-    # Verbs the EAPodman UAPI implements — the only ones that can be delegated.
-    my %uapi_verb = map { $_ => 1 } qw(install upgrade list start stop restart uninstall status cmd);
+    # Verbs with a lifecycle admin action — the only ones that can be delegated.
+    my %bridge_verb = map { $_ => 1 } qw(install upgrade list start stop restart uninstall status cmd);
 
-    # CLI aliases (subset of the dispatcher's table) that resolve to a UAPI verb.
-    my %uapi_alias = (
+    # CLI aliases (subset of the dispatcher's table) that resolve to a bridged verb.
+    my %bridge_alias = (
         in      => 'install',
         up      => 'upgrade',
         li      => 'list',
@@ -175,38 +182,32 @@ sub delegate_to_uapi {
     );
 
     my $verb = shift(@args) // '';
-    $verb = $uapi_alias{$verb} if exists $uapi_alias{$verb};
+    $verb = $bridge_alias{$verb} if exists $bridge_alias{$verb};
 
-    my $supported = join( ", ", sort keys %uapi_verb );
+    my $supported = join( ", ", sort keys %bridge_verb );
 
     # No verb (or `help`): show what a restricted account can do rather than
     # erroring, so the bare `ea-podman` invocation is still friendly.
     if ( $verb eq '' || $verb eq 'help' ) {
-        print "Your account has a restricted shell (jailshell) or CageFS, so ea-podman routes\n" . "these commands through the EAPodman UAPI: $supported.\n" . "Usage: ea-podman <" . join( "|", sort keys %uapi_verb ) . "> [args]\n";
+        print "Your account has a restricted shell (jailshell) or CageFS, so ea-podman routes\n" . "these commands through its privileged helper: $supported.\n" . "Usage: ea-podman <" . join( "|", sort keys %bridge_verb ) . "> [args]\n";
         return 1;
     }
 
-    if ( !$uapi_verb{$verb} ) {
-        die "The “$verb” command is not available for accounts with a restricted shell (jailshell) or CageFS.\n" . "Those accounts can use: $supported.\n" . "(These route through the EAPodman UAPI, which works from inside the jail/cage; the remaining ea-podman subcommands require an unrestricted shell.)\n";
+    if ( !$bridge_verb{$verb} ) {
+        die "The “$verb” command is not available for accounts with a restricted shell (jailshell) or CageFS.\n" . "Those accounts can use: $supported.\n" . "(These route through ea-podman's privileged helper, which works from inside the jail/cage; the remaining ea-podman subcommands require an unrestricted shell.)\n";
     }
 
-    my $params = _cli_args_to_uapi( $verb, @args );
-    my $result = _uapi_call( $verb, $params );
+    my $params = _cli_args_to_params( $verb, @args );
+    my $data   = _admin_call( $verb, $params );
 
-    my $status = ref($result) eq 'HASH' ? $result->{status} : undef;
-    if ( !$status ) {
-        my $errors = ref($result) eq 'HASH'                    ? $result->{errors}        : undef;
-        my $msg    = ( ref($errors) eq 'ARRAY' && @{$errors} ) ? join( "\n", @{$errors} ) : "EAPodman $verb failed";
-        die "$msg\n";
-    }
-
-    _render_uapi_result( $verb, ref($result) eq 'HASH' ? $result->{data} : undef );
+    _render_result( $verb, $data );
     return 1;
 }
 
-# Translate the CLI argv for a verb into UAPI key/value params. Mirrors the
-# reverse mapping in Cpanel::API::EAPodman (cpuser_port/env/risk-flag + image).
-sub _cli_args_to_uapi {
+# Translate the CLI argv for a verb into the EAPodman UAPI's key/value params,
+# which the lifecycle admin actions take too. Mirrors the reverse mapping in
+# ea_podman::util::api_install (cpuser_port/env/risk-flag + image).
+sub _cli_args_to_params {
     my ( $verb, @args ) = @_;
 
     return {} if $verb eq 'list';
@@ -249,13 +250,14 @@ sub _cli_args_to_uapi {
 
     # upgrade / start / stop / restart / uninstall / status: a single
     # container_name positional (ignore the CLI's --verify; UAPI uninstall has
-    # no interactive gate).
-    my ($container_name) = grep { defined && length && $_ ne '--verify' } @args;
+    # no interactive gate). upgrade's --force is the one flag that carries over.
+    my $force            = $verb eq 'upgrade' && grep { defined && $_ eq '--force' } @args;
+    my ($container_name) = grep { defined && length && $_ ne '--verify' && $_ ne '--force' } @args;
     die "$verb requires a container name\n" if !defined $container_name;
-    return { container_name => $container_name };
+    return { container_name => $container_name, ( $force ? ( force => 1 ) : () ) };
 }
 
-# Shared by the direct-CLI `cmd` verb and its UAPI delegation: parses
+# Shared by the direct-CLI `cmd` verb and its admin-action delegation: parses
 # `<CONTAINER_NAME> [--cd DIR] -- <CMD> [ARGS...]`. The `--` is mandatory so
 # ea-podman's own flags can never be confused with the exec'd command's own
 # argv (which may legitimately contain "--cd" or "--" tokens of its own).
@@ -281,72 +283,45 @@ sub _parse_cmd_args {
     return ( $container_name, $cd, @args );
 }
 
-sub _uapi_call {
+# The admin action behind each bridged verb.
+sub _admin_action_for_verb {
+    my ($verb) = @_;
+
+    my %action = (
+        install   => 'INSTALL',
+        upgrade   => 'UPGRADE',
+        list      => 'LIST_CONTAINERS',
+        start     => 'START',
+        stop      => 'STOP',
+        restart   => 'RESTART',
+        uninstall => 'UNINSTALL',
+        status    => 'STATUS',
+        cmd       => 'CMD',
+    );
+
+    return $action{$verb} // die "No ea-podman admin action for “$verb”\n";
+}
+
+sub _admin_call {
     my ( $verb, $params ) = @_;
 
     require Cpanel::AdminBin::Call;
+    require Cpanel::Exception;
 
-    # A shell login has no ambient cpsrvd credential, so the (root) adminbin
-    # mints a short-lived full-access API token for us; we authenticate the one
-    # UAPI request with it (`Authorization: cpanel user:token`) and revoke it
-    # immediately after, success or not. See CPANEL-54037.
-    my $cred = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'MINT_API_TOKEN' );
-    die "Could not obtain an API token to reach the EAPodman UAPI\n"
-      if ref($cred) ne 'HASH' || !$cred->{token};
-
-    my $user = scalar getpwuid($>);
-
-    require HTTP::Tiny;
-    my $http = HTTP::Tiny->new( verify_SSL => 0, timeout => 120 );    # localhost cert; installs can pull an image
-
-    my $path = "/execute/EAPodman/$verb";
-    my $qs   = _uapi_query_string($params);
-    my $resp = $http->get(
-        "https://127.0.0.1:2083$path" . ( length $qs ? "?$qs" : "" ),
-        { headers => { 'Authorization' => "cpanel $user:$cred->{token}" } },
-    );
-
-    eval { Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REVOKE_API_TOKEN', $cred->{name} ); 1 };
-
-    if ( !$resp->{success} ) {
-        die "EAPodman UAPI request failed: $resp->{status} $resp->{reason} ($path)\n" . _http_snippet($resp);
+    my $data;
+    local $@;
+    my $ok = eval { $data = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', _admin_action_for_verb($verb), $params ); 1 };
+    if ( !$ok ) {
+        my $msg = Cpanel::Exception::get_string_no_id($@);
+        $msg = "EAPodman $verb failed" if !length( $msg // '' );
+        chomp $msg;
+        die "$msg\n";
     }
 
-    my $decoded = eval { Cpanel::JSON::Load( $resp->{content} ) };
-    if ( !$decoded ) {
-        die "Could not parse the EAPodman UAPI response (status $resp->{status}, " . "content-type " . ( $resp->{headers}{'content-type'} // '?' ) . "):\n" . _http_snippet($resp);
-    }
-    return $decoded->{result} // $decoded;
+    return $data;
 }
 
-# A short, single-line excerpt of a response body, for legible error messages.
-sub _http_snippet {
-    my ($resp) = @_;
-    my $body = $resp->{content} // '';
-    $body =~ s/\s+/ /g;
-    $body =~ s/^\s+//;
-    return length($body) > 300 ? substr( $body, 0, 300 ) . " …\n" : "$body\n";
-}
-
-sub _uapi_query_string {
-    my ($params) = @_;
-    require Cpanel::Encoder::URI;
-
-    # A repeatable arg is just the same name given more than once
-    # (key=a&key=b&key=c). Cpanel::Form stores the duplicates and
-    # $args->get_multiple() recovers them in order, so there is no need to
-    # number them key-1, key-2, … ourselves.
-    my @pairs;
-    for my $key ( sort keys %{$params} ) {
-        my $val = $params->{$key};
-        for my $v ( ref($val) eq 'ARRAY' ? @{$val} : $val ) {
-            push @pairs, Cpanel::Encoder::URI::uri_encode_str($key) . '=' . Cpanel::Encoder::URI::uri_encode_str($v);
-        }
-    }
-    return join( '&', @pairs );
-}
-
-sub _render_uapi_result {
+sub _render_result {
     my ( $verb, $data ) = @_;
 
     if ( $verb eq 'install' ) {
@@ -385,8 +360,8 @@ sub get_dispatch_args {
     my %cmds = (
         testbin => {
             clue     => "testbin",
-            abstract => "Verify binary is stable",
-            help     => "If it exits clean the binary is ok. If it exits unclean it should be recompiled with `/opt/cpanel/ea-podman/bin/compile.sh`",
+            abstract => "Verify ea-podman runs",
+            help     => "If it exits clean ea-podman is ok. It is no longer compiled, so there is nothing to rebuild; kept so existing callers keep working.",
             code     => sub {
                 printf "$0 is running under perl v%vd\n", $^V;
             },
@@ -428,14 +403,14 @@ A container that is not running is recreated and LEFT not running, because a sto
 --force skips the comparison and recreates unconditionally, and starts the container afterwards. Use it to re-apply a configuration change that does not move the image, or to rebuild from the locally cached image when the registry cannot be reached.
 
 If the pull fails, this reports the failure and leaves the container untouched rather than guessing; --force falls back to the cached image instead.},
-            code     => sub {
+            code => sub {
                 my ( $app, @args ) = @_;
 
                 my ( $container_name, $force );
                 for my $arg (@args) {
-                    if    ( $arg eq '--force' ) { $force = 1 }
+                    if    ( $arg eq '--force' )        { $force = 1 }
                     elsif ( !defined $container_name ) { $container_name = $arg }
-                    else                        { die "Unknown argument “$arg”\n" }
+                    else                               { die "Unknown argument “$arg”\n" }
                 }
 
                 die "Please provide the name of the container to upgrade.\n" if !defined $container_name;
@@ -554,8 +529,9 @@ If the pull fails, this reports the failure and leaves the container untouched r
         cmd => {
             clue     => "cmd <CONTAINER_NAME> [--cd DIR] -- <CMD> [ARGS...]",
             abstract => "run a one-shot, non-interactive command inside the container",
-            help     => "Runs CMD (with ARGS) directly inside the container (no shell, no TTY) and prints its stdout/stderr, exiting with its exit code. Does not assume the container has bash. Optional --cd DIR runs the command from that working directory. Works even where /proc is mounted hidepid=2, and is available to restricted-shell (jailshell) and CageFS accounts through the EAPodman UAPI.",
-            code     => sub {
+            help     =>
+              "Runs CMD (with ARGS) directly inside the container (no shell, no TTY) and prints its stdout/stderr, exiting with its exit code. Does not assume the container has bash. Optional --cd DIR runs the command from that working directory. Works even where /proc is mounted hidepid=2, and is available to restricted-shell (jailshell) and CageFS accounts through ea-podman's privileged helper (and the EAPodman UAPI).",
+            code => sub {
                 my ( $app, @args ) = @_;
                 my ( $container_name, $cd, @cmd_argv ) = _parse_cmd_args(@args);
 
@@ -712,9 +688,9 @@ Each container is only recreated if something actually moved; see `ea-podman hel
 
                 my ( $pkg, $force );
                 for my $arg (@args) {
-                    if    ( $arg eq '--force' )  { $force = 1 }
-                    elsif ( !defined $pkg )      { $pkg   = $arg }
-                    else                         { die "Unknown argument “$arg”\n" }
+                    if    ( $arg eq '--force' ) { $force = 1 }
+                    elsif ( !defined $pkg )     { $pkg = $arg }
+                    else                        { die "Unknown argument “$arg”\n" }
                 }
 
                 die "Please provide a package name or the flag `--all`\n" if ( !$pkg );
@@ -801,10 +777,7 @@ Each container is only recreated if something actually moved; see `ea-podman hel
                                 # Skipped, but counted: a registry entry for a
                                 # vanished account is a real problem and must not
                                 # exit 0.
-                                warn "ea-podman: skipping “$c_user”: the account no longer exists, so its registered containers ("
-                                  . join( ", ", map { $_->{container_name} } @c_containers )
-                                  . ") cannot be upgraded.\n"
-                                  . "They are still registered. Clean them up as root with `ea-podman remove_containers --all`, which handles containers whose account was deleted uncleanly.\n";
+                                warn "ea-podman: skipping “$c_user”: the account no longer exists, so its registered containers (" . join( ", ", map { $_->{container_name} } @c_containers ) . ") cannot be upgraded.\n" . "They are still registered. Clean them up as root with `ea-podman remove_containers --all`, which handles containers whose account was deleted uncleanly.\n";
                             }
                             else {
                                 warn "ea-podman: upgrading containers for “$c_user” failed: $err";
@@ -846,13 +819,13 @@ A `.bak` is only removed when its container name is otherwise COMPLETELY gone: n
 Age is measured from when the directory BECAME a `.bak`, not from when its contents were last written, so a backup made moments ago is never mistaken for an old one. Default is 30 days; `--days=N` uses a different threshold, and `--days=0` considers every one of them.
 
 WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains that container's read-write /app directory -- runtime state such as SQLite files, uploads and generated content, its `.env`, and for a zip-sourced application the entire source. Nothing reads a `.bak`, but nothing else keeps a copy either. Read the listing before you pass `--run`.},
-            code     => sub {
+            code => sub {
                 my ( $app, @args ) = @_;
 
                 my $run  = 0;
                 my $days = undef;
                 for my $arg (@args) {
-                    if    ( $arg eq '--run' )              { $run  = 1 }
+                    if    ( $arg eq '--run' )              { $run = 1 }
                     elsif ( $arg =~ m/^--days=([0-9]+)$/ ) { $days = $1 }
                     else                                   { die "Unknown argument “$arg”\n" }
                 }
@@ -969,8 +942,8 @@ WHAT A `.bak` HOLDS. It is made when an application is deleted, and it contains 
                     for my $b ( @{ $r->{removable} } ) {
                         printf( "%s: %s  (%s old, %s)%s\n", $r->{user}, $b->{path}, _age_str( $b->{age} ), _size_str( $b->{size} ), $run ? " — REMOVED" : "" );
                         $total++;
-                        if   ( defined $b->{size} ) { $bytes += $b->{size} }
-                        else                        { $bytes_unknown++ }
+                        if ( defined $b->{size} ) { $bytes += $b->{size} }
+                        else                      { $bytes_unknown++ }
                     }
                     for my $sk ( @{ $r->{skipped} } ) {
                         next if $sk->{reason} eq 'too_recent' || $sk->{reason} eq 'not_a_container_backup';

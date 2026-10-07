@@ -274,76 +274,56 @@ subtest 'unsafe ranges can be audited across the whole file' => sub {
     is_deeply( ea_podman::subids::get_subuid_problems(), { alice => "shares host IDs with “bob”", bob => "shares host IDs with “alice”" }, "an account with both problems is reported for the overlap" );
 };
 
-# The unmask window is host-wide while it is open, so two accounts bootstrapping
-# at once must not have one of them remask while the other still needs it —
-# without the lock, the first to finish puts the mask back under the second.
-# (EA4-319)
-subtest 'concurrent unmask windows never overlap' => sub {
+# EA4-321: accounts bootstrapping at once each write their own unit file under
+# /run/systemd/system without a lock. That is safe only because every write is a
+# rename of a complete file, so a reader never sees half a unit and two writers
+# of the same file leave one whole copy.
+subtest 'concurrent unit writes never leave a partial or stray file' => sub {
     my $dir = File::Temp->newdir();
     push @keep_alive, $dir;
 
     mkdir "$dir/etc";
+    mkdir "$dir/vendor";
+    my $vendor  = "$dir/vendor/user\@.service";
+    my $content = "[Unit]\nDescription=User Manager for UID %i\n" . ( "# padding\n" x 400 );
+    path($vendor)->spew_raw($content);
+
     my $mask = "$dir/etc/user\@.service";
     symlink( "/dev/null", $mask ) or die "could not seed the mask: $!";
 
     no warnings qw/once/;
-    local $ea_podman::subids::file_mask_etc   = $mask;
-    local $ea_podman::subids::file_mask_run   = "$dir/etc/never-masked-here";
-    local $ea_podman::subids::file_mask_lock  = "$dir/mask.lock";
-    local $ea_podman::subids::file_mask_state = "$dir/mask.state";
-    local $ea_podman::subids::daemon_reloader = sub { return 1 };
+    local $ea_podman::subids::file_mask_etc     = $mask;
+    local $ea_podman::subids::file_mask_run     = "$dir/etc/never-masked-here";
+    local $ea_podman::subids::file_mask_state   = "$dir/mask.state";
+    local $ea_podman::subids::dir_unit_carveout = "$dir/units";
+    local $ea_podman::subids::dir_carveout_state = "$dir/state";
+    local @ea_podman::subids::files_vendor_unit = ($vendor);
+    local $ea_podman::subids::daemon_reloader   = sub { return 1 };
 
-    # Serialized, the log alternates open/close; overlapping, it does not.
-    my $log = "$dir/window.log";
-
-    my $WINDOWS = 12;
+    my $WRITERS = 20;
     _fork_and_wait(
         sub {
             my ($n) = @_;
 
-            ea_podman::subids::with_user_manager_unmasked(
-                sub {
-                    _append( $log, "open $n" );
-
-                    # Widen the window so an unserialized run really does overlap.
-                    select( undef, undef, undef, 0.03 );
-
-                    _append( $log, "DIRTY $n" ) if -e $mask;
-
-                    _append( $log, "close $n" );
-                    return;
-                }
-            );
-
+            # Half of them race on one shared uid, half each take their own.
+            ea_podman::subids::ensure_user_manager_carveouts( 5000, 6000 + $n );
             return;
         },
-        count => $WINDOWS,
-        what  => "unmask windows",
+        count => $WRITERS,
+        what  => "unit writers",
     );
 
-    my @events = split /\n/, path($log)->slurp;
+    opendir my $dh, "$dir/units" or die $!;
+    my @files = sort grep { !/^\./ } readdir $dh;
 
-    is_deeply( [ grep { /^DIRTY/ } @events ], [], "no window ever saw the mask back in place while it was still open" );
+    is_deeply( [ grep { !/\Auser\@[0-9]+\.service\z/ } @files ], [], "no temporary file is left behind" );
+    is( scalar(@files), $WRITERS + 1, "one unit for the shared uid and one for each of the others" );
 
-    my $overlaps = 0;
-    my $depth    = 0;
-    for my $event (@events) {
-        if ( $event =~ /^open/ ) {
-            $depth++;
-            $overlaps++ if $depth > 1;
-        }
-        elsif ( $event =~ /^close/ ) {
-            $depth--;
-        }
-    }
-    is( $overlaps, 0, "the windows are strictly serial: never two open at once" );
+    my @bad = grep { path("$dir/units/$_")->slurp_raw ne $content } @files;
+    is_deeply( \@bad, [], "every unit is a complete copy of the vendor unit" );
 
-    is( scalar( grep { /^open/ } @events ),  $WINDOWS, "every child got a window" );
-    is( scalar( grep { /^close/ } @events ), $WINDOWS, "and closed it" );
-
-    ok( -l $mask, "the mask is back after the last window closes" );
-    is( readlink($mask), "/dev/null", "pointing where it did before" );
-    ok( !-e "$dir/mask.state", "and no in-progress record is left behind" );
+    ok( -l $mask, "the mask was never touched" );
+    is( readlink($mask), "/dev/null", "and still points where it did" );
 };
 
 done_testing();

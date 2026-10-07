@@ -83,11 +83,13 @@
 #
 # RUN IT
 #
-# Neither branch is packaged yet, so test the working trees, not packages. The
-# ea-podman CLI is a COMPILED BINARY that embeds util.pm, and the plugin's
+# Neither branch is packaged yet, so test the working trees, not packages. Before
+# EA4-315 the ea-podman CLI is a COMPILED BINARY that embeds util.pm (from
+# EA4-315 it is the perl script and reads util.pm from lib/), and the plugin's
 # modules are real files on a VM (symlinks only on a dev box), so copying files
 # by hand tests the OLD code and the results say nothing about your diff. Use the
-# harness; it recompiles the binary and states which copy is under test:
+# harness; it recompiles the binary if there is one and states which copy is
+# under test:
 #
 #     # from the ea-podman checkout, EA4-335-ea-podman
 #     scp t/LiveTests/setup-remote-live.pl t/LiveTests/ea4-335-create-failure-live.t root@VM:/root/
@@ -118,7 +120,7 @@
 # After EAPODMAN_LIVE=1 is set, a missing code marker is a FAILURE (BAIL_OUT),
 # never a skip -- a skip reads as green in an automated run and this file's whole
 # value is telling you the change is present and working. Markers are asked of
-# the thing that runs: the library AND the compiled binary for ea-podman, the
+# the thing that runs: the library AND (before EA4-315) the compiled binary for ea-podman, the
 # installed modules for the plugin.
 #
 # The expectation that ea-podman itself reports the cause is derived from those
@@ -310,7 +312,16 @@ sub marker_in_file {
     return slurp($file) =~ /\Q$marker\E/ ? 1 : 0;
 }
 
-# The compiled binary embeds util.pm; ask it, not just the library next to it.
+# Before EA4-315 the CLI is a compiled binary that embeds util.pm, so it is asked
+# as well as the library next to it. From EA4-315 the CLI is the perl script and
+# reads util.pm from lib/, so the library is the whole answer and grepping the
+# script for a util.pm marker would only ever find it missing.
+my $EAP_BIN_COMPILED = do {
+    open( my $fh, '<', $EAP_BIN ) or die "cannot read $EAP_BIN: $!\n";
+    read( $fh, my $magic, 4 );
+    ( $magic // '' ) eq "\x7fELF" ? 1 : 0;
+};
+
 sub marker_in_binary {
     my ($marker) = @_;
     my ( $rc, $out ) = run_cmd( 'grep', '-a', '-c', $marker, $EAP_BIN );
@@ -325,7 +336,7 @@ sub check_marker {
     return if $has == $want;
     BAIL_OUT( "$what " . ( $has ? 'has' : 'does not have' ) . " the EA4-335/CPANEL-55804 change but this run expects " . ( $want ? 'it' : 'the older code' )
           . ". Refusing to run: the results would describe code you are not looking at. "
-          . "Deploy the working trees with setup-remote-live.pl --deploy (which recompiles the ea-podman binary), "
+          . "Deploy the working trees with setup-remote-live.pl --deploy (which recompiles the ea-podman binary if it is a compiled one), "
           . ( $EXPECT_OLD ? 'or unset E2E335_EXPECT_OLD_EAPODMAN.' : 'or set E2E335_EXPECT_OLD_EAPODMAN=1 if you meant the older ea-podman.' ) );
 }
 
@@ -333,10 +344,10 @@ my $WANT_NEW_EAP = $EXPECT_OLD ? 0 : 1;
 
 check_marker( "ea-podman library ($EAP_LIB)", marker_in_file( $EAP_LIB, '_podman_create_captured' ), $WANT_NEW_EAP );
 check_marker( "ea-podman binary ($EAP_BIN)",  marker_in_binary('_podman_create_captured'),            $WANT_NEW_EAP )
-  if !$ENV{E2E335_SKIP_BINARY_CHECK};
+  if $EAP_BIN_COMPILED && !$ENV{E2E335_SKIP_BINARY_CHECK};
 check_marker( "ea-podman library ($EAP_LIB) interrupt handling", marker_in_file( $EAP_LIB, 'while podman was creating the container' ), $WANT_NEW_EAP );
 check_marker( "ea-podman binary ($EAP_BIN) interrupt handling", marker_in_binary('while podman was creating the container'),            $WANT_NEW_EAP )
-  if !$ENV{E2E335_SKIP_BINARY_CHECK};
+  if $EAP_BIN_COMPILED && !$ENV{E2E335_SKIP_BINARY_CHECK};
 check_marker( "plugin Podman.pm ($PLUGIN_PM)", marker_in_file( $PLUGIN_PM, '_quietly_explaining' ), 1 );
 check_marker( "plugin Deploy.pm ($DEPLOY_PM)", marker_in_file( $DEPLOY_PM, '_log_failure_hint' ),  1 );
 

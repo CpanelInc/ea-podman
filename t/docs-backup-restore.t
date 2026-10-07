@@ -53,7 +53,7 @@ ok( -e "$repo/$_", "$_ exists" ) for sort keys %sources;
 my %sub_in = (
     '_enable_linger'                     => 'SOURCES/subids.pm',
     '_ensure_subids'                     => 'SOURCES/subids.pm',
-    'delegate_to_uapi'                   => 'SOURCES/ea-podman.pl',
+    'delegate_to_admin'                  => 'SOURCES/ea-podman.pl',
     '_do_backup'                         => 'SOURCES/PodmanHooks.pm',
     '_pre_username_change'               => 'SOURCES/PodmanHooks.pm',
     'describe'                           => 'SOURCES/PodmanHooks.pm',
@@ -95,7 +95,7 @@ my @anchors = (
     [ 'SOURCES/ea-podman.pl', qr/^\s+backup => \{/m,                   'the backup command' ],
     [ 'SOURCES/ea-podman.pl', qr/^\s+restore => \{/m,                  'the restore command' ],
     [ 'SOURCES/ea-podman.pl', qr/^\s+rootbackupofuser => \{/m,         'the rootbackupofuser command' ],
-    [ 'SOURCES/ea-podman.pl', qr/my %uapi_verb = /,                    '%uapi_verb' ],
+    [ 'SOURCES/ea-podman.pl', qr/my %bridge_verb = /,                  '%bridge_verb' ],
 );
 
 like( slurp( $_->[0] ), $_->[1], "$_->[0] still has $_->[2] (named in the doc)" ) for @anchors;
@@ -113,10 +113,10 @@ my ($retain) = slurp('SOURCES/util.pm') =~ /our \$num_backups_to_retain\s*=\s*([
 ok( $retain, "found the retention count in util.pm" );
 like( $flat, qr/Keep the newest \Q$retain\E tarballs/, "the doc's retention count is $retain" );
 
-my ($qw) = slurp('SOURCES/ea-podman.pl') =~ /my %uapi_verb = map \{ \$_ => 1 \} qw\(([^)]*)\)/;
-ok( $qw, "found the UAPI verb list in ea-podman.pl" );
+my ($qw) = slurp('SOURCES/ea-podman.pl') =~ /my %bridge_verb = map \{ \$_ => 1 \} qw\(([^)]*)\)/;
+ok( $qw, "found the bridge verb list in ea-podman.pl" );
 my $verbs = join( " ", split( " ", $qw ) );
-like( $flat, qr/\Q$verbs\E/, "the doc lists the UAPI bridge verbs as: $verbs" );
-unlike( $qw, qr/\b(?:backup|restore)\b/, "backup/restore are still absent from the UAPI bridge (the doc's restricted-shell limitation)" );
+like( $flat, qr/\Q$verbs\E/, "the doc lists the bridge verbs as: $verbs" );
+unlike( $qw, qr/\b(?:backup|restore)\b/, "backup/restore are still absent from the bridge (the doc's restricted-shell limitation)" );
 
 done_testing();
