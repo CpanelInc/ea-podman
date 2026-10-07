@@ -138,7 +138,7 @@ one.
 The `backup` command in `SOURCES/ea-podman.pl` → `perform_user_backup()`
 (`SOURCES/util.pm`). Both refuse to run as root.
 
-1. Load the root-owned registry (via the `REGISTERED_CONTAINERS` adminbin), keep
+1. Load the root-owned registry (the `REGISTERED_CONTAINERS` admin action), keep
    this user’s entries. With none it prints `There are no containers` and returns
    — no tarball is written at all.
 2. Ask the port authority which ports each container holds
@@ -236,15 +236,16 @@ Accounts with no containers are skipped before any of this runs.
 For a non-root account the hook shells out to
 `/scripts/ea-podman rootbackupofuser <user>` (the `rootbackupofuser` command in
 `SOURCES/ea-podman.pl`), which drops to the user via `Cpanel::AccessIds`. That
-detour is required, for the reason the hook’s own comment gives: the backup needs
-adminbin to read root-owned state, and adminbin refuses any caller whose
-executable is a Perl interpreter — which is what a module hook running inside
-`pkgacct` is. The compiled `/opt/cpanel/ea-podman/bin/ea-podman` passes that
-check and is in `allowed_parents` (`SOURCES/ea-podman-adminbin.conf`); the
-`/usr/local/cpanel/bin/pkgacct` entry in that same list is a leftover from the
-in-process attempt and cannot match (it is a symlink to `pkgacct.pl`, so its
-executable is Perl). Because the shell-out starts as root it bypasses the
-restricted-shell gate, so jailshell and CageFS accounts do get backed up.
+detour was originally required because the backup needs the ea_podman admin
+actions to read root-owned state, and the legacy adminbin refused any caller
+whose executable is a Perl interpreter — which is what a module hook running
+inside `pkgacct` is — so only the then-compiled `/opt/cpanel/ea-podman/bin/ea-podman`
+got through. The admin module that replaced it (EA4-315,
+`SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm`) accepts every caller and
+authorizes each action by the caller's uid instead, so that check no longer
+applies; the detour stays because it works and drops to the account the same
+way. Because the shell-out starts as root it bypasses the restricted-shell
+gate, so jailshell and CageFS accounts do get backed up.
 
 Two cPanel-side notes:
 
@@ -289,9 +290,9 @@ Two cPanel-side notes:
   both die for `$> == 0`, and the hook’s root branch reaches
   `perform_user_backup()`, which also dies as root. Handle those by hand.
 * **Restricted-shell accounts can’t restore themselves.** For jailshell/CageFS
-  the CLI routes to the UAPI bridge, whose verbs are
-  `install upgrade list start stop restart uninstall status cmd` (`%uapi_verb` in
-  `delegate_to_uapi()`) — `backup`/`restore` are absent, so it’s refused.
+  the CLI routes to the admin-action bridge, whose verbs are
+  `install upgrade list start stop restart uninstall status cmd` (`%bridge_verb` in
+  `delegate_to_admin()`) — `backup`/`restore` are absent, so it’s refused.
   The gate keys on the account’s *configured* shell, so `su -s /bin/bash` doesn’t
   evade it, and running as root hits the root check. Backup has a root-side
   driver (`rootbackupofuser`); **restore has no equivalent.** Today that means

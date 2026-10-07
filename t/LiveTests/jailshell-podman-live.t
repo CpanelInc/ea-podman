@@ -36,7 +36,8 @@
 #                        stray `prove` run on a build box can't fire it).
 #   EAPODMAN_DRIVER      how to issue each verb: "uapi" (default; via
 #                        `uapi --user`) or "cli" (the in-jail ea-podman CLI,
-#                        which delegates back to the UAPI). Run the file once
+#                        which delegates to the ea_podman admin module's
+#                        lifecycle actions, EA4-315). Run the file once
 #                        per value to cover both entry points with the same
 #                        lifecycle assertions.
 #   EAPODMAN_TEST_USER   reuse an existing cPanel account instead of
@@ -74,6 +75,8 @@ my $WHMAPI     = '/usr/local/cpanel/bin/whmapi1';
 my $EAP_LIB    = '/opt/cpanel/ea-podman/lib/ea_podman';
 my $UAPI_MOD   = '/usr/local/cpanel/Cpanel/API/EAPodman.pm';
 my @CLI_PATHS  = ( '/usr/local/cpanel/scripts/ea-podman', '/opt/cpanel/ea-podman/bin/ea-podman' );
+my $CPWRAPD_LOG  = '/usr/local/cpanel/logs/cpwrapd_log';
+my $ADMIN_MODULE = '/usr/local/cpanel/Cpanel/Admin/Modules/Cpanel/ea_podman.pm';
 
 #---------------------------------------------------------------------
 # tiny shell helpers (no login shell, so jailshell is never entered)
@@ -127,8 +130,8 @@ sub run_as_user {
 
 # Run a command through the account's LOGIN shell (enters the jailshell chroot),
 # i.e. exactly how the user would invoke it. This is the faithful path for the
-# delegated CLI: it proves the CLI can reach the adminbin (cpwrapd) and cpsrvd
-# over localhost HTTPS from INSIDE the jail. Returns ($exit, $combined_output).
+# delegated CLI: it proves the CLI can reach the ea_podman admin module
+# (cpwrapd) from INSIDE the jail. Returns ($exit, $combined_output).
 sub run_in_jail {
     my ( $user, $cmd ) = @_;
     return run_cmd( 'su', '-', $user, '-c', $cmd );
@@ -267,6 +270,10 @@ wait_for( sub { !-e "/run/user/$uid" }, 5 );
 
 diag("Test user: $USER (uid=$uid), shell=" . ( ( getpwnam($USER) )[8] ) . ", image=$IMAGE, port=$PORT, driver=$DRIVER");
 
+# Where the cpwrapd access log stands now, so the EA4-315 checks at the end only
+# look at what this run logged.
+my $CPWRAPD_LOG_AT = -s $CPWRAPD_LOG // 0;
+
 #=====================================================================
 # the tests
 #=====================================================================
@@ -320,7 +327,7 @@ sub _op_uapi {
 }
 
 # Drive the CLI through the account's LOGIN shell (run_in_jail) so it exercises
-# the real jail → adminbin → localhost-HTTPS delegation, then map its textual
+# the real jail → admin-action delegation (EA4-315), then map its textual
 # output back onto the UAPI envelope.
 sub _op_cli {
     my ( $verb, %args ) = @_;
@@ -485,8 +492,8 @@ SKIP: {
 
 #--- CLI-specific behavior (the delegation entry point) --------------
 # In uapi-driver mode the lifecycle above never touched the CLI, so prove the
-# delegated CLI path here too (it must reach the adminbin + cpsrvd over
-# localhost HTTPS from INSIDE the jail). In cli-driver mode the lifecycle
+# delegated CLI path here too (it must reach the ea_podman admin module from
+# INSIDE the jail). In cli-driver mode the lifecycle
 # already exercised it. Either way, prove a non-UAPI verb is refused — that is
 # CLI-only behavior the lifecycle can't cover.
 SKIP: {
@@ -495,7 +502,7 @@ SKIP: {
 
     if ( $DRIVER ne 'cli' ) {
         my ( $lrc, $lout ) = run_in_jail( $USER, _sh($CLI) . " list" );
-        like( $lout, qr/\Q$container\E/, "in-jail CLI `list` (delegated to UAPI) shows $container" )
+        like( $lout, qr/\Q$container\E/, "in-jail CLI `list` (delegated) shows $container" )
           or diag("list output: $lout");
     }
 
@@ -522,6 +529,15 @@ SKIP: {
 
     my $list = op('list');
     ok( !( $list->{data} && exists $list->{data}{$container} ), "uninstalled container no longer registered" );
+}
+
+#--- EA4-315: the delegated CLI goes through admin actions, no API token --
+SKIP: {
+    skip "installed ea-podman predates EA4-315 (no admin module)", 2 if !-e $ADMIN_MODULE;
+    my @functions = _cpwrapd_functions_since( $CPWRAPD_LOG_AT, $USER );
+    ok( scalar( grep { /^(?:INSTALL|LIST_CONTAINERS|UNINSTALL)$/ } @functions ), "the CLI reached the ea_podman lifecycle actions (cpwrapd_log)" )
+      or diag("ea_podman functions logged: @functions");
+    ok( !grep( { $_ eq 'MINT_API_TOKEN' } @functions ), "and minted no API token" );
 }
 
 done_testing();
@@ -577,6 +593,15 @@ sub _redis_ping_over_tcp {
     sysread( $sock, $reply, 64 ) if $sel->can_read(5);
     close $sock;
     return $reply =~ /\+PONG/ ? 1 : 0;
+}
+
+# EA4-315: the ea_podman functions $user called through cpwrapd since $offset
+# bytes into its access log. The delegated CLI must never call MINT_API_TOKEN.
+sub _cpwrapd_functions_since {
+    my ( $offset, $user ) = @_;
+    open( my $fh, '<', $CPWRAPD_LOG ) or return;
+    seek( $fh, $offset, 0 );
+    return map { /\[function\]=\[([A-Z_]+)\]/ ? $1 : () } grep { /\[module\]=\[ea_podman\]/ && /\] \Q$user\E - / } <$fh>;
 }
 
 sub _sh {    # minimal single-quote shell escaping
