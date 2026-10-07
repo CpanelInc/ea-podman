@@ -447,7 +447,7 @@ END {
 
     note_both("Creating throwaway account '$USER' ...");
 
-    my ( $fl, $flrc, $flraw ) = whmapi( 'create_featurelist', "featurelist=$FEATURELIST", 'webapp=1', 'subdomains=1' );
+    my ( $fl, $flrc, $flraw ) = whmapi( 'create_featurelist', "featurelist=$FEATURELIST", 'webapp=1', 'subdomains=1', 'ea_podman=1' );
     if ( !whm_ok($fl) ) {
         my $why = ( $fl && $fl->{metadata}{reason} ) || "exit $flrc: " . substr( $flraw, 0, 300 );
         ( $FEATURELIST, $PKG, $USER ) = ();
@@ -792,7 +792,21 @@ subtest 'C: the same application deploys once the filesystem is big enough' => s
     my $domain = $app && $app->{domain} ? $app->{domain} : '';
     ok( length $domain, 'the application has a domain' );
     if ( length $domain ) {
-        my ( $prc, $pbody ) = run_cmd( 'curl', '-s', '--max-time', '15', '-H', "Host: $domain", 'http://127.0.0.1/' );
+        # To the account's IP: account vhosts bind to it, and 127.0.0.1:80 only
+        # has the server's own vhosts, so a Host header sent there never reaches
+        # the application. Until the application answers: the deploy reports
+        # success before Apache's graceful restart loads the proxy include, and
+        # until then the subdomain serves its empty docroot (~10 s, measured on
+        # AlmaLinux 9).
+        my ($ip) = slurp("/var/cpanel/users/$USER") =~ /^IP=(\S+)/m;
+        $ip //= '127.0.0.1';
+        my $pbody    = '';
+        my $deadline = time + 90;
+        while (1) {
+            ( undef, $pbody ) = run_cmd( 'curl', '-s', '-k', '-L', '--max-time', '15', '--resolve', "$domain:80:$ip", '--resolve', "$domain:443:$ip", "http://$domain/" );
+            last if $pbody =~ /E2E335_OK/ || time >= $deadline;
+            sleep 5;
+        }
         like( $pbody, qr/E2E335_OK/, 'and it is served through the Apache proxy, not only on its own port' ) or note_both("proxied body: $pbody");
     }
 
