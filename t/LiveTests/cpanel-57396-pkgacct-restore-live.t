@@ -278,6 +278,17 @@ if ( $HAS_FIX != $WANT_FIX ) {
 
 note_both( "mode: $MODE; ea-podman library " . ( $HAS_FIX ? 'HAS' : 'does NOT have' ) . ' the CPANEL-57396 fix' );
 
+# Everything here goes through PodmanHooks: the pkgacct hook writes the manifest
+# and the removeacct hook releases the containers. Unregistered, every subtest
+# fails for that one reason. An rpm upgrade leaves them unregistered: the new
+# %post adds them and the OLD package's %preun, which runs after it, deletes them.
+{
+    my ( undef, $out ) = run_cmd( '/usr/local/cpanel/bin/manage_hooks', 'list' );
+    BAIL_OUT( 'PodmanHooks is not registered with cPanel (`manage_hooks list` has no PodmanHooks::_do_backup), so pkgacct and removeacct never reach ea-podman. '
+          . 'An rpm upgrade of ea-podman leaves it that way (see SOURCES/pkg.prerm). Run `/usr/local/cpanel/bin/manage_hooks add module PodmanHooks` and re-run.' )
+      if $out !~ /PodmanHooks::_do_backup/;
+}
+
 if ( $MODE ne 'transfer-unpack' ) {
     my ( $rc, $out, $err ) = run_cmd( 'podman', 'pull', '-q', $IMAGE );
     plan skip_all => "Docker Hub rate limit reached on this host -- `podman login`, use a pull-through cache, or wait:\n$out$err"
