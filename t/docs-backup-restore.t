@@ -70,6 +70,9 @@ my %sub_in = (
     'register_container_as_root'         => 'SOURCES/util.pm',
     'rename_containers'                  => 'SOURCES/util.pm',
     'restore_containers_for_user'        => 'SOURCES/util.pm',
+    'remove_container_by_name'           => 'SOURCES/util.pm',
+    'write_user_manifest'                => 'SOURCES/util.pm',
+    '_restore_from_manifest'             => 'SOURCES/util.pm',
 );
 
 for my $name ( sort keys %sub_in ) {
