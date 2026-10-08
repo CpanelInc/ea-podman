@@ -1571,6 +1571,11 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     if ( defined $webapp_source_dir ) {
         system( $webapp_dir_setup_script, $webapp_source_dir, $container_dir );
         if ( $? != 0 ) {
+
+            # The ports were reserved above; an install that never produced a
+            # container must not keep them. (CPANEL-57608)
+            eval { remove_port_authority_ports($container_name) };
+            warn "Could not release the ports reserved for “$container_name”: $@" if $@;
             deregister_container($container_name);
             chdir("/");
             eval { File::Path::Tiny::rm($container_dir) };
@@ -1602,6 +1607,14 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             die _failed_restore_message( $container_name, $container_dir, $create_note );
         }
         else {
+
+            # Give the reserved ports back, or the retry reuses this name, reserves
+            # a second port under it, and the reverse proxy stays wired to the
+            # first, which nothing listens on. Upgrade and restore keep theirs
+            # (EA4-325); an install has no container left to hold them.
+            # Not allowed to mask the create failure below. (CPANEL-57608)
+            eval { remove_port_authority_ports($container_name) };
+            warn "Could not release the ports reserved for “$container_name”: $@" if $@;
             deregister_container($container_name);
 
             # The moved web application is the user's only copy of their
@@ -2267,7 +2280,12 @@ sub remove_port_authority_ports {
     my ($container_name) = @_;
     if ( $> == 0 ) {
         my @container_ports = _get_current_ports($container_name);
+
+        # `take` refuses an empty list, and a container with no ports is not a failure
+        return if !@container_ports;
+
         system( "/scripts/cpuser_port_authority", take => root => @container_ports );
+        die "`cpuser_port_authority take` exited unclean ($?)\n" if $? != 0;
     }
     else {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'TAKE', $container_name );
@@ -2507,7 +2525,10 @@ sub remove_container_by_name {
 
     print "Removing $container_name\n";
 
-    ea_podman::util::remove_port_authority_ports($container_name);
+    # A failure here used to go unnoticed; keep it from stopping the removal
+    eval { ea_podman::util::remove_port_authority_ports($container_name) };
+    warn "Could not release the ports reserved for “$container_name”: $@" if $@;
+
     ea_podman::util::uninstall_container($container_name);
     ea_podman::util::deregister_container($container_name);
     ea_podman::util::move_container_dir($container_name);

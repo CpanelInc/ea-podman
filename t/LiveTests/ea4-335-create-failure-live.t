@@ -49,7 +49,9 @@
 #      large filesystem, deploys successfully and serves. Without it a failure
 #      in A could be anything; with it the small filesystem is the only variable.
 #      It also proves a failed first install left the staged source intact for a
-#      retry.
+#      retry, and (CPANEL-57608) gave its host port back: the app is served
+#      through Apache, not only on its own port, and exactly one port is
+#      reserved for the container.
 #   D. AN INTERRUPT DURING `podman create` STILL RUNS THE CLEANUP. A `podman`
 #      shim makes create sleep; SIGINT (to the process group, like Ctrl-C),
 #      SIGTERM and SIGHUP (to ea-podman alone) are then sent. ea-podman must exit,
@@ -445,7 +447,7 @@ END {
 
     note_both("Creating throwaway account '$USER' ...");
 
-    my ( $fl, $flrc, $flraw ) = whmapi( 'create_featurelist', "featurelist=$FEATURELIST", 'webapp=1', 'subdomains=1' );
+    my ( $fl, $flrc, $flraw ) = whmapi( 'create_featurelist', "featurelist=$FEATURELIST", 'webapp=1', 'subdomains=1', 'ea_podman=1' );
     if ( !whm_ok($fl) ) {
         my $why = ( $fl && $fl->{metadata}{reason} ) || "exit $flrc: " . substr( $flraw, 0, 300 );
         ( $FEATURELIST, $PKG, $USER ) = ();
@@ -780,6 +782,39 @@ subtest 'C: the same application deploys once the filesystem is big enough' => s
     if ( length $port ) {
         my ( $crc, $body ) = run_cmd( 'curl', '-s', '--max-time', '15', "http://127.0.0.1:$port/" );
         like( $body, qr/E2E335_OK/, 'and it serves the application' );
+    }
+
+    # CPANEL-57608. The check above asks the container's own port, which is the
+    # one that was always fine. The failed first install used to keep its port,
+    # so this redeploy got a second one under the same name and the reverse proxy
+    # was wired to the first, which nothing listens on: the deploy logged success
+    # and Apache answered 503. Ask Apache, and count the reservations.
+    my $domain = $app && $app->{domain} ? $app->{domain} : '';
+    ok( length $domain, 'the application has a domain' );
+    if ( length $domain ) {
+        # To the account's IP: account vhosts bind to it, and 127.0.0.1:80 only
+        # has the server's own vhosts, so a Host header sent there never reaches
+        # the application. Until the application answers: the deploy reports
+        # success before Apache's graceful restart loads the proxy include, and
+        # until then the subdomain serves its empty docroot (~10 s, measured on
+        # AlmaLinux 9).
+        my ($ip) = slurp("/var/cpanel/users/$USER") =~ /^IP=(\S+)/m;
+        $ip //= '127.0.0.1';
+        my $pbody    = '';
+        my $deadline = time + 90;
+        while (1) {
+            ( undef, $pbody ) = run_cmd( 'curl', '-s', '-k', '-L', '--max-time', '15', '--resolve', "$domain:80:$ip", '--resolve', "$domain:443:$ip", "http://$domain/" );
+            last if $pbody =~ /E2E335_OK/ || time >= $deadline;
+            sleep 5;
+        }
+        like( $pbody, qr/E2E335_OK/, 'and it is served through the Apache proxy, not only on its own port' ) or note_both("proxied body: $pbody");
+    }
+
+    if ( $app && $app->{container_name} ) {
+        my ( undef, $ports_json ) = run_cmd( '/scripts/cpuser_port_authority', 'list', $USER );    # `list root` shows only root's ports
+        my $assigned = decode_json_or_undef($ports_json) || {};
+        my @mine = grep { ( $assigned->{$_}{service} // '' ) eq $app->{container_name} } keys %{$assigned};
+        is( scalar @mine, 1, 'and the failed first install left no port behind: exactly one is reserved for the container' ) or note_both( 'reserved: ' . join( ', ', sort @mine ) );
     }
 
     return;
