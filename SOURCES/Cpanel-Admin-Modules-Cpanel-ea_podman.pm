@@ -173,7 +173,14 @@ sub TAKE ( $self, $container_name = undef ) {
         push( @ports, $port ) if ( $hr->{$port}->{service} eq ( $container_name // '' ) );
     }
 
-    return Capture::Tiny::capture_merged( sub { system( '/scripts/cpuser_port_authority', 'take', $cpuser, @ports ) } );
+    # `take` refuses an empty list, and a container with no ports is not a failure
+    return "" if !@ports;
+
+    my ( $out, $rv ) = Capture::Tiny::capture_merged( sub { system( '/scripts/cpuser_port_authority', 'take', $cpuser, @ports ) } );
+    chomp( $out //= "" );
+    _die_with_message( "`cpuser_port_authority take` failed" . ( length $out ? ": $out" : "" ) ) if $rv;
+
+    return $out;
 }
 
 # Feature-gated only when it may create a session ($creating). ENSURE_USER(0)
