@@ -227,13 +227,16 @@ tear down:
    unit, enable, start.
 5. **Re-point the web application proxies.** New ports mean every proxy include
    still names the pre-backup port, so the container is healthy and every request
-   503s. `_repair_webapp_proxies()` hands that to the webapp plugin’s
-   `Cpanel::WebApps::Repair::repair_current_user()`, once for the whole restore —
-   the plugin batches the rewrites, so a call per container would be an Apache
-   reload per application. The call is guarded (file present → `require` →
-   `can()`), so a server without the plugin, or with one predating the entry
-   point, restores exactly as it did before; a repair that fails is warned about
-   and nothing more, since the restore itself has already succeeded.
+   503s. `_repair_webapp_proxies()` asks the admin module’s
+   `REPAIR_WEBAPP_PROXIES`, which runs the webapp plugin’s
+   `Cpanel::WebApps::Repair::repair_user()` as root for the calling account, once
+   for the whole restore — the plugin batches the rewrites, so a call per
+   container would be an Apache reload per application. It goes through root
+   because the plugin’s own adminbin refuses an uncompiled caller, which the CLI
+   is. The call is guarded (file present → `require` → `can()`), so a server
+   without the plugin, or with one predating the entry point, restores exactly
+   as it did before; a repair that fails is warned about and nothing more, since
+   the restore itself has already succeeded.
 6. **Report port drift** against the manifest’s `curr_ports`
    (`_warn_of_changed_ports()`), skipping the containers the step above just
    repaired — calling a web application broken immediately after fixing it is

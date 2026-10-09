@@ -14,23 +14,24 @@ use File::Temp;
 
 require "$FindBin::Bin/../SOURCES/util.pm";
 
-# perform_user_restore() asks the webapp plugin to re-point the proxies its new
-# ports orphaned. These cover the four states that call can be in.
+# A restore asks the admin module to re-point the proxies its new ports
+# orphaned. These cover what that call can come back with.
 
-my $tmp = File::Temp->newdir();
-my $seq = 0;
+my $tmp       = File::Temp->newdir();
+my $installed = "$tmp/Repair.pm";
+open( my $fh, '>', $installed ) or die "Could not write $installed: $!";
+close $fh;
 
-# Each stand-in gets its own path so %INC never short-circuits the require, and
-# the subtests run absent-old-present because a defined sub answers can() forever.
-sub install_plugin {
-    my ($body) = @_;
-
-    my $path = "$tmp/Repair-" . ++$seq . ".pm";
-    open( my $fh, '>', $path ) or die "Could not write $path: $!";
-    print {$fh} "package Cpanel::WebApps::Repair;\n$body\n1;\n";
-    close $fh;
-
-    return $path;
+our @calls;
+our $answer;
+our $failure;
+{
+    no warnings qw(redefine once);
+    *Cpanel::AdminBin::Call::call = sub {
+        push @calls, [@_];
+        die $failure if defined $failure;
+        return $answer;
+    };
 }
 
 sub repair_proxies {
@@ -43,64 +44,62 @@ sub repair_proxies {
     return ( $repaired, \@warnings );
 }
 
-subtest 'no plugin installed: a silent no-op' => sub {
+subtest 'no plugin installed: a silent no-op that asks nothing' => sub {
     local $ea_podman::util::webapp_repair_module = "$tmp/not-installed.pm";
+    local @calls                                 = ();
 
     my ( $repaired, $warnings ) = repair_proxies();
 
     is_deeply( $repaired, [], "nothing repaired" );
-    is_deeply( $warnings, [], "and nothing said — a server without the plugin restores exactly as it did before" );
+    is_deeply( $warnings, [], "nothing said" );
+    is_deeply( \@calls,   [], "and the admin module is not called" );
 };
 
-subtest 'plugin too old for the entry point: also a silent no-op' => sub {
-    local $ea_podman::util::webapp_repair_module = install_plugin("sub repair_user { die 'root only' }");
+subtest 'plugin present: the records the admin module repaired come back' => sub {
+    local $ea_podman::util::webapp_repair_module = $installed;
+    local @calls                                 = ();
+    local $answer                                = [ { name => "blog", container => "blog.bob.01", domain => "blog.tld", was => 10001, now => 10005 } ];
 
     my ( $repaired, $warnings ) = repair_proxies();
 
-    is_deeply( $repaired, [], "nothing repaired" );
-    is_deeply( $warnings, [], "and nothing said — its own sweep will get to the wiring" );
+    is_deeply( $repaired, $answer,                                                "the records are returned as-is" );
+    is_deeply( \@calls,   [ [ 'Cpanel', 'ea_podman', 'REPAIR_WEBAPP_PROXIES' ] ], "through one ea_podman admin call" );
+    is_deeply( $warnings, [],                                                     "and nothing said" );
 };
 
-subtest 'plugin present: the records it repaired come back' => sub {
-    local $ea_podman::util::webapp_repair_module = install_plugin(
-        <<'FAKE'
-our $calls = 0;
-sub calls { return $calls }
-sub repair_current_user {
-    $calls++;
-    return [ { name => "blog", container => "blog.bob.01", domain => "blog.tld", was => 10001, now => 10005 } ];
-}
-FAKE
-    );
+subtest 'nothing to repair, or an unexpected answer: nothing comes back' => sub {
+    local $ea_podman::util::webapp_repair_module = $installed;
 
-    my ( $repaired, $warnings ) = repair_proxies();
-
-    is_deeply(
-        $repaired,
-        [ { name => "blog", container => "blog.bob.01", domain => "blog.tld", was => 10001, now => 10005 } ],
-        "the plugin's repair records are returned as-is"
-    );
-    is( Cpanel::WebApps::Repair::calls(), 1, "the repair ran once" );
-    is_deeply( $warnings, [], "and said nothing" );
+    for my $reply ( [], undef, {} ) {
+        local $answer = $reply;
+        my ( $repaired, $warnings ) = repair_proxies();
+        is_deeply( $repaired, [], "an empty list" );
+        is_deeply( $warnings, [], "and nothing said" );
+    }
 };
 
-subtest 'the repair dies: reported, and the restore carries on' => sub {
-    local $ea_podman::util::webapp_repair_module = install_plugin("sub repair_current_user { die \"adminbin said no\\n\" }");
+subtest 'the admin call fails: reported, and the restore carries on' => sub {
+    local $ea_podman::util::webapp_repair_module = $installed;
+    local $failure                               = "The repair failed. The server’s error log has the reason.\n";
 
     my ( $repaired, $warnings ) = repair_proxies();
 
     is_deeply( $repaired, [], "nothing comes back" );
     is( scalar @{$warnings}, 1, "one warning" );
-    like( $warnings->[0], qr/Could not repair the web application proxy wiring: adminbin said no/, "which names the failure" );
+    like( $warnings->[0], qr/^Could not repair the web application proxy wiring: The repair failed\. /, "which passes the reason on" );
 };
 
-subtest 'the plugin module will not load: reported, and the restore carries on' => sub {
-    local $ea_podman::util::webapp_repair_module = install_plugin("this is not perl(");
+subtest 'the CLI never reaches the webapp adminbin itself' => sub {
 
-    my ( $repaired, $warnings ) = repair_proxies();
+    # It refuses an uncompiled caller, which the CLI is. Only the admin module may.
+    for my $file (qw(util.pm ea-podman.pl)) {
+        open( my $fh, '<', "$FindBin::Bin/../SOURCES/$file" ) or die "Could not open $file: $!";
+        my $src = do { local $/; <$fh> };
+        close $fh;
 
-    is_deeply( $repaired, [], "nothing comes back" );
-    like( join( '', @{$warnings} ), qr/Could not load .+ to repair the web application proxy wiring/, "the load failure is named" );
+        unlike( $src, qr/AdminBin::Call::call\(\s*'Cpanel',\s*'webapp'/, "$file makes no webapp adminbin call" );
+        unlike( $src, qr/repair_current_user/,                           "$file does not use the plugin's adminbin-backed repair" );
+    }
 };
 
 subtest 'the port-change warning is silenced for what was repaired, kept for what was not' => sub {

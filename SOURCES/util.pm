@@ -3240,33 +3240,27 @@ sub _warn_if_ports_changed {
     return;
 }
 
-# The webapp plugin's user-mode proxy repair. Package variable so tests can
-# point it at a stand-in.
+# The webapp plugin's proxy repair. Package variable so tests can point it
+# elsewhere.
 our $webapp_repair_module = "/usr/local/cpanel/Cpanel/WebApps/Repair.pm";
 
-# Re-point the account's proxies at the ports its containers now hold. Returns the
-# { name, container, domain, was, now } records repaired, nothing when it cannot.
+# Re-point the account's proxies at the ports its containers now hold. Done as
+# root by the admin module: the plugin's own adminbin refuses an uncompiled caller.
+# Returns the { name, container, domain, was, now } records repaired.
 sub _repair_webapp_proxies {
     return [] if !-e $webapp_repair_module;
 
-    local $@;
-    my $lib = $webapp_repair_module;
-    eval { require $lib; 1 } or do {
-        warn "Could not load “$lib” to repair the web application proxy wiring: $@";
-        return [];
-    };
-
-    # A plugin predating the entry point leaves the wiring to its own sweep:
-    # as good as absent, and not worth warning over.
-    return [] if !Cpanel::WebApps::Repair->can('repair_current_user');
-
     my $repaired;
-    eval { $repaired = Cpanel::WebApps::Repair::repair_current_user(); 1 } or do {
-        warn "Could not repair the web application proxy wiring: $@";
+    local $@;
+    eval { $repaired = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REPAIR_WEBAPP_PROXIES' ); 1 } or do {
+        require Cpanel::Exception;
+        my $msg = Cpanel::Exception::get_string_no_id($@);
+        chomp $msg;
+        warn "Could not repair the web application proxy wiring: $msg\n";
         return [];
     };
 
-    return $repaired || [];
+    return ref $repaired eq 'ARRAY' ? $repaired : [];
 }
 
 # Report the containers whose ports moved, minus the ones just re-pointed:
