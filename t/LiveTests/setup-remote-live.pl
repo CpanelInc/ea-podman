@@ -26,9 +26,10 @@
 #
 #   YOU CAN EASILY TEST CODE YOU DID NOT MEAN TO TEST.
 #
-#   * ea-podman's CLI is a COMPILED BINARY that EMBEDS util.pm. Copying the
-#     library alone changes nothing -- the binary keeps running the old code.
-#     compile.sh has to run.
+#   * before EA4-315, ea-podman's CLI is a COMPILED BINARY that EMBEDS util.pm.
+#     Copying the library alone changes nothing -- the binary keeps running the
+#     old code. compile.sh has to run. From EA4-315 the CLI is the perl script
+#     and there is nothing to compile.
 #   * the webapp plugin's modules are symlinks into the repo on a development
 #     box (`make setup-backend`) but REAL FILES from the package on a VM. Rsync
 #     the repo over and the installed modules do not move, so the tests exercise
@@ -46,7 +47,7 @@
 #     --plugin=PATH      the rsynced plugins repo      (default /usr/local/cpanel/plugins)
 #     --deploy           overlay those working trees onto the installed copies,
 #                        backing up whatever is replaced, and recompile the
-#                        ea-podman CLI. WITHOUT THIS the tests exercise the
+#                        ea-podman CLI if it is a compiled one. WITHOUT THIS the tests exercise the
 #                        INSTALLED packages, which is a legitimate thing to want
 #                        -- just not the same thing.
 #     --image=REF        image to pre-pull (default docker.io/library/httpd:2.4)
@@ -386,6 +387,13 @@ else {
 
 my $BACKUP = "/root/live-setup-backup-" . time();
 
+sub is_elf {
+    my ($path) = @_;
+    open( my $fh, '<', $path ) or return 0;
+    read( $fh, my $magic, 4 );
+    return ( $magic // '' ) eq "\x7fELF" ? 1 : 0;
+}
+
 sub backup_and_copy {
     my ( $src, $dst ) = @_;
 
@@ -442,18 +450,31 @@ if ( $opt{deploy} ) {
         backup_and_copy( "$ea/SOURCES/Cpanel-API-EAPodman.pm", "$ULC/Cpanel/API/EAPodman.pm" )
           if -e "$ea/SOURCES/Cpanel-API-EAPodman.pm";
 
+        # The jailshell/CageFS CLI path lands in the ea_podman admin module
+        # (EA4-315), which is also outside /opt/cpanel/ea-podman.
+        backup_and_copy( "$ea/SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm", "$ULC/Cpanel/Admin/Modules/Cpanel/ea_podman.pm" )
+          if -e "$ea/SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm" && -e "$ULC/Cpanel/Admin/Modules/Cpanel/ea_podman.pm";
+
         # THE STEP EVERYONE FORGETS, and it runs even when the copies above were
-        # skipped. The CLI is COMPILED and embeds util.pm at compile time, so a
-        # util.pm that is already a symlink into the repo still leaves the binary
-        # running whatever was embedded when the package was built. Nothing about
-        # the file on disk changes that; only recompiling does.
-        if ( -x "$EAP_ROOT/bin/compile.sh" ) {
-            my ( $rc, $out ) = run("$EAP_ROOT/bin/compile.sh");
-            $rc == 0 ? ok('recompiled the ea-podman CLI') : fatal("compile.sh failed (exit $rc)");
-            note( first_line($out) ) if $rc != 0;
+        # skipped. Before EA4-315 the CLI is COMPILED and embeds util.pm at
+        # compile time, so a util.pm that is already a symlink into the repo
+        # still leaves the binary running whatever was embedded when the package
+        # was built. Nothing about the file on disk changes that; only
+        # recompiling does. From EA4-315 bin/ea-podman is the perl script
+        # itself, reading util.pm from lib/, so it is copied like the rest.
+        my $cli = "$EAP_ROOT/bin/ea-podman";
+        if ( is_elf($cli) ) {
+            if ( -x "$EAP_ROOT/bin/compile.sh" ) {
+                my ( $rc, $out ) = run("$EAP_ROOT/bin/compile.sh");
+                $rc == 0 ? ok('recompiled the ea-podman CLI') : fatal("compile.sh failed (exit $rc)");
+                note( first_line($out) ) if $rc != 0;
+            }
+            else {
+                fatal("$cli is compiled but there is no compile.sh at $EAP_ROOT/bin -- the CLI will keep running the packaged code");
+            }
         }
         else {
-            fatal("no compile.sh at $EAP_ROOT/bin -- the CLI will keep running the packaged code");
+            backup_and_copy( "$ea/SOURCES/ea-podman.pl", $cli ) if -e "$ea/SOURCES/ea-podman.pl";
         }
     }
     else {

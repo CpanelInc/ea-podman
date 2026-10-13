@@ -45,13 +45,6 @@ BEGIN {
 sub describe {
     my $hooks = [
         {
-            'category' => 'System',
-            'event'    => 'upcp',
-            'stage'    => 'post',
-            'hook'     => 'PodmanHooks::_compile_podman',
-            'exectype' => 'module',
-        },
-        {
             'category' => 'Whostmgr',
             'event'    => 'Accounts::Modify',
             'stage'    => 'pre',
@@ -77,13 +70,10 @@ sub describe {
     return $hooks;
 }
 
+# The ea-podman CLI is no longer compiled (EA4-315), so there is nothing to do
+# after upcp. Kept, and no longer described, so a hook registration an older
+# ea-podman left behind still resolves to something rather than failing upcp.
 sub _compile_podman {
-    my ( $hook, $event ) = @_;
-
-    if ( -x '/opt/cpanel/ea-podman/bin/compile.sh' ) {
-        system('/opt/cpanel/ea-podman/bin/compile.sh');
-    }
-
     return;
 }
 
@@ -207,12 +197,12 @@ NginxHooks
 
 =head1 SYNOPSIS
 
-PodmanHooks::_compile_podman();
+PodmanHooks::_delete_user( $hook, $event );
 
 =head1 DESCRIPTION
 
-PodmanHooks responds to events in the cPanel system and recompiles
-the ea-podman executable when upcp finishes running.
+PodmanHooks responds to events in the cPanel system: account renames and
+removals, and pkgacct backups, for accounts that have ea-podman containers.
 
 PodmanHooks.pm is deployed by the RPM to /var/cpanel/perl5/lib/.
 
@@ -223,9 +213,11 @@ cPanel of this hooks module.
 
 =head1 SUBROUTINES
 
-=head2 _compile_podnam
+=head2 _compile_podman
 
-Recompiles the ea-podman executable (perlcc).
+A no-op. It used to recompile the ea-podman executable after upcp; the CLI is
+no longer compiled (EA4-315). Kept so a hook registration left by an older
+ea-podman still resolves.
 
 =cut
 

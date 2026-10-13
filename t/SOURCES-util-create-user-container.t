@@ -22,15 +22,15 @@ require "$FindBin::Bin/../SOURCES/util.pm";
 subtest 'create_user_container does not pass --hostname to podman' => sub {
     my @podman_calls;
     no warnings 'once';
-    local *ea_podman::util::podman = sub {
+    local *ea_podman::util::_podman_create_captured = sub {
         push @podman_calls, [@_];
-        return 1;
+        return ( 1, "" );
     };
 
     my $long_name = 'app-' . ( 'a' x 60 ) . '.bob.01';
     ea_podman::util::create_user_container( $long_name, '--foo', 'bar' );
 
-    is( scalar @podman_calls, 1, 'podman() was called once' );
+    is( scalar @podman_calls, 1, 'podman was called once' );
     my @args = @{ $podman_calls[0] };
 
     ok( !( grep { $_ eq '--hostname' } @args ), 'no --hostname arg is passed' );

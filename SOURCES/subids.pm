@@ -14,7 +14,9 @@ package ea_podman::subids;
 
 use Path::Tiny 'path';
 use Cpanel::OS;
+use Digest::SHA ();
 use Fcntl       qw(:flock);
+use IPC::Open3  ();
 use Time::HiRes ();
 
 our $good = "✅";
@@ -40,7 +42,7 @@ our $dir_granted_linger = "/opt/cpanel/ea-podman/granted-linger";
 # manager can start and rootless podman has nothing to talk to. See
 # docs/container-shell-access.md “CageFS 7.6.39+ masks user@.service” for why
 # CloudLinux does it and why we cannot just leave it unmasked, and
-# with_user_manager_unmasked() for what we do about it. (EA4-319)
+# ensure_user_manager_carveouts() for what we do about it. (EA4-319, EA4-321)
 #
 # A mask is the unit name symlinked to /dev/null. Two possible locations,
 # because `systemctl mask` writes under /etc and `systemctl mask --runtime`
@@ -48,10 +50,9 @@ our $dir_granted_linger = "/opt/cpanel/ea-podman/granted-linger";
 our $file_mask_etc = "/etc/systemd/system/user\@.service";
 our $file_mask_run = "/run/systemd/system/user\@.service";
 
-# $file_mask_state records an in-progress window, so a run that is killed
-# outright (where no signal handler gets to fire) still has its mask put back —
-# by the next run through the guard.
-our $file_mask_lock  = "/opt/cpanel/ea-podman/user-manager-mask.lock";
+# Written by ea-podman before EA4-321, which unmasked the template for the
+# length of a start. This version never writes it, and only reads it to put the
+# mask back on a host that was upgraded while a window was open.
 our $file_mask_state = "/opt/cpanel/ea-podman/user-manager-mask.state";
 
 sub ensure_user_root {
@@ -209,8 +210,8 @@ sub _stop_user_manager {
     my ($uid) = @_;
 
     # Allowed while the template is masked: masking refuses new *starts*, not
-    # stops. That is what lets both callers do this OUTSIDE the unmask window,
-    # which matters because a stop can take TimeoutStopSec (90s) to return.
+    # stops, so nothing here needs the account's own unit either. A stop can
+    # take TimeoutStopSec (90s) to return.
     system( "systemctl", "stop", "user\@$uid.service" );
     return $? == 0;
 }
@@ -229,6 +230,37 @@ sub _user_manager_is_active {
     my ($uid) = @_;
     system( "systemctl", "is-active", "--quiet", "user\@$uid.service" );
     return $? == 0;
+}
+
+# Is the account’s manager CONFIRMED stopped? Stricter than `!$user_manager_is_active`,
+# and the only thing allowed to authorise taking a unit file away.
+#
+# `is-active` exits nonzero for every state but `active`, and for a failure to
+# ask at all (no bus, systemd busy), so “not active” cannot tell a stopped manager
+# from one we failed to query. Deleting the unit from under a live manager and then
+# reloading tears it down on systemd 252, so the state has to be read, and only
+# `inactive` and `failed` count. `activating`, `deactivating`, `reloading`, an
+# empty answer and anything unrecognised all mean leave it alone and ask again
+# next time.
+our $user_manager_confirmed_stopped = \&_user_manager_confirmed_stopped;
+
+sub _user_manager_confirmed_stopped {
+    my ($uid) = @_;
+
+    # List-form pipe: no shell, and stderr is sent to /dev/null so a failed query
+    # cannot splash its complaint over the caller's output.
+    my $state = eval {
+        open( my $err, ">", "/dev/null" ) or die;
+        my $pid = IPC::Open3::open3( my $in, my $out, ">&" . fileno($err), "systemctl", "is-active", "user\@$uid.service" );
+        close $in;
+        my $line = <$out>;
+        waitpid( $pid, 0 );
+        $line;
+    };
+    return 0 if !defined $state;
+
+    chomp $state;
+    return ( $state eq "inactive" || $state eq "failed" ) ? 1 : 0;
 }
 
 # Which of the two locations `user@.service` is masked in, or undef when it is
@@ -285,14 +317,6 @@ sub _restore_user_manager_mask {
     return 1;
 }
 
-sub _write_mask_state {
-    my ($file) = @_;
-
-    path($file_mask_state)->spew("$file\n");    # parent is packaged, always there
-
-    return;
-}
-
 sub _read_mask_state {
     return if !-e $file_mask_state;
 
@@ -305,88 +329,417 @@ sub _read_mask_state {
     return $file;
 }
 
-# Set while a window is open, so a call inside $code does not unmask and remask
-# a second time — and does not deadlock: flock() is per open file description,
-# so a nested open of the lock file would block forever against this process’s
-# own lock.
-our $_in_window = 0;
+# A `user@<uid>.service` of its own for each account that needs a manager, so
+# the account's manager does not depend on the `user@.service` template, which a
+# CageFS host keeps masked. (EA4-321)
+#
+# Earlier versions unmasked the template, started the manager, and masked it
+# again (EA4-319). That does start the manager, and on systemd 239 and 257 it
+# leaves it running. On systemd 252 the remask does not: a reload that changes
+# the template's mask state tears down `user-runtime-dir@<uid>.service` for every
+# instance that is running, however long it has been up, leaving a manager that
+# reports `active` with no /run/user/<uid> and no bus. It is not a race, so
+# waiting before the reload does not help. Skipping the reload only defers the
+# damage to the next `daemon-reload` anyone on the host runs, which an rpm
+# scriptlet or `cagefsctl` will do sooner or later.
+#
+# So the template is never touched. A unit file named for the instance takes
+# precedence over the template, and is not a mask, so it is what lets one
+# account's manager start while every other account stays refused: the mask is
+# still on the template, and CloudLinux's CLOS-4517 protection is unchanged.
+#
+# What the probes behind this (EA4-321) found, all of it easy to get wrong:
+#
+#   * It has to be a real file. A symlink to the vendor unit is resolved as the
+#     template it points at, and is refused as masked.
+#   * A drop-in directory does not override a mask.
+#   * Removing the file while the manager is running, and then reloading, tears
+#     the manager down exactly as the remask did. So the file is only ever
+#     removed once the manager is confirmed stopped, see
+#     remove_user_manager_carveout(), and never from the start path.
+#
+# It lives under /run, so a reboot clears it, which is right: nothing is running
+# then either, and the boot sweep (ensure_user_sessions) writes it again before
+# it starts anything. The copy is of the vendor unit as of when it was written,
+# so a systemd update that changes the unit is not seen by a running account
+# until its manager next restarts.
+#
+# A host that does not mask the template gets the file too, see
+# ensure_user_manager_carveouts(), so the manager survives a mask arriving later.
+# Nothing is written for an account that is already up and current.
+our $dir_unit_carveout = "/run/systemd/system";
+our @files_vendor_unit = ( "/usr/lib/systemd/system/user\@.service", "/lib/systemd/system/user\@.service" );
 
-# Run $code with `user@.service` temporarily unmasked, then put the mask back
-# immediately. CloudLinux’s CLOS-4517 fix stays in place at rest and we bypass it
-# only for the operation that cannot work without it, for only as long as that
-# operation takes. It works because masking a unit does not stop an instance
-# that is already running — only new starts are refused — so a manager started
-# inside the window keeps running afterwards.
+sub user_manager_carveout_file {
+    my ($uid) = @_;
+
+    return "$dir_unit_carveout/user\@$uid.service";
+}
+
+sub _vendor_user_unit {
+    for my $file (@files_vendor_unit) {
+        return $file if -f $file;
+    }
+
+    return;
+}
+
+# Make sure each of @uids has its own unit file, then reload once for the lot.
+# Dies if there is nothing to copy, or a file cannot be written: carrying on
+# would only fail later, at the start, with the much less useful “masked”.
+sub ensure_user_manager_carveouts {
+    my (@uids) = @_;
+
+    my $prepared = _prepare_user_manager_carveouts(@uids);
+
+    @{ $prepared->{refused} } and die $ea_podman::subids::session_error_prefix . join( "", map { _refusal_message( user_manager_carveout_file($_) ) } @{ $prepared->{refused} } );
+
+    return $prepared->{changed};
+}
+
+sub _refusal_message {
+    my ($file) = @_;
+
+    return "“$file” already exists and was not written by ea-podman (it may be an explicit mask of the account’s user systemd manager), so it was left alone and that manager was not started. Remove it if it should not be there.\n";
+}
+
+# The work of ensure_user_manager_carveouts(), except that an account whose
+# unit is not ours to replace is reported rather than died on: returns
+# { changed => how many were written, refused => [ the uids set aside ] }. The
+# sweep uses this directly so one account's administrator-placed mask cannot
+# stop every other account's manager from being prepared and started. Still
+# dies for what is the same for every account (no vendor unit, a failed write
+# or reload).
+sub _prepare_user_manager_carveouts {
+    my (@uids) = @_;
+
+    _restore_abandoned_unmask_window();
+
+    return { changed => 0, refused => [] } if !@uids;
+
+    # Written whether or not the template is masked right now. CageFS re-applies
+    # its mask on every install and upgrade, and on systemd 252 that remask tears
+    # down every manager that was started without a unit of its own, so a manager
+    # started while the host happened to be unmasked (CloudLinux's
+    # `disable-systemd-user-mask` flag) would not survive the mask coming back.
+    my $masked = user_manager_mask_file();
+
+    my $vendor = _vendor_user_unit();
+
+    # Nothing to copy is only an error where the copy is what lets the manager
+    # start. An unmasked host starts it from the template, exactly as before.
+    return { changed => 0, refused => [] } if !$vendor && !$masked;
+
+    $vendor or die $ea_podman::subids::session_error_prefix . "Could not find the vendor user\@.service to copy (looked in @files_vendor_unit), so a user systemd manager cannot be started while the template is masked.\n";
+
+    my $content = path($vendor)->slurp_raw;
+    my $digest  = Digest::SHA::sha256_hex($content);
+
+    return _with_carveout_lock(
+        sub {
+
+            my $changed = 0;
+            my @refused;
+            for my $uid (@uids) {
+                my $file = user_manager_carveout_file($uid);
+
+                # Left alone when it already matches, so a healthy host pays for no
+                # write and, more to the point, no reload.
+                next if !-l $file && -f _ && path($file)->slurp_raw eq $content;
+
+                # Only a unit this module wrote is ours to replace, and what is on
+                # disk has to still be what was written: a marker alone outlives an
+                # administrator swapping the unit for a mask of this one account (a
+                # symlink to /dev/null, or an empty file), a restriction that
+                # starting the manager would undo. Set aside rather than died on, so
+                # one account's mask does not stop the others in the same sweep from
+                # getting theirs.
+                my $previous;
+                if ( lstat($file) ) {
+                    $previous = _carveout_written_digest($uid);
+
+                    if ( !defined $previous ) {
+                        unlink _carveout_written_file($uid);    # a stale marker vouches for nothing
+                        push @refused, $uid;
+                        next;
+                    }
+                }
+
+                eval { path($dir_unit_carveout)->mkpath; 1 } or die $ea_podman::subids::session_error_prefix . "Could not create “$dir_unit_carveout”: $@";
+
+                # Down before the first file lands, and only taken down once the
+                # reload has gone through. A reload that fails, or a process that
+                # dies between the rename and the reload, leaves the unit on disk
+                # and systemd none the wiser; the next run finds the contents
+                # matching and would skip the reload for good. The marker is what
+                # makes that run reload anyway.
+                _touch_state( _reload_pending_file() );
+
+                # Written beside the target and renamed into place, so systemd never reads
+                # half a unit. Only ever over a unit of ours (checked above), and rename()
+                # swaps the directory entry itself rather than writing through it.
+                my $tmp = "$file.ea-podman.$$";
+                path($tmp)->spew_raw($content);
+                chmod 0644, $tmp;
+
+                # Recorded before the rename so a crash between the two leaves a
+                # record for a file that is not there, which is harmless, and never
+                # a file of ours that nothing vouches for. The digest of the unit
+                # being replaced stays on the record until the rename is done, so a
+                # crash in between still leaves whichever of the two is on disk
+                # vouched for.
+                _write_state( _carveout_written_file($uid), join( "", map { "$_\n" } grep { defined } $previous, $digest ) );
+                rename $tmp, $file or do { my $err = $!; unlink $tmp; unlink _carveout_written_file($uid) if !lstat($file); die $ea_podman::subids::session_error_prefix . "Could not install “$file”: $err\n" };
+                _write_state( _carveout_written_file($uid), "$digest\n" );
+
+                $changed++;
+            }
+
+            # Reloading is what makes systemd see the new files. The template's mask
+            # state is not changing, which is the only kind of reload that is harmful.
+            if ( $changed || -e _reload_pending_file() ) {
+                $daemon_reloader->() or die $ea_podman::subids::session_error_prefix . "`systemctl daemon-reload` failed, so systemd has not picked up the unit files for the user systemd managers. It will be tried again the next time ea-podman prepares a manager.\n";
+
+                unlink _reload_pending_file();
+            }
+
+            return { changed => $changed, refused => \@refused };
+        }
+    );
+}
+
+sub ensure_user_manager_carveout {
+    my ($uid) = @_;
+
+    return ensure_user_manager_carveouts($uid);
+}
+
+# Take the file back once the account no longer has a manager. A no-op while one
+# is running: removing the file under a live manager and then reloading is what
+# kills it (see above). No reload here either way; systemd drops an inactive
+# unit's stale definition on the next one anyone does, and a stopped unit whose
+# file is gone simply falls back to the masked template, which is the point.
+sub remove_user_manager_carveout {
+    my ($uid) = @_;
+
+    return _with_carveout_lock(
+        sub {
+            my $file = user_manager_carveout_file($uid);
+
+            if ( !lstat($file) ) {
+                unlink _carveout_written_file($uid);    # a record of a unit that is gone vouches for nothing
+                return 0;
+            }
+
+            # Not ours, so not ours to take away either. That includes a unit an
+            # administrator put in place of ours, which the record left behind
+            # would otherwise still vouch for.
+            if ( !defined _carveout_written_digest($uid) ) {
+                unlink _carveout_written_file($uid);
+                return 0;
+            }
+
+            return 0 if !$user_manager_confirmed_stopped->($uid);
+
+            return 0 if !unlink($file);
+
+            unlink _carveout_written_file($uid);
+            return 1;
+        }
+    );
+}
+
+# Where ea-podman keeps what it knows about the unit files above. Under /run for
+# the same reason the unit files are: a reboot clears the files and these notes
+# together, and there is nothing left to know.
 #
-#   * Only the manager *start* needs this. The `systemctl --user` calls
-#     (ea_podman::util::sysctl, _systemctl_quiet) talk to the account’s
-#     already-running manager over its own bus, where the template mask is
-#     irrelevant; wrapping those would buy nothing and cost two
-#     `daemon-reload`s plus a host-wide window on every container
-#     start/stop/status.
-#   * While the window is open the template is unmasked host-wide, not
-#     per-account. It is short and serialized, but it cannot be made per-account
-#     without leaving a persistent carve-out on disk, which is the thing we are
-#     avoiding.
-#
-# See docs/container-shell-access.md “CageFS 7.6.39+ masks user@.service”.
-sub with_user_manager_unmasked {
+#   written/<uid>   ea-podman wrote the unit at that uid's name, and what it
+#                   wrote (see _carveout_written_digest). This is the whole
+#                   record of which units are ours: which are still wanted is
+#                   not recorded but asked, of the account's linger and its
+#                   manager, by reconcile_carveouts(), so there is no second
+#                   note that could disagree with the first.
+#   reload-pending  unit files are on disk that systemd has not been told
+#                   about, because the reload failed or never ran.
+#   lock            one lock for all of it, so a release cannot take a unit
+#                   away from an account that is being set up at the same
+#                   moment.
+our $dir_carveout_state = "/run/ea-podman";
+
+# Package variable so a test can name accounts without needing them in passwd.
+our $uid_to_user = sub { scalar getpwuid( $_[0] ) };
+
+# written/<uid> vouches that the unit file at that uid's name is one ea-podman
+# wrote: it holds the sha256 of each content we may have left on disk (two while
+# a replacement is in flight, see ensure_user_manager_carveouts()).
+sub _carveout_written_file {
+    my ($uid) = @_;
+
+    return "$dir_carveout_state/written/$uid";
+}
+
+# The digest on disk at the unit's name when, and only when, it is still
+# something ea-podman wrote: a regular file (never a symlink, so never a
+# /dev/null mask) whose content is one the marker vouches for (never an empty
+# file). A marker on its own is not enough, it outlives an administrator
+# replacing the unit. undef otherwise, which every caller treats as "not ours,
+# leave it alone".
+sub _carveout_written_digest {
+    my ($uid) = @_;
+
+    my $file = user_manager_carveout_file($uid);
+    return if !lstat($file) || -l _ || !-f _ || -z _;
+
+    my $recorded = eval { path( _carveout_written_file($uid) )->slurp } // return;
+    my %vouched  = map { $_ => 1 } grep { /\A[0-9a-f]{64}\z/ } split /\n/, $recorded;
+
+    my $on_disk = eval { Digest::SHA::sha256_hex( path($file)->slurp_raw ) } // return;
+
+    return $vouched{$on_disk} ? $on_disk : undef;
+}
+
+sub _reload_pending_file { return "$dir_carveout_state/reload-pending" }
+
+sub _write_state {
+    my ( $file, $content ) = @_;
+
+    eval { path($file)->parent->mkpath; path($file)->spew($content); 1 } or die $ea_podman::subids::session_error_prefix . "Could not record state in “$file”: $@";
+
+    return 1;
+}
+
+sub _touch_state {
+    my ($file) = @_;
+
+    eval { path($file)->parent->mkpath; path($file)->touch; 1 } or die $ea_podman::subids::session_error_prefix . "Could not record state in “$file”: $@";
+
+    return 1;
+}
+
+our $carveout_lock_held = 0;
+
+# Re-entrant, because the callers nest (ensure reaps, reaping removes) and flock
+# on a second descriptor of a file this process already holds would wait on
+# itself forever.
+sub _with_carveout_lock {
     my ($code) = @_;
 
-    if ($_in_window) { $code->(); return }
+    return scalar $code->() if $carveout_lock_held;
 
-    # Fast path only: no lock and no daemon-reload, so a non-cagefs host pays
-    # nothing. Another process may have the mask lifted this instant, so the
-    # read that counts is the one under the lock below.
-    if ( !user_manager_mask_file() && !-e $file_mask_state ) { $code->(); return }
+    eval { path($dir_carveout_state)->mkpath; 1 } or die $ea_podman::subids::session_error_prefix . "Could not create “$dir_carveout_state”: $@";
 
-    # Serialize: two accounts bootstrapping at once must not have one of them
-    # remask while the other still needs the window open. Same
-    # one-exclusive-flock shape as _ensure_subids() above.
-    open my $lock_fh, ">>", $file_mask_lock or die "Could not open “$file_mask_lock”: $!\n";
-    flock( $lock_fh, LOCK_EX ) or die "Could not lock “$file_mask_lock”: $!\n";
+    open( my $fh, ">>", "$dir_carveout_state/lock" ) or die $ea_podman::subids::session_error_prefix . "Could not open “$dir_carveout_state/lock”: $!\n";
+    flock( $fh, LOCK_EX )                            or die $ea_podman::subids::session_error_prefix . "Could not lock “$dir_carveout_state/lock”: $!\n";
 
-    # Under the lock, a state file means a predecessor was killed mid-window and
-    # left the template unmasked — a live window holds this lock, so we could not
-    # have got it. Its recorded mask is the one to put back on the way out, and
-    # adopting it here (rather than restoring it now, only to lift it again two
-    # statements later) saves a wasted symlink/daemon-reload round trip.
-    my $file = user_manager_mask_file() // _read_mask_state();
+    local $carveout_lock_held = 1;
 
-    if ( !defined $file ) { $code->(); return }
+    return scalar $code->();
+}
 
-    _write_mask_state($file);
+sub _written_uids {
+    opendir( my $dh, "$dir_carveout_state/written" ) or return;
+    my @uids = grep { /\A[0-9]+\z/ } readdir $dh;
+    closedir $dh;
 
-    my $bail = sub { die "ea-podman: SIG$_[0] while the `user\@.service` mask was lifted\n" };
-    local ( $SIG{INT}, $SIG{TERM}, $SIG{HUP} ) = ( $bail, $bail, $bail );
+    return @uids;
+}
 
-    # The eval, not a guard object with a DESTROY: the restore below then runs on
-    # every way out of here — normal return, a die from $code, a die from the
-    # unlink itself, or one of the signals above. A `kill -9` is the only case
-    # nothing in-process can cover, which is what $file_mask_state is for.
-    eval {
-        # Unlink the symlink ourselves rather than call `systemctl unmask`, so the
-        # restore is byte-exact: --runtime cannot be combined with unmask
-        # (systemctl(1)), so a mask/unmask round trip would silently relocate a
-        # runtime mask into /etc. Already gone when we adopted a killed run’s
-        # window, and then there is nothing to lift.
-        if ( lstat($file) ) {
-            unlink $file or die "Could not unmask “$file”: $!\n";
-            $daemon_reloader->();
+# Take back every unit of ours that nothing wants any more. One rule, asked of
+# the live state rather than of a note somebody left: a unit is wanted while
+# its account lingers (that is what setup enables, and what a release takes
+# away, and a deleted account cannot linger), and is taken back once its manager
+# is confirmed stopped, never from under a running one. Anything else is left
+# for the next call.
+#
+# Cheap when there is nothing of ours (one failed opendir), and one stat per
+# lingering account otherwise, so it runs from every release and every sweep.
+# Never reloads, for the reason given above. Returns how many units it removed.
+sub reconcile_carveouts {
+    return _reconcile_carveouts( [ _written_uids() ] );
+}
+
+sub _reconcile_carveouts {
+    my ($uids) = @_;
+
+    return 0 if !@{$uids};
+
+    return _with_carveout_lock(
+        sub {
+            my $removed = 0;
+
+            for my $uid ( @{$uids} ) {
+                my $user = $uid_to_user->($uid);
+                next if defined $user && user_has_linger($user);
+
+                # Refuses, and removes nothing, unless the unit is ours and its
+                # manager is confirmed stopped; drops a record for a unit that is
+                # gone or is no longer what we wrote.
+                $removed += remove_user_manager_carveout($uid);
+            }
+
+            return $removed;
         }
+    );
+}
 
-        local $_in_window = 1;
-        $code->();
+# remove_user_session() finds the unit through getpwnam(), which has nothing to
+# say about an account that has been deleted. The unit is still on disk, it is
+# still an exception to the cagefs mask, and the uid will be handed to the next
+# account that wants it. But every unit ea-podman wrote has a written/<uid>
+# record, so the deleted ones are simply those whose uid no longer resolves:
+# settle each of them the way a release does, now if its manager is confirmed
+# stopped, otherwise left for the next reconcile_carveouts(). The name is the
+# account being deleted, kept for the caller; what is done does not depend on
+# it, so a deletion that was missed earlier is finished here too. (EA4-321)
+sub release_deleted_user_carveout {
+    my ($user) = @_;
 
-        1;
-    };
-    my $err = $@;
+    my @gone = grep { !defined $uid_to_user->($_) } _written_uids();
+    _settle_carveout($_) for @gone;
+
+    return scalar @gone;
+}
+
+# A predecessor from before EA4-321 may have been killed in the middle of its
+# unmask window, leaving the template unmasked. Put the mask back, once, and
+# forget about it. Nothing in this version ever creates that state file, so this
+# only ever fires on a host that was upgraded mid-window.
+#
+# Not before every lingering account has a unit of its own: while the template
+# was unmasked, logind started those accounts' managers from it, and the reload
+# that puts the mask back is exactly the one that tears such a manager down on
+# systemd 252 (see above). So this is the "mask arriving later" case, and is
+# handled the same way: units first, one reload for them, then the mask.
+our $_restoring_unmask_window = 0;
+
+sub _restore_abandoned_unmask_window {
+    return if $_restoring_unmask_window;
+    return if !-e $file_mask_state;
+
+    my $file = _read_mask_state();
+
+    if ( !defined $file ) {
+        unlink $file_mask_state;    # not ours to act on, and not going to be any use later either
+        return;
+    }
+
+    {
+        local $_restoring_unmask_window = 1;
+        my @uids = grep { defined } map { ( getpwnam($_) )[2] } _lingering_users();
+        eval { _prepare_user_manager_carveouts(@uids); 1 } or warn "ea-podman: could not give the running user systemd managers a unit of their own before putting the `user\@.service` mask back: $@";
+    }
 
     _restore_user_manager_mask($file);
 
-    die $err if $err;
-
     return;
+}
+
+sub _lingering_users {
+    opendir( my $dh, $dir_linger ) or return;
+    my @users = grep { _is_valid_linger_user($_) } readdir $dh;
+    closedir $dh;
+
+    return @users;
 }
 
 # Marks a die as being about THIS account's own user session -- its own uid, its
@@ -432,7 +785,7 @@ sub _masked_user_manager_hint {
 
     my $file = user_manager_mask_file() or return "";
 
-    return "\n" . masked_user_manager_explanation() . "The mask is at “$file”. ea-podman lifts it only for as long as it takes to start the account’s manager and then puts it straight back; here that bypass did not take effect.\n" . "Check `systemctl status user\@$uid.service` and `journalctl -u user\@$uid.service` for why the manager itself failed.\n";
+    return "\n" . masked_user_manager_explanation() . "The mask is at “$file”. ea-podman leaves it alone and starts the account’s manager from a unit of its own, “" . user_manager_carveout_file($uid) . "”; here that did not take effect.\n" . "Check `systemctl status user\@$uid.service` and `journalctl -u user\@$uid.service` for why the manager itself failed.\n";
 }
 
 # The readiness poll below, as package variables so a test can exercise the
@@ -460,9 +813,9 @@ sub ensure_user_session {
     # granted, and the release on the last container would never happen.
     # (CPANEL-55309)
     #
-    # It is also what keeps the unmask window below off the hot path entirely: a
-    # healthy account never reaches it, so on a cagefs host we pay for the bypass
-    # once per cold account, not once per command.
+    # It is also what keeps the unit-writing and reload below off the hot path
+    # entirely: a healthy account never reaches it, so on a cagefs host we pay for
+    # the bypass once per cold account, not once per command.
     #
     # “Its manager is up” has to be asked of systemd, not inferred from the bus
     # socket: the socket outlives the manager, so an account whose manager was
@@ -472,15 +825,75 @@ sub ensure_user_session {
     # nothing here ever trying to repair it. It is one extra `systemctl is-active`
     # per command, ordered last so the three cheap checks short-circuit it, on a
     # path that already forks podman. (EA4-319)
-    return if user_has_linger($user) && -d "$dir_run/$uid" && -e "$dir_run/$uid/bus" && $user_manager_is_active->($uid);
+    if ( user_has_linger($user) && -d "$dir_run/$uid" && -e "$dir_run/$uid/bus" && $user_manager_is_active->($uid) ) {
+
+        # A manager that was already running when this version arrived (or that
+        # logind started on a host that was not masking the template) has no unit
+        # of its own, and a CageFS mask arriving later tears it down on systemd
+        # 252. Giving it one does not disturb it (see ensure_user_sessions()), and
+        # this is the only place an upgraded host's running managers are reached
+        # before that happens: the boot sweep has already run. One lstat once the
+        # unit is in place. A failure is reported, not fatal: the manager is healthy
+        # and the caller asked for nothing this would make worse. (EA4-321)
+        if ( !lstat( user_manager_carveout_file($uid) ) ) {
+            eval { ensure_user_manager_carveout($uid); 1 }
+              or warn "ea-podman: could not give the running user systemd manager for “$user” a unit of its own: " . strip_user_session_error($@);
+        }
+
+        return;
+    }
 
     mkdir $dir_run;    # parent /run/user; harmless when it already exists
+
+    # The unit this writes is taken away by a release that finds the manager
+    # stopped, and until the start below the manager is exactly that. So the
+    # carveout lock is held from the unit write to a started manager, not just for
+    # the write: a release then waits for the start, sees a running manager, and
+    # leaves the unit alone. (EA4-321)
+    return _with_carveout_lock(
+        sub {
+            eval { _ensure_user_session_locked( $user, $uid, $may_restart ); 1 } or do {
+                my $err = $@;
+                _abandon_unstarted_carveout( $user, $uid );
+                die $err;
+            };
+
+            return;
+        }
+    );
+}
+
+# Setup writes the account's unit before it enables linger and starts the
+# manager, and any of those can fail afterwards. A caller that sees the die has
+# no reason to release an account that was never set up (the release insists on
+# a linger or a grant), so the unit would sit as an exception to the CageFS mask
+# until the next call to reconcile_carveouts() from anywhere on the host, or the
+# next reboot. Settle it now instead: taken back if the account ended up with
+# neither linger nor a manager, left for the reconciler if the manager is not
+# confirmed stopped. An account that does linger wants its unit; the next
+# attempt carries on from there. Never dies: it runs on an error path and must
+# not replace the real error.
+sub _abandon_unstarted_carveout {
+    my ( $user, $uid ) = @_;
+
+    local $@;
+    eval {
+        _settle_carveout($uid) if !user_has_linger($user);
+        1;
+    } or warn "ea-podman: could not take back the unit file for “$user” after a failed setup: $@";
+
+    return;
+}
+
+sub _ensure_user_session_locked {
+    my ( $user, $uid, $may_restart ) = @_;
 
     my $rundir = "$dir_run/$uid";
     my $bus    = "$rundir/bus";
 
     # Two calls, two different jobs, both refused while `user@.service` is
-    # masked, so both go in one window:
+    # masked, so the account gets a unit of its own first (see
+    # ensure_user_manager_carveouts):
     #
     #   * enable-linger owns *persistence* — the /var/lib/systemd/linger marker,
     #     so the account’s containers survive logout and reboot.
@@ -498,29 +911,24 @@ sub ensure_user_session {
     # job settles, which is what lets the window close before the poll below
     # rather than around it. (EA4-319)
     my $start_failed;
-    with_user_manager_unmasked(
-        sub {
-            # Re-enabling for an account we already hold a grant on moves systemd’s
-            # marker ahead of that grant, so the grant has to move with it or it stops
-            # covering the very linger it is for. Recorded around the enable, not after
-            # the readiness poll below, which can die.
-            my $regrant = user_has_granted_linger($user);
+    ensure_user_manager_carveout($uid);
 
-            $linger_enabler->($user);
+    {
+        # Re-enabling for an account we already hold a grant on moves systemd’s
+        # marker ahead of that grant, so the grant has to move with it or it stops
+        # covering the very linger it is for. Recorded around the enable, not after
+        # the readiness poll below, which can die.
+        my $regrant = user_has_granted_linger($user);
 
-            record_linger_grant($user) if $regrant;
+        $linger_enabler->($user);
 
-            $start_failed = !$user_manager_starter->($uid) if !$user_manager_is_active->($uid);
+        record_linger_grant($user) if $regrant;
 
-            return;
-        }
-    );
+        $start_failed = !$user_manager_starter->($uid) if !$user_manager_is_active->($uid);
+    }
 
-    # Deliberately OUTSIDE the window. The mask only refuses new *starts* of
-    # user@.service; waiting for a socket to appear under /run/user/<uid> touches
-    # nothing it gates. Polling inside would hold the host-wide unmask window and
-    # the lock for up to the full ceiling, serializing every other account behind
-    # one slow bootstrap.
+    # Waiting for a socket to appear under /run/user/<uid> touches nothing the
+    # mask gates, and nothing is held open while it happens.
     #
     # The readiness signal `systemctl --user` and rootless podman actually need is
     # the manager’s dbus socket, not the directory: the directory appears well
@@ -564,7 +972,8 @@ sub ensure_user_session {
             $user_manager_stopper->($uid);
 
             my $restarted;
-            with_user_manager_unmasked( sub { $restarted = $user_manager_starter->($uid); return } );
+            ensure_user_manager_carveout($uid);
+            $restarted = $user_manager_starter->($uid);
 
             if ($restarted) {
                 for ( 1 .. $poll_iterations ) {
@@ -598,37 +1007,31 @@ sub ensure_user_session {
 # The boot-time counterpart to ensure_user_session(): bring up the managers for
 # a whole list of accounts in one sweep. Driven by `ea-podman
 # ensure_user_sessions`, which the ea-podman-user-managers.service unit runs at
-# boot — the trigger EA4-319 was missing, since nothing else invokes the unmask
-# window at boot and logind will not start a masked `user@.service` for a
+# boot — the trigger EA4-319 was missing, since nothing else writes an account's
+# own unit at boot and logind will not start a masked `user@.service` for a
 # lingering account on its own.
 #
-# Deliberately NOT a loop over ensure_user_session(), for two reasons that pull
-# against each other and only bite at this scale:
-#
-#   * One window for the whole host, not one per account. $_in_window already
-#     makes a nested call reuse an open window, so a loop *inside* one
-#     with_user_manager_unmasked() would get that much right on its own: one
-#     unmask/remask pair and two daemon-reloads for the sweep instead of 2N.
-#   * But that same loop would drag every account’s readiness poll INSIDE the
-#     window, and that poll is outside it on purpose (see ensure_user_session
-#     above): its ceiling is ~10s per account, so on a box with hundreds of
-#     accounts the host-wide unmask would be held open for the entire sweep.
-#     Exactly backwards from “as short as we can make it”.
-#
-# So the phases are split by hand. Every start happens in one window — each
-# blocks until its job settles, which is what keeps the window short — then the
-# window closes and the buses are polled *together*, one ceiling for the sweep
-# rather than one per account.
+# Deliberately NOT a loop over ensure_user_session(): that would write and
+# reload once per account, and would wait out a readiness poll per account, up
+# to ~10s each. So the phases are split by hand: every account's own unit is
+# written first and reloaded once, every start happens, then the buses are
+# polled *together*, one ceiling for the sweep rather than one per account.
 #
 # Warns and carries on per account rather than dying: one account that cannot
 # start its manager must not cost every other account on the box its containers,
-# and must not abort the sweep with the mask half-restored. Returns a hashref of
+# and must not abort the sweep half-way. Returns a hashref of
 # user => "ok" (already up), "started", "failed", or "unknown" (no such user).
 sub ensure_user_sessions {
     my (@users) = @_;
 
+    # A chance to finish taking back the units of accounts released earlier while
+    # a login session still held their manager. Reported, not fatal: it is not
+    # this sweep's job.
+    eval { reconcile_carveouts(); 1 } or warn "ea-podman: could not finish removing released accounts' user manager units: $@";
+
     my %result;
     my @pending;
+    my @healthy;
 
     mkdir $dir_run;    # parent /run/user; harmless when it already exists
 
@@ -644,9 +1047,9 @@ sub ensure_user_sessions {
             next;
         }
 
-        # The reason a non-cagefs host pays nothing here: after a normal boot
-        # logind has already started every lingering account’s manager, so every
-        # account is healthy, @pending is empty, and no window is ever opened.
+        # After a normal boot on a host that does not mask the template, logind
+        # has already started every lingering account’s manager, so every account
+        # is healthy and @pending is empty: nothing is started or stopped.
         #
         # Stricter than ensure_user_session()’s early return, which stops at the
         # bus socket: that one is on the hot path of every ea-podman command and
@@ -655,10 +1058,22 @@ sub ensure_user_sessions {
         # the manager it belongs to (see $user_manager_is_active).
         if ( user_has_linger($user) && -d "$dir_run/$uid" && -e "$dir_run/$uid/bus" && $user_manager_is_active->($uid) ) {
             $result{$user} = "ok";
+            push @healthy, $uid;
             next;
         }
 
         push @pending, { user => $user, uid => $uid };
+    }
+
+    # A healthy manager may have been started by logind at boot, on a host that
+    # was not masking the template, and so has no unit of its own. The next time
+    # the mask arrives (a cagefs install or upgrade, or CloudLinux's
+    # `disable-systemd-user-mask` flag being removed) that manager is torn down
+    # on systemd 252. Giving a running manager its unit now is what protects it:
+    # tested, and it does not disturb the manager. Costs nothing once the unit is
+    # in place. A failure here is reported but does not stop the sweep.
+    if (@healthy) {
+        eval { ensure_user_manager_carveouts(@healthy); 1 } or warn "ea-podman: could not give the running user systemd managers a unit of their own: $@";
     }
 
     return \%result if !@pending;
@@ -673,13 +1088,10 @@ sub ensure_user_sessions {
     # containers down is expected. Every other path reports instead; see
     # ensure_user_session() above.
     #
-    # Out here because a stop is slow and needs no window. It takes the account's
-    # containers with it, and a container whose PID 1 ignores SIGTERM is only
-    # killed at TimeoutStopSec -- 90s each, measured. Inside the window that would
-    # hold the host-wide unmask open for minutes on a box with several such
-    # accounts, which is the very thing the phase split above exists to avoid.
-    # Masking refuses new *starts*, not stops, so nothing here needs the template
-    # lifted. (EA4-319)
+    # A stop is slow. It takes the account's containers with it, and a container
+    # whose PID 1 ignores SIGTERM is only killed at TimeoutStopSec -- 90s each,
+    # measured. Masking refuses new *starts*, not stops, so nothing here needs
+    # the account's own unit either. (EA4-319)
     for my $acct (@pending) {
         my $uid = $acct->{uid};
 
@@ -689,13 +1101,43 @@ sub ensure_user_sessions {
         $user_manager_stopper->($uid);
     }
 
-    with_user_manager_unmasked(
+    # Every account's own unit first, and one reload for all of them: /run is
+    # empty after a reboot, so none of them has one yet. A failure here is
+    # the same for every account, so it is reported once per account and the
+    # sweep moves on, as it does for any other reason an account will not start.
+    # Held from the first unit written to the last manager started, for the same
+    # reason as in ensure_user_session(): a release must not find a manager that
+    # is merely not started yet. (EA4-321)
+    _with_carveout_lock(
         sub {
-            for my $acct (@pending) {
+            my %refused;
+            my $carveouts_ok = eval {
+                my $prepared = _prepare_user_manager_carveouts( map { $_->{uid} } @pending );
+                $refused{$_} = 1 for @{ $prepared->{refused} };
+                1;
+            };
+
+            # An account whose unit is not ours to write (an administrator's mask
+            # of it) is not started, and says why; the others are unaffected.
+            for my $acct ( grep { $refused{ $_->{uid} } } @pending ) {
+                warn "ea-podman: could not prepare the user systemd manager for “$acct->{user}”: " . _refusal_message( user_manager_carveout_file( $acct->{uid} ) );
+                $acct->{start_failed} = 1;
+            }
+
+            if ( !$carveouts_ok ) {
+                warn "ea-podman: could not prepare the user systemd managers: $@";
+                $_->{start_failed} = 1 for @pending;
+
+                # Some units may have landed before the failure; none of these
+                # accounts has a manager to justify them. See ensure_user_session().
+                _abandon_unstarted_carveout( $_->{user}, $_->{uid} ) for @pending;
+            }
+
+            for my $acct ( $carveouts_ok ? grep { !$refused{ $_->{uid} } } @pending : () ) {
                 my ( $user, $uid ) = @{$acct}{qw(user uid)};
 
-                # Contained per account: a die here would unwind out of the
-                # window, restoring the mask with accounts still unstarted.
+                # Contained per account: one that will not start must not cost the rest
+                # of the sweep.
                 local $@;
                 eval {
 
@@ -718,24 +1160,25 @@ sub ensure_user_sessions {
                 } or do {
                     warn "ea-podman: could not start the user systemd manager for “$user”: $@";
                     $acct->{start_failed} = 1;
+                    _abandon_unstarted_carveout( $user, $uid );
                 };
+            }
+
+            # Shared across accounts: the starts above already
+            # blocked until their jobs settled, so this is the tail of a race we have
+            # mostly won already. An account whose start outright failed is not waited
+            # for at all, same as ensure_user_session().
+            my @waiting = grep { !$_->{start_failed} } @pending;
+
+            for ( 1 .. $poll_iterations ) {
+                @waiting = grep { !( -d "$dir_run/$_->{uid}" && -e "$dir_run/$_->{uid}/bus" ) } @waiting;
+                last if !@waiting;
+                $poll_sleeper->();
             }
 
             return;
         }
     );
-
-    # Outside the window, and shared across accounts: the starts above already
-    # blocked until their jobs settled, so this is the tail of a race we have
-    # mostly won already. An account whose start outright failed is not waited
-    # for at all, same as ensure_user_session().
-    my @waiting = grep { !$_->{start_failed} } @pending;
-
-    for ( 1 .. $poll_iterations ) {
-        @waiting = grep { !( -d "$dir_run/$_->{uid}" && -e "$dir_run/$_->{uid}/bus" ) } @waiting;
-        last if !@waiting;
-        $poll_sleeper->();
-    }
 
     for my $acct (@pending) {
         my ( $user, $uid ) = @{$acct}{qw(user uid)};
@@ -750,12 +1193,17 @@ sub ensure_user_sessions {
 
         $result{$user} = "failed";
 
+        # The wrappers report failure by returning false, not by dying, so the
+        # per-account eval above never saw it and did not take the unit back.
+        # Covers a readiness timeout too. No-op for an account that lingers.
+        _abandon_unstarted_carveout( $user, $uid );
+
         # The same symptoms ensure_user_session() dies on, and the same hint —
         # which names the mask when there is one. A warn, not a die: see above.
         my $why =
-            !-d $rundir            ? "the runtime directory “$rundir” was never created"
-          : !-e "$rundir/bus"      ? "the user session bus “$rundir/bus” never appeared"
-          :                          "the session bus “$rundir/bus” exists but `user\@$uid.service` is not running, so nothing is listening on it";
+            !-d $rundir       ? "the runtime directory “$rundir” was never created"
+          : !-e "$rundir/bus" ? "the user session bus “$rundir/bus” never appeared"
+          :                     "the session bus “$rundir/bus” exists but `user\@$uid.service` is not running, so nothing is listening on it";
 
         warn "ea-podman: the user systemd manager for “$user” (uid $uid) did not come up: $why.\n" . _masked_user_manager_hint($uid);
     }
@@ -844,6 +1292,33 @@ sub grant_covers_current_linger {
     return $lingering_since <= $granted_at ? 1 : 0;
 }
 
+# The stop is asynchronous, and does not happen at all while a login session
+# keeps the manager up. So wait a moment for the ordinary case, and reconcile:
+# the unit goes now if the manager is confirmed stopped, and otherwise stays
+# for the next reconcile_carveouts() from anywhere on the host, which finds it
+# by its written/<uid> record. The release reports success either way, because
+# the linger really is gone.
+our $settle_iterations = 50;    # × $poll_sleeper (0.1s) ≈ 5s
+
+sub _settle_carveout {
+    my ($uid) = @_;
+
+    return if !lstat( user_manager_carveout_file($uid) );
+
+    # Wait for the state the removal insists on, not merely “not active”: a
+    # manager that is `deactivating` is not active, but it is not confirmed
+    # stopped either, and the removal would refuse it and leave for the next
+    # reconcile what a few more polls would have finished.
+    for ( 1 .. $settle_iterations ) {
+        last if $user_manager_confirmed_stopped->($uid);
+        $poll_sleeper->();
+    }
+
+    _reconcile_carveouts( [$uid] );
+
+    return;
+}
+
 # Undo what ensure_user_session() set up. Idempotent: a no-op (and a “success”)
 # when the user is not lingering in the first place. Deciding that a user no
 # longer needs a rootless session is the caller’s job — see
@@ -854,6 +1329,12 @@ sub remove_user_session {
     return 1 if !user_has_linger($user);
 
     $linger_disabler->($user);
+
+    # `loginctl disable-linger` stops the manager, which is the only time the
+    # account's own unit (see ensure_user_manager_carveouts) may go. Not before:
+    # taking it from under a running manager and reloading kills it. (EA4-321)
+    my $uid = ( getpwnam($user) )[2];
+    _settle_carveout($uid) if defined $uid;
 
     # `loginctl disable-linger` can exit non-zero for reasons that leave the
     # linger correctly off (a stopped manager, for instance), so trust the

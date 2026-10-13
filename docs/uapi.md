@@ -22,19 +22,22 @@ to call it. See `DESIGN.md` for the internals.
 - Rootless Podman cannot start inside the jailshell chroot or a `nosuid` CageFS
   cage — `newuidmap`/`newgidmap` cannot set up the user namespace there. So a
   jailshell CLI invocation does **not** run podman locally; it hands the
-  operation to this UAPI instead.
+  operation to code that runs outside the jail instead.
 - UAPI is executed by **cpsrvd as the authenticated cPanel user**, which runs
   **outside** any CageFS cage and never enters the jailshell chroot (it does not
   exec the login shell). So the same code path works for normal, jailshell, and
   CageFS accounts.
-- A jailshell (or CageFS-fallback) CLI call reaches that UAPI even though a
-  shell login has no ambient web credential: the (root) ea-podman adminbin
-  mints a short-lived cPanel API token for the caller, the CLI makes one
-  authenticated request over localhost HTTPS (`Authorization: cpanel
-  user:token`), and the token is revoked right after.
+- A jailshell (or CageFS-fallback) CLI call does not need a web credential:
+  it calls the ea-podman admin module's lifecycle action for the verb
+  (`INSTALL`, `UPGRADE`, `LIST_CONTAINERS`, `START`, `STOP`, `RESTART`,
+  `UNINSTALL`, `STATUS`, `CMD`). cpsrvd runs it as root outside the jail or
+  cage; it checks the account owns the container, drops fully to the account,
+  and runs the same code this UAPI runs, so the result is the same. (EA4-315;
+  before that the CLI minted a short-lived full-access API token and called
+  this UAPI over localhost HTTPS.)
 - The first container operation transparently performs the one-time privileged
   bootstrap (allocate subuid/subgid and run `loginctl enable-linger`, as root
-  via the ea-podman adminbin) so the account gets a persistent rootless user
+  via the ea-podman admin module) so the account gets a persistent rootless user
   session (`/run/user/<uid>` + a lingering `user@<uid>.service`).
 - Only a *container* operation, though. Since CPANEL-55309 the linger half of
   that bootstrap is withheld from an account with no containers: `list`,
@@ -51,6 +54,26 @@ to call it. See `DESIGN.md` for the internals.
 - A call only ever sees and acts on **the calling account's own containers**.
 - **root / WHM operators** may invoke it on behalf of an account with
   `uapi --user=<account> EAPodman ...`.
+- Creating or running containers needs the **`ea_podman` feature**
+  ("EA4 - Containers (ea-podman)" in WHM's Feature Manager). It is on for every
+  account unless a feature list turns it off (a list saved before the feature
+  existed leaves it on). With it off, `install`, `upgrade` and `cmd` are
+  refused on every path, and `start` and `restart` through this UAPI and a
+  jailshell/CageFS `ea-podman` CLI; `list`, `status`, `stop` and `uninstall`
+  keep working so an account can still see and remove what it has. (EA4-315;
+  this UAPI declares the feature on those verbs, and the ea-podman admin
+  module enforces it on its actions of the same name.)
+- The gate is enforced where ea-podman crosses into root, not in the CLI. An
+  unrestricted-shell account runs `ea-podman` as itself, so a check in the
+  script would only be advisory: the account could run a copy without it, or
+  run `podman` directly. What the gate withholds is root's help. `install`
+  needs a rootless session, ports, and a registry entry; `upgrade` needs the
+  registry; `cmd` needs root to enter the container. Each of those is a gated
+  admin action, so `install`, `upgrade`, and `cmd` are refused on the direct
+  CLI too. `start`, `restart`, and `bash` need nothing from root — they are
+  `systemctl --user` and `podman exec` as the account — so the direct CLI
+  does not gate them. They can only act on containers the account already
+  has: with the feature off from the start, it cannot create any.
 
 > **Host recommendation — cgroups:** ea-podman manages containers through the
 > user's `systemd` manager and runs on either cgroup hierarchy; bring-up and
@@ -178,8 +201,9 @@ was cut off at the output size cap).
 A jailshell account can simply run the `ea-podman` command for the supported
 verbs (`install`, `upgrade`, `list`, `start`, `stop`, `restart`, `uninstall`,
 `status`, `cmd`); the CLI
-detects the restricted shell and routes the call through this UAPI for them —
-no tokens or extra steps. Other CLI subcommands still require an unrestricted
+detects the restricted shell and routes the call through the ea-podman admin
+module's matching lifecycle action, which runs the same code as this UAPI — no
+tokens or extra steps. Other CLI subcommands still require an unrestricted
 shell. (Unrestricted-shell accounts and root run the CLI directly, as before.)
 
 ### 1. From the cPanel interface

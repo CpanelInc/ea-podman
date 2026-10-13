@@ -249,72 +249,137 @@ So a masked host loses the directory *and* the bus, which means the original
 "the runtime directory did not become available" report was accurate rather than
 misleading, and both of ea-podman's readiness errors name the mask.
 
-**What ea-podman does about it.** `ea_podman::subids::with_user_manager_unmasked()`
-lifts the mask, starts the account's manager, and puts the mask straight back:
+**What ea-podman does about it.** `ea_podman::subids::ensure_user_manager_carveouts()`
+gives each account that needs a manager a unit file of its own, and leaves the
+template mask alone:
 
 ```
-                       ┌─ loginctl enable-linger <user>   (persistence)
-unmask user@.service ──┤                                            ──> remask
-                       └─ systemctl start user@<uid>.service (up now)
+write /run/systemd/system/user@<uid>.service   (a real copy of the vendor unit)
+systemctl daemon-reload                        (once; the mask itself is unchanged)
+        ├─ loginctl enable-linger <user>       (persistence)
+        └─ systemctl start user@<uid>.service  (up now)
 
-then, outside the window:  poll for /run/user/<uid>/bus
+then:  poll for /run/user/<uid>/bus
 ```
 
-Those are two different jobs. `enable-linger` owns *persistence* — the
-`/var/lib/systemd/linger` marker, so the account's containers survive logout and
-reboot. The explicit `systemctl start` owns *up right now*, which
-`enable-linger` cannot do: for an account that already lingers, logind will not
-retry a manager it believes it already handled, which is exactly the
+A unit file named for the instance takes precedence over the template, and is not
+a mask. So one account's manager starts while every other account is still
+refused by the template mask, and CLOS-4517's protection is exactly as before.
+
+Those are two different jobs after the unit is in place. `enable-linger` owns
+*persistence* — the `/var/lib/systemd/linger` marker, so the account's containers
+survive logout and reboot. The explicit `systemctl start` owns *up right now*,
+which `enable-linger` cannot do: for an account that already lingers, logind will
+not retry a manager it believes it already handled, which is exactly the
 post-reboot state on a CageFS host (marker present, `/run/user/<uid>` present,
 bus missing).
 
-The readiness poll is deliberately **outside** the window. The mask only refuses
-new *starts* of `user@.service`; waiting for a socket to appear under
-`/run/user/<uid>` touches nothing it gates. Polling inside would hold both the
-host-wide unmask window and the lock for up to the full 10s ceiling,
-serialising every other account behind one slow bootstrap.
+**Why not lift the mask for the length of the start (EA4-319's first fix, EA4-321).**
+That does start the manager, and on systemd 239 and 257 it leaves it running,
+because masking a unit does not stop an instance that is already running. On
+systemd 252 (CloudLinux 9, AlmaLinux 9) it does not: a `daemon-reload` that
+*changes the template's mask state* tears down `user-runtime-dir@<uid>.service`
+for every running instance, however long it has been up. The manager still
+reports `active` but has no `/run/user/<uid>` and no bus, which looks exactly like
+the original masked-host failure. It is not a race: a reload with no mask change
+is harmless, and waiting before the remask reload changes nothing. Skipping the
+reload only moves the damage to the next `daemon-reload` anyone on the host runs
+(an rpm scriptlet, `cagefsctl`, `systemctl enable`), which was measured. It was
+reproduced on stock AlmaLinux 9 with no CloudLinux involved.
 
-This works because **masking a unit does not stop an instance that is already
-running** — only new starts are refused. The manager started inside the window
-keeps running after the mask is back, which is what the account's containers
-need. (It is also why early field reports on EA4-319 contradicted each other:
-whoever unmasked, deployed, and remasked kept working, because their manager was
-still up, while an account that had never had one failed.)
+What EA4-321 found by probing, all of it easy to get wrong:
+
+| Shape | Result on systemd 252 |
+|---|---|
+| a **real file** copy of the vendor unit at `/run/systemd/system/user@<uid>.service` | works: starts while the template is masked, survives reloads |
+| a **symlink** there to the vendor unit | refused as masked; it is resolved as the template it points at |
+| a `user@.service.d/` drop-in | refused as masked; a drop-in does not override a mask |
+| the real file, **removed while its manager is running**, then a reload | the manager is torn down exactly as the remask did |
 
 Properties worth knowing:
 
-- **Off a CageFS host it does nothing at all** — not masked means a pure
-  pass-through, no `daemon-reload`, no lock.
+- **It is written whether or not the template is masked right now.** CageFS
+  re-applies its mask on every install and upgrade, and CloudLinux's
+  `disable-systemd-user-mask` flag leaves a host unmasked only until someone
+  removes it. On systemd 252 the mask *arriving* tears down every manager that has
+  no unit of its own, exactly as the remask did, so a manager started while the
+  host happened to be unmasked needs its unit too. (A host with no vendor unit to
+  copy and no mask just starts the manager from the template, as it always did.)
+- **The boot sweep also covers managers logind started.** On an unmasked host
+  logind starts every lingering account's manager at boot with no ea-podman
+  involved. `ensure_user_sessions` gives those running managers their unit as well
+  (tested: it does not disturb them, and they survive the mask arriving). The
+  per-command `ensure_user_session()` does not, to keep its hot path free.
 - **It is on the cold path only.** `ensure_user_session()` returns early whenever
-  `/run/user/<uid>/bus` is already there, so the window opens once per cold
-  account, not once per command.
+  the account is healthy, so the unit is written once per cold account, not once
+  per command. A unit that is already in place and current costs no write and no
+  reload.
 - **Only the manager *start* needs it.** `systemctl --user` calls
   (`ea_podman::util::sysctl`, `_systemctl_quiet`) talk to the account's
   already-running manager over its own bus, where the template mask is
   irrelevant.
-- **The window is host-wide while open**, not per-user: any account whose manager
-  happens to start during it keeps that manager. The window is short and
-  `flock`-serialized, but it cannot be made per-user without leaving a persistent
-  per-account carve-out on disk, which is the thing being avoided.
-- **The mask is restored on every exit path** — normal return, a `die` from
-  either the unmask or the wrapped work, or a handled signal. A `kill -9` is the
-  one case nothing in-process can cover, so the recorded state at
-  `/opt/cpanel/ea-podman/user-manager-mask.state` (one line: the path the mask
-  was in) lets the next run put the mask back. If a restore ever fails,
-  ea-podman warns loudly and keeps that record so the host is not silently left
+- **It is per account, not host-wide.** Nothing is ever unmasked, so there is no
+  window for another account to slip through and no lock to serialise on. The one
+  reload happens after the unit is written, with the template's mask unchanged,
+  which is the only kind of reload shown to be safe for other accounts' running
+  managers.
+- **The unit is only removed once the manager is down.** `remove_user_session()`
+  (the release when an account's last container goes) runs `loginctl
+  disable-linger`, waits a few seconds for the manager to stop, and then calls
+  `remove_user_manager_carveout()`, which does nothing while the manager is
+  running. There is deliberately no reload on removal. After it the account is
+  refused again, like any other.
+- **Every unit ea-podman writes is recorded, and only a recorded unit is ever
+  replaced or removed.** `/run/ea-podman/written/<uid>` holds the sha256 of what
+  was written. A unit at that name is treated as ours only while it is a regular
+  file whose content matches the record: an administrator's mask of one account
+  (a `/dev/null` symlink or an empty file), or any other unit somebody else put
+  there, is refused and left alone, whether it was there first or was put over
+  ours later. A refused account is reported and not started; the other accounts
+  in the same sweep are unaffected.
+- **Which units are still wanted is asked, not recorded.** `reconcile_carveouts()`
+  walks the record and takes back every unit whose account no longer lingers
+  (released, never finished setting up, or deleted so its uid no longer
+  resolves) once its manager is confirmed stopped, never from under a running
+  one. There is deliberately no second note saying "this one is owed": the
+  record of what we wrote plus the account's live state is the whole truth, so
+  nothing can go stale against it. It runs at the start of every
+  `release_user_session_as_root()` and of `ensure_user_sessions`, and a release
+  or failed setup settles its own account straight away. So a release under a
+  login session is finished later, not lost: the manager outlives
+  `disable-linger`, the unit stays with it, and the next release or sweep
+  anywhere on the host takes it back once the manager is down. Until then a
+  login for that account can start a manager the mask would otherwise have
+  refused; the window ends at that next release or sweep, or at a reboot.
+- **A reload that did not happen is remembered.** The unit is written and then
+  `systemctl daemon-reload` makes systemd see it. A failed reload, or a process
+  killed between the two, would leave a file that already matches and so never
+  triggers another reload. `/run/ea-podman/reload-pending` is created before the
+  first unit is written and removed only after a reload succeeds, so the next
+  run reloads regardless, and a failed reload is reported as itself instead of
+  as the later, misleading "masked".
+  `/run/ea-podman/lock` serialises all of this, so a release cannot take a unit
+  away from an account that is being set up at the same moment.
+- **`/run` is tmpfs.** A reboot clears every unit, which is right, since nothing
+  is running either. The boot sweep writes them again before it starts anything,
+  see below.
+- **A systemd update is not seen until the manager restarts.** The unit is a copy
+  of the vendor unit as of when it was written. A package update that changes the
+  vendor unit leaves a running account on the old copy until its manager next
+  restarts, or until the next cold bootstrap finds the copy differs and rewrites
+  it.
+- **An older version's abandoned unmask is repaired.** Before EA4-321 a `kill -9`
+  mid-window could leave the template unmasked, recorded at
+  `/opt/cpanel/ea-podman/user-manager-mask.state`. Nothing writes that file now,
+  but a host upgraded while a window was open still has one, and the next run
+  puts the mask back and removes the record. If that restore ever fails,
+  ea-podman warns loudly and keeps the record so the host is not silently left
   unmasked.
-- **A `/run` mask stays a `/run` mask.** ea-podman unlinks and recreates the
-  symlink itself rather than calling `systemctl unmask`/`mask`, because
-  `--runtime` cannot be combined with `unmask`, so a round trip through
-  `systemctl` would silently relocate a runtime mask into `/etc`. An
-  admin-created *empty* unit file is normalised to the canonical
-  symlink-to-`/dev/null` on restore — still masked, and still exactly what
-  `systemctl mask` writes.
 
 **Reboot.** At boot the mask is already in place, so logind cannot start
 `user@<uid>.service` for a lingering account and its containers would not come
-back on their own — the bypass lives inside ea-podman, and nothing else runs at
-boot. Measured on a real masked host: confirmed, the manager does not return.
+back on their own, and `/run` holds no unit for it. Nothing else runs at boot.
+Measured on a real masked host: the manager does not return.
 
 The trigger for it is `ea-podman-user-managers.service`, a `oneshot` unit run at
 boot that calls the root-only `ea-podman ensure_user_sessions`. That sweeps every
@@ -322,24 +387,16 @@ account the container registry says has containers and does for each one what
 `ensure_user_session()` does for a single account.
 
 It is not a loop over `ensure_user_session()`, because at boot the scale changes
-which shape is affordable:
-
-- **One window for the whole host.** `$_in_window` already makes a nested call
-  reuse an open window, so the sweep gets one unmask/remask pair and two
-  `daemon-reload`s instead of 2N.
-- **But the readiness poll stays outside it.** That poll's ceiling is ~10s *per
-  account*; letting the sweep nest inside one window would hold the host-wide
-  unmask open for the entire sweep, which is exactly backwards. So the phases are
-  split by hand: every `systemctl start` happens in one window (each blocks until
-  its job settles, which is what keeps the window short), then the window closes
-  and the buses are polled together — one ceiling for the sweep, not one per
-  account.
+which shape is affordable: every account's unit is written first with **one**
+`daemon-reload` for the lot, every `systemctl start` happens, and then the buses
+are polled together, one ceiling for the sweep and not one per account (that poll
+is ~10s per account).
 
 It warns and carries on per account, so one account that cannot start its manager
-costs only itself and cannot abort the sweep with the mask half-restored. On a
-host that is not masked it is a no-op: logind has already started those managers
-by the time it runs, every account takes the "already up" early return, and no
-window is ever opened.
+costs only itself and cannot abort the sweep half-way. On a host that is not
+masked it starts nothing: logind has already started those managers by the time
+it runs, every account takes the "already up" early return, and the only work is
+giving them their unit, once.
 
 An account's *next* ea-podman command still repairs it too, exactly as before —
 the boot sweep is a second, proactive path to the same repair, not a replacement.
@@ -371,9 +428,10 @@ that delegation and therefore does work on a `hidepid` host.
   shell. The only outside-the-cage route is a root-only, non-PAM setuid drop, and
   it still cannot be exposed over UAPI.
 - **CageFS 7.6.39+ masks `user@.service`** (CloudLinux CLOS-4517), which stops
-  the per-user systemd manager rootless podman needs. ea-podman unmasks, starts
-  the manager, and remasks immediately; the manager survives the remask because
-  masking does not stop a running instance. Logind cannot start those managers
+  the per-user systemd manager rootless podman needs. ea-podman leaves the
+  mask alone and starts each account's manager from a unit file of its own under
+  `/run/systemd/system/` (lifting and restoring the mask, EA4-319's first fix,
+  tears running managers down on systemd 252; EA4-321). Logind cannot start those managers
   itself at boot while the template is masked, so
   `ea-podman-user-managers.service` runs the same repair then for every account
   the registry says has containers.

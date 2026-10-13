@@ -202,8 +202,10 @@ stage_new_lib() {
 }
 
 # The old bootstrap, also straight out of this checkout: the newest revision of
-# SOURCES/subids.pm that does not yet carry with_user_manager_unmasked, i.e. the
-# last one that predates the fix.
+# SOURCES/subids.pm that carries neither with_user_manager_unmasked (EA4-319's
+# fix) nor ensure_user_manager_carveouts (EA4-321's replacement for it), i.e. the
+# last one that predates both. Matching on only the first would, once EA4-321
+# removed that function, pick the newest revision and make A the fixed code.
 #
 # Deliberately NOT whatever is installed at /opt/cpanel/ea-podman/lib. That box
 # may be running anything -- including a build that already has the fix -- so
@@ -224,7 +226,7 @@ stage_old_lib() {
         # do. Plain `grep` reads all of its input, so nothing gets SIGPIPEd.
         for rev in $(git -C "$REPO" log --format=%H -- SOURCES/subids.pm); do
             git -C "$REPO" show "$rev:SOURCES/subids.pm" 2>/dev/null \
-                | grep with_user_manager_unmasked > /dev/null || { A_REV=$rev; break; }
+                | grep -e with_user_manager_unmasked -e ensure_user_manager_carveouts > /dev/null || { A_REV=$rev; break; }
         done
     fi
 
@@ -358,7 +360,7 @@ preflight() {
     stage_old_lib
     if [ "$A_MODE" = git ]; then
         say "  A side       : SOURCES/subids.pm @ $(git -C "$REPO" log -1 --format='%h %s' "$A_REV")"
-        say "                 (last revision before with_user_manager_unmasked, loads OK)"
+        say "                 (last revision before the EA4-319 fix, loads OK)"
     else
         say "  A side       : no usable history here -- using an inline transcription"
         say "                 (\`loginctl enable-linger\` + the same 10s bus poll)"
@@ -510,9 +512,9 @@ side_b() {
     stage "B" "The SAME op, bootstrapped by the ea-podman code in this checkout"
     why "Same masked host, same account, same op. The only thing that changed is"
     why "which revision of ea_podman::subids the bootstrap comes from:"
-    why "  with_user_manager_unmasked() lifts the mask, ensure_user_session() starts"
+    why "  ensure_user_session() gives the account a unit of its own and starts"
     why "  user@$X.service explicitly (enable-linger alone is a no-op for an account"
-    why "  that already lingers -- see A), and the mask goes straight back."
+    why "  that already lingers -- see A), with the template mask left untouched."
     expect "the bootstrap returns cleanly and the op succeeds"
     pause
 

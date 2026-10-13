@@ -16,8 +16,8 @@
 # entered at the PAM/login layer, so a real login running the direct CLI
 # cannot see its own /run/user/<uid> (rootless podman's runtime dir) from
 # inside the cage. Per CPANEL-54672, ea-podman.pl catches that exact symptom
-# and transparently falls back to the same EAPodman UAPI bridge jailshell
-# accounts use — so `ea-podman install ea-memcached16` still works from a
+# and transparently falls back to the same bridge jailshell accounts use
+# (the ea_podman admin module's lifecycle actions since EA4-315) — so `ea-podman install ea-memcached16` still works from a
 # real CageFS login, it just takes one extra hop under the hood.
 #
 # Everything else here mirrors t/LiveTests/ea-memcached16-cli-live.t: same
@@ -90,6 +90,8 @@ my $BASH = '/bin/bash';    # an unrestricted login shell
 my $WHMAPI    = '/usr/local/cpanel/bin/whmapi1';
 my $EAP_LIB   = '/opt/cpanel/ea-podman/lib/ea_podman';
 my @CLI_PATHS = ( '/usr/local/cpanel/scripts/ea-podman', '/opt/cpanel/ea-podman/bin/ea-podman' );
+my $CPWRAPD_LOG  = '/usr/local/cpanel/logs/cpwrapd_log';
+my $ADMIN_MODULE = '/usr/local/cpanel/Cpanel/Admin/Modules/Cpanel/ea_podman.pm';
 
 my $PKG_DIR = "/opt/cpanel/$PKG";
 
@@ -143,6 +145,15 @@ sub wait_for {
         select( undef, undef, undef, 0.1 );
     }
     return $predicate->();
+}
+
+# EA4-315: the ea_podman functions $user called through cpwrapd since $offset
+# bytes into its access log. The delegated CLI must never call MINT_API_TOKEN.
+sub _cpwrapd_functions_since {
+    my ( $offset, $user ) = @_;
+    open( my $fh, '<', $CPWRAPD_LOG ) or return;
+    seek( $fh, $offset, 0 );
+    return map { /\[function\]=\[([A-Z_]+)\]/ ? $1 : () } grep { /\[module\]=\[ea_podman\]/ && /\] \Q$user\E - / } <$fh>;
 }
 
 sub _sh {
@@ -303,6 +314,10 @@ wait_for( sub { !-e "/run/user/$uid" }, 5 );
 
 diag("Test user: $USER (uid=$uid), CageFS=enabled, cgroup=$CGROUP, package=$PKG");
 
+# Where the cpwrapd access log stands now, so the EA4-315 checks at the end only
+# look at what this run logged.
+my $CPWRAPD_LOG_AT = -s $CPWRAPD_LOG // 0;
+
 #=====================================================================
 # the tests
 #=====================================================================
@@ -355,11 +370,12 @@ my $container;
     # The money assertion for CPANEL-54672: a real CageFS login with an
     # unrestricted shell takes the direct CLI path, can't see its own
     # /run/user/<uid> from inside the cage, and must transparently fall back
-    # to the UAPI bridge rather than failing outright.
+    # to the bridge (the ea_podman admin actions since EA4-315) rather than
+    # failing outright.
     like(
         $out,
-        qr/could not see this account.s rootless runtime directory directly.*retrying through the EAPodman UAPI/s,
-        "direct CLI hit the CageFS symptom and transparently fell back to the UAPI bridge"
+        qr/could not see this account.s rootless runtime directory directly.*retrying through the (?:EAPodman UAPI|ea-podman admin actions)/s,
+        "direct CLI hit the CageFS symptom and transparently fell back to the bridge"
     );
 }
 
@@ -521,8 +537,43 @@ ok( wait_for( sub { _memcached_serving_via_socket($USER) }, 45 ), "memcached ans
 
             # Starting the unit, not calling the verb: the unit is what fires at
             # boot, so a unit that cannot run its own ExecStart is the whole bug.
-            my ( $rc, $out ) = run_cmd( 'systemctl', 'start', $BOOT_UNIT );
-            is( $rc, 0, "the boot-time sweep runs clean with the template masked" ) or diag($out);
+            #
+            # `restart`, not `start`: the unit is Type=oneshot + RemainAfterExit=yes
+            # (deliberately - see the unit file), so once anything has run it - an
+            # earlier phase, an earlier run of this test, the boot we are standing on -
+            # it sits at `active (exited)` and a `start` job is a NO-OP THAT RETURNS 0.
+            # The sweep then never runs and the manager check below fails with nothing
+            # to show for it. `restart` on a RemainAfterExit oneshot does stop-then-start
+            # and genuinely re-runs ExecStart.
+            # Which invocation of the unit we are looking at. Both properties are
+            # read because neither is guaranteed across the systemd versions this
+            # runs on (239 on CL8, 252 on CL9, 257 on CL10) and either one changing
+            # is proof enough.
+            my $generation = sub {
+                my $id = ( run_cmd( 'systemctl', 'show', '-p', 'InvocationID',                    '--value', $BOOT_UNIT ) )[1] // '';
+                my $ts = ( run_cmd( 'systemctl', 'show', '-p', 'ExecMainStartTimestampMonotonic', '--value', $BOOT_UNIT ) )[1] // '';
+                s/\s+//g for ( $id, $ts );
+                return "$id/$ts";
+            };
+
+            my $gen_before = $generation->();
+            my ( $rc, $out ) = run_cmd( 'systemctl', 'restart', $BOOT_UNIT );
+            my $gen_after = $generation->();
+
+            # rc alone cannot carry this: a no-op start exits 0 too, which is exactly
+            # how a sweep that never ran used to read as a pass here. A restart that
+            # really re-ran ExecStart reports a different generation than before it.
+            #
+            # Judged on $gen_after, not $gen_before: before the restart the unit may
+            # legitimately be inactive with nothing to report. If systemd reports
+            # nothing even AFTER a successful restart then this host cannot answer the
+            # question, and the assertion degrades to the exit status rather than
+            # failing for a reason that has nothing to do with EA4-319.
+            my $can_tell = $gen_after =~ /[0-9a-f]/ ? 1 : 0;
+            diag("this systemd reports no InvocationID/ExecMainStartTimestamp for $BOOT_UNIT; falling back to exit status alone") if !$can_tell;
+
+            ok( $rc == 0 && ( !$can_tell || $gen_after ne $gen_before ), "the boot-time sweep really ran, and ran clean, with the template masked" )
+              or diag( "rc=$rc generation before=$gen_before after=$gen_after\n$out" );
 
             $came_back = wait_for( sub { $manager_active->() && -S "/run/user/$uid/bus" }, 30 );
             ok( $came_back, "…and the account's user manager is back, which on a masked host nothing else would have done" )
@@ -565,6 +616,15 @@ ok( wait_for( sub { _memcached_serving_via_socket($USER) }, 45 ), "memcached ans
     ( $rc, $out ) = run_via_login( $USER, _sh($CLI) . " list" );
     my $decoded = _decode_json_loose($out);
     ok( !( $decoded && exists $decoded->{$container} ), "uninstalled container no longer registered" );
+}
+
+#--- EA4-315: the delegated CLI goes through admin actions, no API token --
+SKIP: {
+    skip "installed ea-podman predates EA4-315 (no admin module)", 2 if !-e $ADMIN_MODULE;
+    my @functions = _cpwrapd_functions_since( $CPWRAPD_LOG_AT, $USER );
+    ok( scalar( grep { /^(?:INSTALL|LIST_CONTAINERS|UNINSTALL)$/ } @functions ), "the CLI reached the ea_podman lifecycle actions (cpwrapd_log)" )
+      or diag("ea_podman functions logged: @functions");
+    ok( !grep( { $_ eq 'MINT_API_TOKEN' } @functions ), "and minted no API token" );
 }
 
 done_testing();

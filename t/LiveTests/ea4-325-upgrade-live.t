@@ -116,8 +116,8 @@
 #
 #   EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea4-325-upgrade-live.t
 #
-# NOTE ON INSTALLING A BUILD TO TEST. The `ea-podman` CLI is a COMPILED
-# binary that EMBEDS util.pm — copying SOURCES/util.pm over
+# NOTE ON INSTALLING A BUILD TO TEST. Before EA4-315 the `ea-podman` CLI is
+# a COMPILED binary that EMBEDS util.pm — copying SOURCES/util.pm over
 # /opt/cpanel/ea-podman/lib/ea_podman/util.pm does nothing on its own.
 # Copy it, then recompile:
 #
@@ -125,11 +125,16 @@
 #   scp SOURCES/ea-podman.pl root@VM:/opt/cpanel/ea-podman/bin/
 #   ssh root@VM 'bash /opt/cpanel/ea-podman/bin/compile.sh'
 #
+# From EA4-315 there is nothing to compile: bin/ea-podman is the script, so
+# copy SOURCES/ea-podman.pl over bin/ea-podman as well. setup-remote-live.pl
+# --deploy does the right thing for either.
+#
 # Environment variables:
 #   EAPODMAN_LIVE=1      REQUIRED opt-in.
 #   EAPODMAN_TEST_USER   reuse an existing account instead of creating a
-#                        throwaway one (its shell is set unrestricted for
-#                        the test and restored afterward).
+#                        throwaway one (its shell is set unrestricted and it
+#                        is taken out of CageFS for the test; both are
+#                        restored afterward).
 #   EAPODMAN_TEST_IMAGE  image to install (default: httpd:2.4).
 #   EAPODMAN_TEST_PORT   container port to publish (default: 80).
 #   EAPODMAN_TEST_PKG    EA4 container package for the packaged-path
@@ -314,13 +319,6 @@ sub spew_file {
     return 1;
 }
 
-sub skip_rest {
-    my ( $why, $detail ) = @_;
-    diag("SKIP: $why");
-    diag($detail) if defined $detail;
-    return;
-}
-
 sub container_dir {
     my ( $user, $container ) = @_;
     my $home = ( getpwnam($user) )[7];
@@ -388,17 +386,23 @@ plan skip_all => "ea-podman CLI not found" if !$CLI;
 $CLI_PATHS[0] = $CLI;
 
 # The installed build must actually carry EA4-325, or every assertion below is
-# testing the old behaviour and "failing" for the wrong reason. Checked against
-# the compiled binary as well as the library, because the binary embeds its own
-# copy of util.pm and is what the CLI actually runs.
+# testing the old behaviour and "failing" for the wrong reason. Before EA4-315
+# the CLI is a compiled binary that embeds its own copy of util.pm, so it is
+# checked as well as the library; from EA4-315 the CLI is the perl script and
+# reads util.pm from lib/, so the library is the whole answer.
 {
     my $src = slurp("$EAP_LIB/util.pm") // plan skip_all => "cannot read $EAP_LIB/util.pm";
-    plan skip_all => "installed ea-podman predates EA4-325 (no verify_container_started in util.pm); install and RECOMPILE the build under test"
+    plan skip_all => "installed ea-podman predates EA4-325 (no verify_container_started in util.pm); install the build under test (and RECOMPILE it if the CLI is compiled)"
       if $src !~ /verify_container_started/;
 
-    my ( $rc, $out ) = run_cmd( 'grep', '-c', 'did not come back up', $CLI );
-    plan skip_all => "the compiled ea-podman binary predates EA4-325 — util.pm was updated but compile.sh was not run"
-      if $rc != 0;
+    open( my $fh, '<', $CLI ) or plan skip_all => "cannot read $CLI: $!";
+    read( $fh, my $magic, 4 );
+    close $fh;
+    if ( ( $magic // '' ) eq "\x7fELF" ) {
+        my ( $rc, $out ) = run_cmd( 'grep', '-c', 'did not come back up', $CLI );
+        plan skip_all => "the compiled ea-podman binary predates EA4-325 — util.pm was updated but compile.sh was not run"
+          if $rc != 0;
+    }
 }
 
 # Increment B made `upgrade` PULL on every run, so this suite now consumes Docker
@@ -424,7 +428,8 @@ my $CGROUP = -e '/sys/fs/cgroup/cgroup.controllers' ? 'v2' : 'v1';
 our $USER;
 our $CREATED_USER = 0;
 our $ORIG_SHELL;
-our $DEAD_USER;          # A3: deleted uncleanly while still registered
+our $CAGEFS_WAS_ENABLED;
+our $DEAD_USER;         # A3: deleted uncleanly while still registered
 our $DEAD_CREATED = 0;
 our $CLEAN_USER;         # root-side clean: an account with no registered containers
 our $CLEAN_CREATED = 0;
@@ -434,6 +439,26 @@ sub make_account {
     my $pw = 'Eap0d' . substr( time, -6 ) . '!Xy';
     my ( $rc, $res, $out, $err ) = run_json( $WHMAPI, 'createacct', "username=$name", "domain=$domain", "password=$pw", '--output=json' );
     return ( $res && $res->{metadata} && $res->{metadata}{result} ) ? 1 : 0;
+}
+
+# Everything here runs as an ordinary, unrestricted account: the test drives
+# `systemctl --user`, `podman` and the full CLI directly as the user. A jailshell
+# or a cage hides those, and the CLI then takes the restricted path (admin
+# actions, no `clean`), so nearly every subtest fails for a reason that is not
+# EA4-325's. On a CloudLinux box in CageFS "Enable All" mode a new account is
+# caged by default, so the shell alone is not enough.
+#
+# Returns whether the account was in CageFS, so a reused account can be put back.
+my ($CAGEFSCTL) = grep { -x $_ } ( '/usr/sbin/cagefsctl', '/sbin/cagefsctl', '/usr/bin/cagefsctl' );
+
+sub unrestrict_account {
+    my ($user) = @_;
+    run_cmd( '/usr/sbin/usermod', '-s', $BASH, $user );
+    return 0 if !$CAGEFSCTL;
+    my ( $rc, $out ) = run_cmd( $CAGEFSCTL, '--user-status', $user );
+    my $was = ( $out =~ /enabled/i && $out !~ /disabled/i ) ? 1 : 0;
+    run_cmd( $CAGEFSCTL, '--disable', $user ) if $was;
+    return $was;
 }
 
 if ( $ENV{EAPODMAN_TEST_USER} ) {
@@ -450,10 +475,10 @@ else {
 }
 
 $ORIG_SHELL //= ( getpwnam($USER) )[8];
-run_cmd( '/usr/sbin/usermod', '-s', $BASH, $USER );
+$CAGEFS_WAS_ENABLED = unrestrict_account($USER);
 my $uid = ( getpwnam($USER) )[2];
 
-diag("Test user: $USER (uid=$uid), cgroup=$CGROUP, image=$IMAGE, port=$PORT");
+diag( "Test user: $USER (uid=$uid), cgroup=$CGROUP, image=$IMAGE, port=$PORT" . ( $CAGEFS_WAS_ENABLED ? ', taken out of CageFS for the test' : '' ) );
 
 #=====================================================================
 # the tests
@@ -772,15 +797,24 @@ subtest 'B: --force recreates even when nothing moved' => sub {
     return;
 };
 
+# Both subtests that move the container to the alternate image skip, rather than
+# fail, when it cannot be pulled: what they test is the upgrade, not the registry.
+sub alt_image_or_skip {
+    my $alt = $ENV{EAPODMAN_TEST_ALT_IMAGE} || 'docker.io/library/httpd:2.4-alpine';
+    my ( $prc, $pout ) = run_as_user( $USER, "podman pull " . _sh($alt) );
+    if ( $prc != 0 ) {
+        diag($pout);
+        skip_all_in_subtest("could not pull the alternate image $alt");
+    }
+    return $alt;
+}
+
 # "The image moved" without controlling a registry: install from one tag, then
 # point the container's persisted start args at another. The configured
 # reference now resolves to an image ID that is not the one the container was
 # created from, which is exactly the real-world condition.
 subtest 'B: a container whose configured image now resolves elsewhere is recreated' => sub {
-    my $alt = $ENV{EAPODMAN_TEST_ALT_IMAGE} || 'docker.io/library/httpd:2.4-alpine';
-
-    my ( $prc, $pout ) = run_as_user( $USER, "podman pull " . _sh($alt) );
-    skip_rest( "could not pull the alternate image $alt", $pout ), return if $prc != 0;
+    my $alt = alt_image_or_skip();
 
     my $id_before = container_field( $USER, $container, '{{.Id}}' );
     patch_start_args( $USER, $container, sub { my ($args) = @_; $args->[-1] = $alt } );
@@ -843,7 +877,7 @@ subtest 'B: force falls back to the cached image when the pull fails' => sub {
 # B7. A deliberate stop cannot be told from a crash, so the conditional path
 # must never start something the user stopped.
 subtest 'B: a stopped container is recreated but left stopped' => sub {
-    my $alt = $ENV{EAPODMAN_TEST_ALT_IMAGE} || 'docker.io/library/httpd:2.4-alpine';
+    my $alt = alt_image_or_skip();
 
     run_as_user( $USER, "systemctl --user stop container-$container.service" );
     is( unit_prop( $USER, $container, 'ActiveState' ), 'inactive', "the container is stopped to begin with" );
@@ -1176,7 +1210,7 @@ subtest 'root: clean reaches an account with no registered containers left' => s
         return fail("could not create the second account");
     }
     $CLEAN_CREATED = 1;
-    run_cmd( '/usr/sbin/usermod', '-s', $BASH, $CLEAN_USER );
+    unrestrict_account($CLEAN_USER);
 
     my ( $irc, $iout ) = run_as_user( $CLEAN_USER, _sh($CLI) . " install lonely --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
     my ($cn) = $iout =~ m/Done, installed:\s*(\S+)/;
@@ -1292,7 +1326,7 @@ subtest 'A3: upgrade_containers --all survives a deleted account' => sub {
         return skip_all_in_subtest("could not create the second account");
     }
     $DEAD_CREATED = 1;
-    run_cmd( '/usr/sbin/usermod', '-s', $BASH, $DEAD_USER );
+    unrestrict_account($DEAD_USER);
 
     my ( $irc, $iout ) = run_as_user( $DEAD_USER, _sh($CLI) . " install $CBASE --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
     my ($dead_container) = $iout =~ m/Done, installed:\s*(\S+)/;
@@ -1379,8 +1413,9 @@ END {
     if ($CREATED_USER) {
         run_cmd( $WHMAPI, 'removeacct', "username=$USER", 'keepdns=0', '--output=json' );
     }
-    elsif ( $ORIG_SHELL && $ORIG_SHELL ne $BASH ) {
-        run_cmd( '/usr/sbin/usermod', '-s', $ORIG_SHELL, $USER );
+    else {
+        run_cmd( $CAGEFSCTL, '--enable', $USER ) if $CAGEFS_WAS_ENABLED;
+        run_cmd( '/usr/sbin/usermod', '-s', $ORIG_SHELL, $USER ) if $ORIG_SHELL && $ORIG_SHELL ne $BASH;
     }
 
     if ( $DEAD_CREATED && defined $DEAD_USER ) {

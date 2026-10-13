@@ -6,16 +6,14 @@ set -x
 
 # Stage every shipped file into debian/tmp ($DEB_INSTALL_ROOT) at its full
 # installed path, mirroring the RPM spec's %install. settings.json sets
-# dont_relativise_ontar, so debify autogenerates debian/ea-podman.install from
-# these full paths — which keeps the two same-basename EAPodman.pm files (the
-# UPCP install-task and the UAPI module) distinct without a hand-maintained
-# .install manifest. See CPANEL-54037.
+# dont_relativise_ontar. debian/ea-podman.install is a committed manifest (see
+# the comment at its top), so a file added here must be added there too.
 
 # CLI + libs under /opt/cpanel/ea-podman
 mkdir -p $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin
 install $SOURCE0  $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin/ea-podman.pl
+install -m 0755 $SOURCE0 $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin/ea-podman    # the CLI, uncompiled (EA4-315)
 install $SOURCE10 $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin/_update-public-hub-to-internal-hub
-install $SOURCE7  $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/bin/compile.sh
 install $SOURCE22 $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/webapp-dir-setup
 
 mkdir -p $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/lib/ea_podman
@@ -30,15 +28,15 @@ echo "{}" > $DEB_INSTALL_ROOT/opt/cpanel/ea-podman/registered-containers.json
 mkdir -p $DEB_INSTALL_ROOT/usr/local/cpanel/scripts
 ln -s /opt/cpanel/ea-podman/bin/ea-podman $DEB_INSTALL_ROOT/usr/local/cpanel/scripts/ea-podman
 
-# Adminbin pair
-mkdir -p $DEB_INSTALL_ROOT/usr/local/cpanel/bin/admin/Cpanel
-install -p $SOURCE3 $DEB_INSTALL_ROOT/usr/local/cpanel/bin/admin/Cpanel/ea_podman
-install -p $SOURCE4 $DEB_INSTALL_ROOT/usr/local/cpanel/bin/admin/Cpanel/ea_podman.conf
+# Admin module (EA4-315) and the ea_podman addon feature. install renames each
+# source to its required name.
+mkdir -p $DEB_INSTALL_ROOT/usr/local/cpanel/Cpanel/Admin/Modules/Cpanel
+install -p -m 0644 $SOURCE24 $DEB_INSTALL_ROOT/usr/local/cpanel/Cpanel/Admin/Modules/Cpanel/ea_podman.pm
+mkdir -p $DEB_INSTALL_ROOT/usr/local/cpanel/whostmgr/addonfeatures
+install -p -m 0644 $SOURCE25 $DEB_INSTALL_ROOT/usr/local/cpanel/whostmgr/addonfeatures/ea_podman
 
-# UPCP install-task and UAPI module — both install as EAPodman.pm, to different
-# dirs. install renames SOURCE12 (Cpanel-API-EAPodman.pm) to the required name.
-mkdir -p $DEB_INSTALL_ROOT/usr/local/cpanel/install
-install -p -m 0644 $SOURCE11 $DEB_INSTALL_ROOT/usr/local/cpanel/install/EAPodman.pm
+# UAPI module. install renames SOURCE12 (Cpanel-API-EAPodman.pm) to the
+# required name.
 mkdir -p $DEB_INSTALL_ROOT/usr/local/cpanel/Cpanel/API
 install -p -m 0644 $SOURCE12 $DEB_INSTALL_ROOT/usr/local/cpanel/Cpanel/API/EAPodman.pm
 

@@ -154,7 +154,7 @@ sub ensure_su_login {    # needed when $user is from root `su - $user` / AccessI
 # dir/manager — not something the privileged setup the die above names can be
 # blamed for. This note is printed *because* the root-side bypass did not get
 # the manager up, so it must not claim that it did. (EA4-319; the bypass is
-# ea_podman::subids::with_user_manager_unmasked().)
+# ea_podman::subids::ensure_user_manager_carveouts().)
 sub _masked_user_manager_note {
 
     # subids.pm is loaded by the guarded sibling require at the top of this file,
@@ -459,6 +459,12 @@ sub stop_user_container {
     return;
 }
 
+# What the last failed `podman create` said, for the caller to build its error
+# from. Undef after a success, so a later failure is never mistaken for it.
+# A package variable rather than a return value because create_user_container()
+# returns a boolean that two callers test.
+our $_create_output;
+
 sub create_user_container {
     my ( $container_name, @start_args ) = @_;
     validate_user_container_name($container_name);
@@ -480,20 +486,132 @@ sub create_user_container {
         @ulimit = ( "--ulimit" => "nproc=$cap:$cap" );
     }
 
-    return podman( 'create', "--name" => $container_name, @ulimit, @start_args );
+    my ( $ok, $said ) = _podman_create_captured( 'create', "--name" => $container_name, @ulimit, @start_args );
+    $_create_output = $ok ? undef : $said;
+
+    return $ok;
+}
+
+# The shell-out create_user_container() goes through. Its own sub so a test can
+# supply what podman said without podman.
+#
+# Runs podman in a child whose stdout and stderr are one pipe, and echoes what
+# arrives as it arrives, so a person at a terminal still sees an image pull's
+# progress live and keeps what podman said for the error message. Deliberately
+# not Capture::Tiny::tee: that starts helper subprocesses, which time out inside
+# the compiled ea-podman binary ("Timed out waiting for subprocesses to start"),
+# and that aborted the install before its cleanup ran. (EA4-335)
+#
+# Falls back to a plain, uncaptured podman() if the pipe or the fork is refused,
+# so this can only ever lose the message, never the create.
+sub _podman_create_captured {
+    my @args = @_;
+
+    pipe( my $reader, my $writer ) or return ( podman(@args), '' );
+
+    # What system() did for free, and this fork/exec no longer does:
+    #   * INT and QUIT are ignored in the parent while the child runs. A Ctrl-C
+    #     reaches podman through the terminal's process group; ea-podman must
+    #     outlive it to see the create fail and run its cleanup / rollback.
+    #   * TERM and HUP (system() never covered these) are forwarded to podman,
+    #     which is the only process that could act on them, and ea-podman then
+    #     waits for it. Without that, a kill aimed at ea-podman alone would end
+    #     it mid-create with the pipe and the child both orphaned.
+    # `local`, so every return path restores the caller's handlers.
+    my ( $child, @got );
+    my $forward = sub {
+        push @got, $_[0];
+        kill( $_[0], $child ) if $child;
+    };
+    local @SIG{qw(INT QUIT TERM HUP)} = ( 'IGNORE', 'IGNORE', $forward, $forward );
+
+    my $pid = fork();
+    if ( !defined $pid ) {
+        close $reader;
+        close $writer;
+        return ( podman(@args), '' );
+    }
+
+    if ( !$pid ) {
+
+        # IGNORE survives exec, so podman would never see a Ctrl-C. Put every
+        # disposition back before anything else.
+        @SIG{qw(INT QUIT TERM HUP)} = ('DEFAULT') x 4;
+
+        close $reader;
+        open( STDOUT, ">&", $writer ) or kill( "KILL", $$ );
+        open( STDERR, ">&", $writer ) or kill( "KILL", $$ );
+        close $writer;
+
+        # If exec fails, KILL rather than exit so a child never runs the
+        # parent's END blocks or destructors.
+        exec( "podman", @args ) or kill( "KILL", $$ );
+    }
+
+    close $writer;
+
+    # A TERM or HUP that landed between fork() and this line had no pid to go to.
+    $child = $pid;
+    kill( $_, $pid ) for grep { $_ eq 'TERM' || $_ eq 'HUP' } @got;
+
+    my $said = '';
+    while (1) {
+        my $n = sysread( $reader, my $chunk, 65536 );
+        if ( !defined $n ) {
+            next if $! + 0 == 4;    # EINTR
+            last;
+        }
+        last if !$n;
+
+        print STDERR $chunk;
+        $said .= $chunk;
+
+        # Only the tail is ever used; do not hold a whole verbose pull.
+        $said = substr( $said, -65536 ) if length($said) > 131072;
+    }
+    close $reader;
+
+    1 while waitpid( $pid, 0 ) == -1 && $! + 0 == 4;    # EINTR
+
+    # If podman finished anyway the create worked and is reported as such; the
+    # note is only for the failure the interruption caused.
+    my $ok = $? == 0 ? 1 : 0;
+    if ( !$ok && @got ) {
+        my %seen;
+        my $names = join( ", ", map { "SIG$_" } grep { !$seen{$_}++ } @got );
+        $said .= "\n" if length($said) && $said !~ /\n\z/;
+        $said .= "ea-podman was interrupted ($names) while podman was creating the container.\n";
+    }
+    return ( $ok, $said );
 }
 
 # The RLIMIT_NPROC hard cap of the calling user's systemd --user manager (which
-# is what actually starts the container). Read from the system manager so it
-# works without the user bus. Returns undef when the limit is unlimited/unknown
-# (nothing to pin — an unlimited manager applies an unlimited bake just fine).
+# is what actually starts the container). Asked of the system manager first, so
+# it works without the user bus. CloudLinux's D-Bus policy refuses an
+# unprivileged uid any systemd1 property read ("Access denied"), so fall back
+# to asking the user manager itself, over its private socket under
+# XDG_RUNTIME_DIR, for the default it gives its units — the container unit sets
+# no LimitNPROC of its own. Without that fallback nothing was pinned there and a
+# container created from cpsrvd (nproc=unlimited) never started (EA4-315).
+# Returns undef when the limit is unlimited/unknown (nothing to pin — an
+# unlimited manager applies an unlimited bake just fine).
 sub _user_manager_nproc_cap {
     my $uid = $>;
 
-    chomp( my $cap = `systemctl show user\@$uid.service -p LimitNPROC --value 2>/dev/null` );
-    chomp( $cap = `systemctl show -p DefaultLimitNPROC --value 2>/dev/null` ) if $cap !~ /^[0-9]+$/;
+    for my $query ( [ "show", "user\@$uid.service", "-p", "LimitNPROC", "--value" ], [ "show", "-p", "DefaultLimitNPROC", "--value" ], [ "--user", "show", "-p", "DefaultLimitNPROC", "--value" ] ) {
+        my $cap = _systemctl_value( @{$query} );
+        return $cap if $cap =~ /^[0-9]+$/;
+    }
 
-    return $cap =~ /^[0-9]+$/ ? $cap : undef;
+    return;
+}
+
+# Its own sub so tests have a seam that does not need systemd.
+sub _systemctl_value {
+    my @args = map { quotemeta } @_;
+    my $val  = `systemctl @args 2>/dev/null` // '';
+    chomp($val);
+    return $val;
 }
 
 sub get_container_service_name {
@@ -668,7 +786,7 @@ sub _upgrade_is_needed {
 
     if ( length( $pkg // '' ) ) {
         my ( $container_ver, $package_ver ) = eval { get_pkg_versions( $container_name => $pkg ) };
-        return 1 if $@;    # cannot tell
+        return 1 if $@;                                                          # cannot tell
         return 1 if !defined $container_ver || $container_ver ne $package_ver;
         return $image_moved->();
     }
@@ -713,19 +831,68 @@ sub _podman_pull_once {
     return 0;
 }
 
-# Why the last pull of this reference failed, as far as we can tell.
+# What podman's own words say went wrong, as far as we can tell. One classifier
+# for a failed pull and a failed create, because `podman create` pulls the image
+# itself when it is not cached and so fails for the same reasons (EA4-335).
 #
-# A registry rate limit is a distinguishable and actionable condition, and it is
+# A registry rate limit and a full disk are distinguishable and actionable, and
 # worth telling apart from a typo'd image or a DNS failure -- the remedies are
-# nothing alike. It also became much easier to hit: since EA4-325 Increment B
-# every `upgrade` pulls, where none did before.
+# nothing alike. The rate limit also became much easier to hit: since EA4-325
+# Increment B every `upgrade` pulls, where none did before.
+sub _podman_failure_reason {
+    my ($out) = @_;
+
+    $out //= '';
+    return "rate_limit" if $out =~ m/toomanyrequests|rate limit/i;
+    return "disk_quota" if $out =~ m/disk quota exceeded|no space left on device/i;
+
+    return "unknown";
+}
+
+# Why the last pull of this reference failed, as far as we can tell.
 sub _pull_failure_reason {
     my ($image_ref) = @_;
 
-    my $out = $_pull_error{$image_ref} // '';
-    return "rate_limit" if $out =~ m/toomanyrequests|rate limit/i;
+    return _podman_failure_reason( $_pull_error{$image_ref} );
+}
 
-    return "unknown";
+# The most of podman's output worth putting in an error message.
+my $CREATE_OUTPUT_CAP = 2048;
+
+# podman's output made safe to put in an exception: bounded to its tail (the
+# error is at the end), and stripped of what would corrupt a log or a terminal.
+sub _podman_output_tail {
+    my ($out) = @_;
+
+    return '' if !defined $out;
+
+    $out =~ s/\r\n?/\n/g;                          # a progress bar redraws with \r
+    $out =~ s/\e\[[0-9;?]*[ -\/]*[@-~]//g;          # ANSI escape sequences
+    $out =~ tr/\x00-\x08\x0b-\x1f\x7f//d;           # other control characters, keeping \n and \t
+    $out =~ s/\s+\z//;
+
+    if ( length($out) > $CREATE_OUTPUT_CAP ) {
+        $out = substr( $out, -$CREATE_OUTPUT_CAP );
+        $out =~ s/\A[\x80-\xBF]+//;                   # do not start on half a UTF-8 character
+    }
+
+    $out =~ s/\A\s+//;
+    return $out;
+}
+
+# The text a failed create appends to its error: a plain sentence when the cause
+# is one the account owner can act on, then what podman said. Empty when podman
+# said nothing, so the message is exactly what it was. Argument-pure so it is
+# unit-testable. (EA4-335)
+sub _create_failure_note {
+    my ($out) = @_;
+
+    my $tail = _podman_output_tail($out);
+    return '' if !length $tail;
+
+    my $lead = _podman_failure_reason($tail) eq "disk_quota" ? "The account has run out of disk space or reached its disk quota. Free up space, or ask your provider for a larger quota, then try again.\n" : '';
+
+    return $lead . "podman reported:\n$tail\n";
 }
 
 # The local image ID a reference currently resolves to, or undef when podman has
@@ -771,9 +938,9 @@ sub _container_ports_all_loopback {
     return if $? != 0 || !length( $json // '' );
 
     my $bindings = eval { Cpanel::JSON::Load($json) };
-    return if $@;
-    return 1 if !$bindings;    # "null": publishes nothing
-    return if ref $bindings ne 'HASH';
+    return   if $@;
+    return 1 if !$bindings;                # "null": publishes nothing
+    return   if ref $bindings ne 'HASH';
 
     for my $host_list ( values %{$bindings} ) {
         for my $binding ( @{ $host_list || [] } ) {
@@ -851,7 +1018,6 @@ sub reset_container_unit_failure {
     my ($container_name) = @_;
     return _systemctl_quiet( "reset-failed", get_container_service_name($container_name) );
 }
-
 
 # Capturing sibling of _systemctl_quiet(): the value of one unit property.
 # _systemctl_quiet() throws stdout away, so it cannot read one. Its own named sub
@@ -1036,15 +1202,12 @@ sub verify_container_started {
       if $verdict eq "unknown" || $verdict eq "stopped";
 
     my $lead = $opts{lead} // "“$container_name” was upgraded, but it did not come back up";
-    my $note = defined $opts{note}
+    my $note =
+      defined $opts{note}
       ? $opts{note}
       : "The upgrade itself completed — the container was recreated from the image its configuration names — so this is the container declining to run, not a half-applied upgrade. The previous container is gone either way.\n";
 
-    die "$lead: $what{$verdict}.\n"
-      . $note
-      . $hint
-      . "Find out why with `systemctl --user status $unit`, `journalctl --user -u $unit`, and the container's own output, `podman logs $container_name` (as root: `su - $user -c '…'`).\n"
-      . "Once the cause is fixed, `ea-podman upgrade $container_name` runs the whole thing again, or `systemctl --user start $unit` just starts it.\n";
+    die "$lead: $what{$verdict}.\n" . $note . $hint . "Find out why with `systemctl --user status $unit`, `journalctl --user -u $unit`, and the container's own output, `podman logs $container_name` (as root: `su - $user -c '…'`).\n" . "Once the cause is fixed, `ea-podman upgrade $container_name` runs the whole thing again, or `systemctl --user start $unit` just starts it.\n";
 }
 
 # Install-time hook for the cpanel-webapp-plugin (--webapp-dir). Package
@@ -1105,7 +1268,7 @@ sub _ensure_latest_container {
     if ( my $pkg = get_pkg_from_container_name($container_name) ) {
         my $pkg_dir = "/opt/cpanel/$pkg";
         if ( -f "$pkg_dir/ea-podman.json" ) {
-            die "Upgrade takes no start args\n" if $isupgrade && @start_args;
+            die "Upgrade takes no start args\n"                                                       if $isupgrade && @start_args;
             die "--webapp-dir and --no-start are only supported when installing an arbitrary image\n" if grep { m/^--(?:webapp-dir|no-start)/ } @start_args;
             my @given_start_args = @start_args;
 
@@ -1283,10 +1446,10 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
         # Restore has no registry entry to carry `webapp` over (it comes from
         # the backup file instead), but upgrade does, so it's read directly.
         $webapp =
-              defined $webapp_source_dir ? 1
-            : $isrestore                 ? ( $opts->{webapp} ? 1 : 0 )
-            : $isupgrade                 ? _is_registered_webapp($container_name)
-            :                               0;
+            defined $webapp_source_dir ? 1
+          : $isrestore                 ? ( $opts->{webapp} ? 1 : 0 )
+          : $isupgrade                 ? _is_registered_webapp($container_name)
+          :                              0;
 
         # then add the ports if any, binding web app ports to loopback only
         # so the reverse proxy (which always talks to 127.0.0.1) remains the
@@ -1323,7 +1486,8 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             # webapp plugin's Redeploy is the force caller (CPANEL-56732), and a
             # Docker Hub outage or a rate limit must not break Redeploy, so warn
             # and carry on from the cached image.
-            my $rate_limited = _pull_failure_reason($image_arg) eq "rate_limit";
+            my $pull_reason  = _pull_failure_reason($image_arg);
+            my $rate_limited = $pull_reason eq "rate_limit";
 
             # Deliberately vague when we do not know. A bad image name, a DNS
             # failure and an auth refusal all land here, and naming the wrong one
@@ -1332,7 +1496,8 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             my $why =
               $rate_limited
               ? "the registry is rate limiting this server"
-              : "the pull failed";
+              : $pull_reason eq "disk_quota" ? "the account has run out of disk space or reached its disk quota"
+              :                                "the pull failed";
 
             # Spelled out because the arithmetic is what an operator needs, and
             # nothing else tells them: the budget is per IP for an
@@ -1342,11 +1507,7 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
               ? "Docker Hub meters manifest requests, and an unauthenticated server shares one budget per IP address. Since every upgrade now checks the image, a sweep costs one request per distinct image — `upgrade_containers --all` over ten containers on one image costs one, not ten.\n"
               : "";
 
-            die "Could not pull “$image_arg”: $why, so there is no way to tell whether “$container_name” is out of date.\n"
-              . "It has NOT been touched and is still running whatever it was running.\n"
-              . $rate_note
-              . ( $rate_limited ? "Retry once that clears" : "Fix that and retry" )
-              . ", or force the recreate from the image already cached locally:  ea-podman upgrade --force $container_name\n"
+            die "Could not pull “$image_arg”: $why, so there is no way to tell whether “$container_name” is out of date.\n" . "It has NOT been touched and is still running whatever it was running.\n" . $rate_note . ( $rate_limited ? "Retry once that clears" : "Fix that and retry" ) . ", or force the recreate from the image already cached locally:  ea-podman upgrade --force $container_name\n"
               if !$force;
 
             warn "Could not pull “$image_arg” ($why); recreating “$container_name” from the image already cached locally.\n";
@@ -1410,6 +1571,11 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
     if ( defined $webapp_source_dir ) {
         system( $webapp_dir_setup_script, $webapp_source_dir, $container_dir );
         if ( $? != 0 ) {
+
+            # The ports were reserved above; an install that never produced a
+            # container must not keep them. (CPANEL-57608)
+            eval { remove_port_authority_ports($container_name) };
+            warn "Could not release the ports reserved for “$container_name”: $@" if $@;
             deregister_container($container_name);
             chdir("/");
             eval { File::Path::Tiny::rm($container_dir) };
@@ -1419,13 +1585,18 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
 
     if ( !create_user_container( $container_name, @start_args ) ) {
 
+        # What podman said about THIS create, taken before anything else runs:
+        # the upgrade rollback below creates a container again and would replace
+        # it with the rollback's own output. (EA4-335)
+        my $create_note = _create_failure_note($_create_output);
+
         # Three operations, three different right answers. This used to be one
         # `if ( !$isupgrade )`, which meant restore took the install cleanup —
         # deregistering and deleting the directory perform_user_restore() had just
         # extracted from the user's backup, their only copy of it. (EA4-325)
         if ($isupgrade) {
             my $rollback = _rollback_failed_upgrade( $container_name, $prev_image_ref, $prev_image_id, \@start_args );
-            die _failed_upgrade_message( $container_name, $container_dir, $prev_image_ref, $prev_image_id, $rollback );
+            die _failed_upgrade_message( $container_name, $container_dir, $prev_image_ref, $prev_image_id, $rollback, $create_note );
         }
         elsif ($isrestore) {
 
@@ -1433,9 +1604,17 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             # data just extracted from the backup, and perform_user_restore()
             # removed ~/ea-podman.d before the tarball went in, so there is no
             # other copy.
-            die _failed_restore_message( $container_name, $container_dir );
+            die _failed_restore_message( $container_name, $container_dir, $create_note );
         }
         else {
+
+            # Give the reserved ports back, or the retry reuses this name, reserves
+            # a second port under it, and the reverse proxy stays wired to the
+            # first, which nothing listens on. Upgrade and restore keep theirs
+            # (EA4-325); an install has no container left to hold them.
+            # Not allowed to mask the create failure below. (CPANEL-57608)
+            eval { remove_port_authority_ports($container_name) };
+            warn "Could not release the ports reserved for “$container_name”: $@" if $@;
             deregister_container($container_name);
 
             # The moved web application is the user's only copy of their
@@ -1453,7 +1632,7 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             chdir("/");
             eval { File::Path::Tiny::rm($container_dir) };
 
-            die "Failed to create container\n";
+            die "Failed to create container\n" . $create_note;
         }
     }
 
@@ -1559,8 +1738,8 @@ sub _pinned_image_description {
     # Enough to identify it in `podman images` without wrapping the line.
     my $short = defined $prev_image_id ? substr( $prev_image_id, 0, 12 ) : undef;
 
-    return "“$prev_image_ref” (image $short — the exact image it had been running)" if defined $short && defined $prev_image_ref;
-    return "image $short (the exact image it had been running)"                                if defined $short;
+    return "“$prev_image_ref” (image $short — the exact image it had been running)"                                                                                         if defined $short && defined $prev_image_ref;
+    return "image $short (the exact image it had been running)"                                                                                                             if defined $short;
     return "“$prev_image_ref” (the image reference it was created from — podman could not report the image ID, so if that tag has moved since, this is not the same image)" if defined $prev_image_ref;
 
     return "the image its configuration names — podman could not report what the container had been running, so there was nothing to pin back";
@@ -1569,44 +1748,33 @@ sub _pinned_image_description {
 # Kept argument-pure (names and what the rollback achieved in, string out) so it
 # is unit-testable. House style: name the condition, then name the recovery.
 sub _failed_upgrade_message {
-    my ( $container_name, $container_dir, $prev_image_ref, $prev_image_id, $status ) = @_;
+    my ( $container_name, $container_dir, $prev_image_ref, $prev_image_id, $status, $create_note ) = @_;
 
     my $pinned = _pinned_image_description( $prev_image_ref, $prev_image_id );
 
-    my $intact =
-        "Nothing was deregistered and nothing was deleted: “$container_name” is still registered at the version it was on, its assigned ports are still held, and “$container_dir” is untouched.\n"
-      . "Re-run once the cause of the create failure is fixed:  ea-podman upgrade $container_name\n";
+    my $intact = "Nothing was deregistered and nothing was deleted: “$container_name” is still registered at the version it was on, its assigned ports are still held, and “$container_dir” is untouched.\n" . "Re-run once the cause of the create failure is fixed:  ea-podman upgrade $container_name\n";
 
-    my $head = "Failed to upgrade “$container_name”: the new container could not be created.\n";
+    my $head = "Failed to upgrade “$container_name”: the new container could not be created.\n" . ( $create_note // '' );
 
-    return $head
-      . "The previous container could not be recreated from $pinned either, so “$container_name” is not running and has no systemd unit.\n"
-      . $intact
+    return $head . "The previous container could not be recreated from $pinned either, so “$container_name” is not running and has no systemd unit.\n" . $intact
       if !$status->{created};
 
-    return $head
-      . "The previous container was recreated from $pinned, but its systemd unit could not be enabled, so it will not start now or at boot.\n"
-      . $intact
+    return $head . "The previous container was recreated from $pinned, but its systemd unit could not be enabled, so it will not start now or at boot.\n" . $intact
       if !$status->{enabled};
 
-    return $head
-      . "The previous container was recreated from $pinned and its unit is enabled, but the unit did not start. Check `systemctl --user status "
-      . get_container_service_name($container_name) . "`.\n"
-      . $intact
+    return $head . "The previous container was recreated from $pinned and its unit is enabled, but the unit did not start. Check `systemctl --user status " . get_container_service_name($container_name) . "`.\n" . $intact
       if !$status->{started};
 
-    return $head
-      . "The previous container was recreated from $pinned and is running again, so service is restored — but the upgrade did not happen.\n"
-      . "“$container_dir” was NOT rolled back: a package's ea-podman-local-dir-upgrade hook runs before the container is created and has no reverse step, so any changes it made remain.\n"
-      . $intact;
+    return $head . "The previous container was recreated from $pinned and is running again, so service is restored — but the upgrade did not happen.\n" . "“$container_dir” was NOT rolled back: a package's ea-podman-local-dir-upgrade hook runs before the container is created and has no reverse step, so any changes it made remain.\n" . $intact;
 }
 
 # Kept argument-pure so it is unit-testable.
 sub _failed_restore_message {
-    my ( $container_name, $container_dir ) = @_;
+    my ( $container_name, $container_dir, $create_note ) = @_;
 
     return
         "Failed to restore “$container_name”: the container could not be created.\n"
+      . ( $create_note // '' )
       . "“$container_dir” was left in place. It holds the data just extracted from the backup and is the only copy of it, so a failed restore never removes it. “$container_name” also stays registered, so it remains visible to `ea-podman containers` and to the account-removal hooks.\n"
       . "Ports were assigned to “$container_name” for this restore and are still held. `ea-podman restore` takes a fresh set every run, so retry with `upgrade` rather than re-running the restore, or the old reservations are stranded.\n"
       . "To retry in place:  ea-podman upgrade $container_name   (recreates it from “$container_dir/ea-podman.json” using the ports already assigned)\n"
@@ -1623,9 +1791,9 @@ sub _validate_webapp_dir {
     die "--webapp-dir requires the absolute path of the staged directory to move into the container directory. e.g. --webapp-dir=/home/user/.cpanel/webapp-staging/my-app\n" if !length( $val // '' );
 
     $val =~ s{/+$}{};
-    die "--webapp-dir must be an absolute path\n"                    if $val !~ m{^/};
-    die "--webapp-dir “$val” is not a directory\n"                   if !-d $val;
-    die "--webapp-dir cannot be inside “$container_root”\n"          if "$val/" =~ m{^\Q$container_root\E/};
+    die "--webapp-dir must be an absolute path\n"           if $val !~ m{^/};
+    die "--webapp-dir “$val” is not a directory\n"          if !-d $val;
+    die "--webapp-dir cannot be inside “$container_root”\n" if "$val/" =~ m{^\Q$container_root\E/};
 
     return $val;
 }
@@ -1641,7 +1809,7 @@ sub _rewrite_webapp_mounts {
     my $rewrite = sub {
         my ($spec) = @_;
         my ( $host, $rest ) = split( m/:/, $spec, 2 );
-        return $spec if !defined $rest;                                # no host part (anonymous volume)
+        return $spec if !defined $rest;                              # no host part (anonymous volume)
         return $spec if $host ne $from && $host !~ m{^\Q$from\E/};
         substr( $host, 0, length($from) ) = $to;
         return "$host:$rest";
@@ -1883,8 +2051,7 @@ sub restore_containers_for_user {
     }
 
     if (@failed) {
-        die "Could not restore " . scalar(@failed) . " of " . scalar(@containers) . " container(s): " . join( ", ", map { "“$_”" } @failed ) . "\n"
-          . "Each one's error is above, and each is recoverable in place with `ea-podman upgrade <CONTAINER_NAME>`.\n";
+        die "Could not restore " . scalar(@failed) . " of " . scalar(@containers) . " container(s): " . join( ", ", map { "“$_”" } @failed ) . "\n" . "Each one's error is above, and each is recoverable in place with `ea-podman upgrade <CONTAINER_NAME>`.\n";
     }
 
     return 1;
@@ -1910,7 +2077,7 @@ our $backup_max_age_default = 30 * 24 * 60 * 60;
 # variables so a test can age a directory without waiting a month, and can be a
 # sessionless account without actually becoming one -- while the ctime read
 # itself stays real, which is the part worth testing.
-our $now                   = sub { return time() };
+our $now                    = sub { return time() };
 our $user_session_reachable = sub { return $> == 0 || -d "/run/user/$>" ? 1 : 0 };
 
 # Does podman know this name at all, running or not? `ps -a`, not `ps`: a
@@ -2030,7 +2197,7 @@ sub clean_backups {
     # ~/ea-podman.d could not be stat()ed or read is NOT that -- it is an
     # account nothing was examined for -- and reporting it as empty is how a
     # sweep says "clean" about something it never looked at.
-    my $root = _get_container_root();
+    my $root    = _get_container_root();
     my @root_st = stat($root);
     if ( !@root_st ) {
         return \%result if $!{ENOENT} || $!{ENOTDIR};
@@ -2113,7 +2280,12 @@ sub remove_port_authority_ports {
     my ($container_name) = @_;
     if ( $> == 0 ) {
         my @container_ports = _get_current_ports($container_name);
+
+        # `take` refuses an empty list, and a container with no ports is not a failure
+        return if !@container_ports;
+
         system( "/scripts/cpuser_port_authority", take => root => @container_ports );
+        die "`cpuser_port_authority take` exited unclean ($?)\n" if $? != 0;
     }
     else {
         Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'TAKE', $container_name );
@@ -2353,7 +2525,10 @@ sub remove_container_by_name {
 
     print "Removing $container_name\n";
 
-    ea_podman::util::remove_port_authority_ports($container_name);
+    # A failure here used to go unnoticed; keep it from stopping the removal
+    eval { ea_podman::util::remove_port_authority_ports($container_name) };
+    warn "Could not release the ports reserved for “$container_name”: $@" if $@;
+
     ea_podman::util::uninstall_container($container_name);
     ea_podman::util::deregister_container($container_name);
     ea_podman::util::move_container_dir($container_name);
@@ -2420,6 +2595,12 @@ sub _release_deleted_user_session {
 
     return 0 if !defined $user || $user eq "root";
 
+    # The account's own user-manager unit does not depend on whether we ever
+    # granted a linger, only on whether we wrote the unit: enable-linger can fail
+    # after it. getpwnam() cannot find the uid of a deleted account, so it is
+    # found among the units we wrote by having no account left. (EA4-321)
+    ea_podman::subids::release_deleted_user_carveout($user) if !defined getpwnam($user);
+
     # Only a linger we recorded granting is ours to disable, even for an account
     # that is gone.
     return 0 if !ea_podman::subids::user_has_granted_linger($user);
@@ -2477,8 +2658,7 @@ sub upgrade_containers_for_a_user {
     # turning into a silent success — which would re-create the very defect
     # EA4-325 exists to kill. (EA4-325)
     if (@failed) {
-        die "Failed to upgrade " . scalar(@failed) . " of " . scalar(@containers) . " container(s) for “$user”: " . join( ", ", @failed ) . "\n"
-          . "Each failure is reported above. Once its cause is fixed, re-run a single one with `ea-podman upgrade <CONTAINER_NAME>`.\n";
+        die "Failed to upgrade " . scalar(@failed) . " of " . scalar(@containers) . " container(s) for “$user”: " . join( ", ", @failed ) . "\n" . "Each failure is reported above. Once its cause is fixed, re-run a single one with `ea-podman upgrade <CONTAINER_NAME>`.\n";
     }
 
     return 1;
@@ -2667,6 +2847,11 @@ sub _user_session_is_releasable {
 sub release_user_session_as_root {
     my ($user) = @_;
 
+    # Whichever account this is for, it is a chance to finish taking back the unit
+    # file of one released earlier while a login session still held its manager.
+    # Nothing else calls back for that account. (EA4-321)
+    eval { ea_podman::subids::reconcile_carveouts(); 1 } or warn "Could not finish removing released accounts' user manager units: $@";
+
     return 0 if !_user_session_is_releasable($user);
 
     if ( !ea_podman::subids::remove_user_session($user) ) {
@@ -2807,10 +2992,10 @@ sub _get_tarball_name {
 
 our $num_backups_to_retain = 3;
 
-sub perform_user_backup {
+# This user's registry entries, each with the ports it holds now. The manifest
+# is the only place those ports are recorded.
+sub _user_manifest_entries {
     my $user = getpwuid($>);
-
-    die "Cannot be run as root\n" if ( $> == 0 );
 
     my $containers_hr = ea_podman::util::load_known_containers();
 
@@ -2818,14 +3003,42 @@ sub perform_user_backup {
     @containers = grep { $_->{user} eq $user } @containers;
     @containers = sort { $a->{user} cmp $b->{user} } @containers;
 
+    foreach my $container (@containers) {
+        my @curr_ports = ea_podman::util::_get_current_ports( $container->{container_name} );
+        $container->{curr_ports} = \@curr_ports;
+    }
+
+    return @containers;
+}
+
+# What the pkgacct hook runs. The homedir backup already carries ~/ea-podman.d,
+# so the manifest is all it is missing; a tarball of ea-podman.d would put every
+# container's files into the account backup a second time.
+sub write_user_manifest {
+    die "Cannot be run as root\n" if ( $> == 0 );
+
+    my @containers = _user_manifest_entries();
+
     if ( @containers == 0 ) {
         print "There are no containers\n";
         return 1;
     }
 
-    foreach my $container (@containers) {
-        my @curr_ports = ea_podman::util::_get_current_ports( $container->{container_name} );
-        $container->{curr_ports} = \@curr_ports;
+    Path::Tiny::path( ea_podman::util::get_backup_filename() )->spew( Cpanel::JSON::pretty_canonical_dump( \@containers ) );
+
+    return;
+}
+
+sub perform_user_backup {
+    my $user = getpwuid($>);
+
+    die "Cannot be run as root\n" if ( $> == 0 );
+
+    my @containers = _user_manifest_entries();
+
+    if ( @containers == 0 ) {
+        print "There are no containers\n";
+        return 1;
     }
 
     my $homedir = ( getpwuid($>) )[7];
@@ -2867,13 +3080,70 @@ sub perform_user_backup {
     return;
 }
 
+# Restore for an account whose files have already come back (restorepkg, a
+# transfer): ~/ea-podman.d and the manifest are in the homedir, but the registry
+# knows nothing of the containers. Nothing is torn down or unpacked, because the
+# directories are exactly what was just restored.
+#
+# A container the registry already has is left alone. Recreating it would
+# allocate it a second set of ports without releasing the first, and the only
+# thing that releases them (remove_container_by_name) also moves the directory
+# aside to .bak.
+sub _restore_from_manifest {
+    my ( $homedir, $user ) = @_;
+
+    die "Cannot be run as root\n" if ( $> == 0 );
+
+    my $backup_file = "$homedir/ea_podman_backup_$user.json";
+    if ( !-e $backup_file ) {
+        die "The container backup file is not present ($backup_file)\n";
+    }
+
+    my @containers = @{ Cpanel::JSON::LoadFile($backup_file) };
+
+    # Dies if the registry cannot be read: guessing would recreate containers it
+    # may already have.
+    my $registered = ea_podman::util::load_known_containers();
+
+    my @to_restore;
+    foreach my $container (@containers) {
+        if ( exists $registered->{ $container->{container_name} } ) {
+            print "“$container->{container_name}” is already registered; leaving it as it is\n";
+            next;
+        }
+        push @to_restore, $container;
+    }
+
+    # Every directory must be there before anything is created.
+    foreach my $container (@to_restore) {
+        my $container_dir = "$homedir/ea-podman.d/$container->{container_name}";
+
+        if ( !-d $container_dir ) {
+            die "Container dir ($container_dir) does not exist.\n";
+        }
+    }
+
+    if ( !@to_restore ) {
+        print "Nothing to restore\n";
+        return;
+    }
+
+    ea_podman::util::init_user( creating => 1 );
+    ea_podman::util::restore_containers_for_user(@to_restore);
+    _warn_if_ports_changed(@to_restore);
+
+    return;
+}
+
 sub perform_user_restore {
     my ($backup_tarball) = @_;
 
     my $homedir = ( getpwuid($>) )[7];
     my $user    = getpwuid($>);
 
-    $backup_tarball = Cwd::abs_path( $backup_tarball // '' ) || die "Please pass in the path to the backup file you want to restore.\n";
+    return _restore_from_manifest( $homedir, $user ) if !defined $backup_tarball;
+
+    $backup_tarball = Cwd::abs_path( $backup_tarball // '' )                                || die "Please pass in the path to the backup file you want to restore.\n";
     die "The backup file is not a readable file ($backup_tarball)\n" if !-f $backup_tarball || !-r _;
 
     # Remove any existing containers
@@ -2932,6 +3202,13 @@ sub perform_user_restore {
     # session is needed.
     ea_podman::util::init_user( creating => 1 );
     ea_podman::util::restore_containers_for_user(@containers);
+    _warn_if_ports_changed(@containers);
+
+    return;
+}
+
+sub _warn_if_ports_changed {
+    my (@containers) = @_;
 
     foreach my $container (@containers) {
         my @new_ports = ea_podman::util::_get_current_ports( $container->{container_name} );
@@ -2964,6 +3241,213 @@ The ports currently assigned to the container are: $new_ports
             };
         }
     }
+}
+
+##################################################
+#### verbs shared by the UAPI and admin module ##
+##################################################
+#
+# The EAPodman UAPI (Cpanel::API::EAPodman, cpsrvd as the cpuser) and the
+# ea_podman admin module's lifecycle actions (root in cpsrvd, forked and fully
+# dropped to the cpuser) run the same verb bodies, so a verb behaves the same
+# whichever way the call arrives. Each expects to already be running as the
+# cpuser. (EA4-315)
+
+# Prime this (already unprivileged, cpuser) process for rootless podman the
+# way the CPANEL-54037 verification showed is required, then run $code.
+#
+# init_user() does the real work: as root (via the ENSURE_USER admin action) it
+# allocates subuid/subgid and runs `loginctl enable-linger`, which creates
+# /run/user/<uid> and starts the user systemd manager; then it points this
+# process's XDG_RUNTIME_DIR/DBUS at that runtime dir. We clear any inherited
+# DBUS_SESSION_BUS_ADDRESS first so a stale value can't point podman at the
+# wrong bus.
+#
+# ea_podman::util (and init_user's check_proc) print progress/warnings to
+# STDOUT/STDERR. Under a synchronous API call that output would be
+# interleaved into — and corrupt — the response, so capture it. On failure the
+# captured text is appended to the exception so the real error is debuggable
+# instead of a bare "Failed to create container".
+sub run_in_user_session {
+    my ( $code, %opts ) = @_;
+
+    local $ENV{XDG_RUNTIME_DIR} = "/run/user/$>";
+    local $ENV{DBUS_SESSION_BUS_ADDRESS};
+    delete $ENV{DBUS_SESSION_BUS_ADDRESS};
+
+    # Run from a working directory the cpuser can stat. cpsrvd may hand us a
+    # cwd inherited from root (e.g. /root, mode 0700) that the dropped cpuser
+    # cannot enter, which breaks rootless podman. (CPANEL-54037: cpsrvd runs
+    # OUTSIDE any CageFS cage, so this — plus the privileged enable-linger
+    # bootstrap — is all that jailshell/cagefs users need.)
+    if ( my $home = ( getpwuid($>) )[7] ) {
+        chdir($home);    # best-effort; a failed chdir simply leaves cwd as-is
+    }
+
+    require Capture::Tiny;
+    my ( @rv, $err );
+    my $output = Capture::Tiny::capture_merged(
+        sub {
+            local $@;
+            eval {
+                init_user( creating => $opts{creating} );
+                @rv = $code->();
+                1;
+            } or $err = $@ || "ea-podman: unknown error";
+        }
+    );
+
+    if ( defined $err ) {
+        chomp $err;
+        die length($output) ? "$err\n$output" : "$err\n";
+    }
+
+    return wantarray ? @rv : $rv[0];
+}
+
+# Ownership: act only on a container that is registered to the caller, so a
+# well-formed but foreign (or entirely made up) name cannot reach the
+# destructive helpers (CPANEL-55336).
+sub verify_own_container {
+    my ($container_name) = @_;
+
+    my $entry = load_known_containers()->{$container_name};
+    die "No such container for this account.\n" if !$entry || ( $entry->{user} // '' ) ne scalar getpwuid($>);
+    return 1;
+}
+
+sub api_list {
+    my $user          = scalar getpwuid($>);
+    my $containers_hr = load_known_containers();
+
+    my %mine;
+    for my $c ( grep { $_->{user} eq $user } values %{$containers_hr} ) {
+        $mine{ $c->{container_name} } = $c;
+    }
+
+    return \%mine;
+}
+
+# %args are the UAPI parameter names: name, image, cpuser_port (arrayref),
+# env (arrayref), accept_arbitrary_image_risk.
+sub api_install {
+    my (%args) = @_;
+
+    my $name = $args{name};
+    die "install requires a package or container name\n" if !length( $name // '' );
+
+    my @start_args;
+    push @start_args, map { "--cpuser-port=$_" } grep { length } @{ $args{cpuser_port} || [] };
+    push @start_args, map { ( '-e' => $_ ) } grep     { length } @{ $args{env}         || [] };
+    push @start_args, '--i-understand-the-risks-do-it-anyway' if $args{accept_arbitrary_image_risk};
+
+    # The image, when given, must be the last start arg.
+    push @start_args, $args{image} if length( $args{image} // '' );
+
+    # The one verb that needs a rootless session for an account that may not
+    # have a container yet, so it is the one that asks for it. (CPANEL-55309)
+    my $container_name = run_in_user_session(
+        sub { return install_container( $name, @start_args ) },
+        creating => 1,
+    );
+
+    return { container_name => $container_name };
+}
+
+# %opts: force (see upgrade_container).
+sub api_upgrade {
+    my ( $container_name, %opts ) = @_;
+
+    run_in_user_session( sub { upgrade_container( $container_name, force => ( $opts{force} ? 1 : 0 ) ); return 1; } );
+    return 1;
+}
+
+sub api_uninstall {
+    my ($container_name) = @_;
+
+    run_in_user_session(
+        sub {
+            validate_user_container_name($container_name);
+            verify_own_container($container_name);
+            remove_container_by_name($container_name);
+            return 1;
+        }
+    );
+
+    return 1;
+}
+
+# start / stop / restart
+sub api_lifecycle {
+    my ( $container_name, $action ) = @_;
+
+    die "Invalid action “$action”\n" if !grep { $_ eq $action } qw(start stop restart);
+
+    return run_in_user_session(
+        sub {
+            validate_user_container_name($container_name);
+            my $service = get_container_service_name($container_name);
+
+            # Before a bring-up and after a stop, never after a start — that
+            # would hide a real failure from status.
+            my $stopping = $action eq 'stop';
+            reset_container_unit_failure($container_name) if !$stopping;
+            my $rv = sysctl( $action => $service );
+            reset_container_unit_failure($container_name) if $stopping;
+
+            # Asymmetric on purpose (EA4-325). $rv used to be returned here and
+            # then thrown away by the callers, so every verb reported success
+            # whatever systemd did.
+            #
+            # A bring-up that did not happen is a failure the caller has to know
+            # about. A `stop` that returns non-zero is not the same thing: an
+            # already-stopped unit, a unit file that is gone, a container that has
+            # already been removed all land here, and all of them mean the thing
+            # the caller asked for is true. Raising on those would break teardown
+            # paths for no gain — the same reasoning as the reset_failed above.
+            if ( !$stopping ) {
+                die "Failed to $action “$container_name”: systemd refused the job. Check `systemctl --user status $service`.\n" if !$rv;
+
+                # $rv on its own is not enough, and this is the trap the CLI hit
+                # too: `systemctl start` reports success for a container that
+                # starts and then dies, so a bring-up that leaves the application
+                # down still looked like a win. Same poll the upgrade path uses.
+                verify_container_started(
+                    $container_name,
+                    lead => "“$container_name” did not $action",
+                    note => "",
+                );
+            }
+
+            return $rv;
+        }
+    );
+}
+
+# is-active/is-enabled communicate purely through their exit code (and, unlike
+# start/restart/enable, sysctl emits no cgroup warnings for them), so read the
+# boolean result rather than the human-readable status text.
+sub api_status {
+    my ($container_name) = @_;
+
+    return run_in_user_session(
+        sub {
+            validate_user_container_name($container_name);
+            my $service = get_container_service_name($container_name);
+            return {
+                running => sysctl( 'is-active'  => $service ),
+                enabled => sysctl( 'is-enabled' => $service ),
+            };
+        }
+    );
+}
+
+sub api_cmd {
+    my ( $container_name, $cmd_argv, $cd ) = @_;
+
+    die "cmd requires a command to run (the “arg” parameter)\n" if ref($cmd_argv) ne 'ARRAY' || !@{$cmd_argv};
+
+    return run_in_user_session( sub { return exec_in_container( $container_name, $cmd_argv, cd => $cd ) } );
 }
 
 1;

@@ -84,8 +84,8 @@
 #     ssh root@VM '/usr/local/cpanel/3rdparty/bin/perl /root/setup-remote-live.pl \
 #         --ea-podman=/root/ea-podman --plugin=/root/plugins --deploy'
 #
-# The ea-podman CLI is a COMPILED BINARY that embeds util.pm, so copying the
-# library alone changes nothing the CLI runs; and the plugin's modules are
+# Before EA4-315 the ea-podman CLI is a COMPILED BINARY that embeds util.pm, so
+# copying the library alone changes nothing the CLI runs; and the plugin's modules are
 # symlinks into a repo on a dev box but real files from the package on a VM.
 # Both failure modes are silent and both make this file pass while testing code
 # you are not looking at. The preflight handles both and states which copy is
@@ -303,13 +303,13 @@ sub note_both {
 #
 # Both of these are version checks in disguise, and both are asked of the thing
 # that actually runs rather than of a package database: an RPM version says
-# nothing about whether the compiled binary was rebuilt, or whether a dev box's
+# nothing about whether a compiled binary was rebuilt, or whether a dev box's
 # symlinks point at an older tree.
 #=============================================================================
 
 my ( $help_rc, $help_out ) = run_cmd( $EAP_BIN, 'help', 'upgrade' );
 plan skip_all => "this ea-podman does not know `upgrade --force`; it predates EA4-325 Increment B "
-  . "(recompile: bash /opt/cpanel/ea-podman/bin/compile.sh)"
+  . "(install the build under test; if its CLI is compiled, also run bash /opt/cpanel/ea-podman/bin/compile.sh)"
   if $help_out !~ m/--force/;
 
 my ( $clean_rc, $clean_out ) = run_cmd( $EAP_BIN, 'help', 'clean' );
