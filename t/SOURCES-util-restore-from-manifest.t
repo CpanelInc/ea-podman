@@ -87,6 +87,7 @@ sub _world {
     *ea_podman::util::init_user                   = sub { push @{ $log{init_user} }, [@_]; return };
     *ea_podman::util::restore_containers_for_user = sub { push @{ $log{restored} }, [@_]; return 1 };
     *ea_podman::util::_get_current_ports          = sub { return @{ $opts{ports} || [] } };
+    *ea_podman::util::_repair_webapp_proxies      = sub { return [] };
 
     @system_cmds = ();
 

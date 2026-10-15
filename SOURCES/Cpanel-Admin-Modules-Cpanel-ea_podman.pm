@@ -47,6 +47,11 @@ C<EAPodman> UAPI runs. See L<ea_podman::util/run_in_user_session>.
 # stray copy of this module never breaks cpsrvd's loading of it.
 our $LIB_DIR = '/opt/cpanel/ea-podman/lib/ea_podman';
 
+# The webapp plugin's modules, which are optional too. Package variables so tests
+# can point them at stand-ins.
+our $WEBAPP_REPAIR_MODULE   = '/usr/local/cpanel/Cpanel/WebApps/Repair.pm';
+our $WEBAPP_SCHEDULE_MODULE = '/usr/local/cpanel/Cpanel/WebApps/Schedule.pm';
+
 # The addon feature that gates creating and running containers. It is not in
 # any feature list when first installed, which leaves it enabled for every
 # account until an administrator disables it.
@@ -59,7 +64,7 @@ use constant _DEFAULT_ALARM => 120;
 my %LONG_RUNNING = map { $_ => 1800 } qw(INSTALL UPGRADE);
 
 # Everything else that brings up or reaches into a container.
-my %MEDIUM_RUNNING = map { $_ => 350 } qw(START STOP RESTART STATUS UNINSTALL CMD);
+my %MEDIUM_RUNNING = map { $_ => 350 } qw(START STOP RESTART STATUS UNINSTALL CMD REPAIR_WEBAPP_PROXIES);
 
 use constant _actions => (
 
@@ -90,6 +95,12 @@ use constant _actions => (
       RESTART
       STATUS
       CMD
+    ),
+
+    # the webapp plugin's proxy repair, which its own adminbin refuses the
+    # uncompiled CLI
+    qw(
+      REPAIR_WEBAPP_PROXIES
     ),
 );
 
@@ -434,6 +445,57 @@ sub CMD ( $self, $args = undef ) {
     return $self->_as_cpuser( sub { ea_podman::util::api_cmd( $container_name, $cmd_argv, $cd ) } );
 }
 
+##############################
+#### web application action ##
+##############################
+
+# Ownership: repairs only the caller's own wiring, through the plugin's root
+# entry point. Returns the { name, container, domain, was, now } records repaired.
+sub REPAIR_WEBAPP_PROXIES ($self) {
+    my $cpuser = $self->_debug_and_user();
+    $self->cpuser_has_feature_or_die(FEATURE);
+
+    return [] if !-e $WEBAPP_REPAIR_MODULE;
+
+    my $lib = $WEBAPP_REPAIR_MODULE;
+    local $@;
+    if ( !eval { require $lib; 1 } ) {
+        Cpanel::Debug::log_warn("Could not load “$lib” to repair the web application proxy wiring for “$cpuser”: $@");
+        _die_with_message("The repair could not be loaded. The server’s error log has the reason.");
+    }
+
+    # A plugin predating the root entry point leaves the wiring to its own sweep.
+    my $repair_user = Cpanel::WebApps::Repair->can('repair_user') or return [];
+
+    # repair_user() reports failure only by warning, and writes all or nothing.
+    my @warnings;
+    my $repaired = eval {
+        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+        $repair_user->($cpuser);
+    };
+    push @warnings, $@ if $@;
+    $repaired = [] if ref $repaired ne 'ARRAY';
+    Cpanel::Debug::log_warn($_) for @warnings;
+
+    _sync_webapp_schedule($cpuser);
+
+    _die_with_message("The repair failed. The server’s error log has the reason.")
+      if @warnings && !@{$repaired};
+
+    return $repaired;
+}
+
+# Schedule the health sweep now that the account has applications again.
+sub _sync_webapp_schedule ($cpuser) {
+    return if !-e $WEBAPP_SCHEDULE_MODULE;
+
+    local $@;
+    eval { require Cpanel::WebApps::Schedule; Cpanel::WebApps::Schedule::sync(); 1 }
+      or Cpanel::Debug::log_warn("Could not update the web app health sweep schedule for “$cpuser”: $@");
+
+    return;
+}
+
 ###############
 #### helpers ##
 ###############
@@ -685,11 +747,29 @@ returns what that verb puts in its result's C<data>.
 
 =back
 
+=head2 Web application action
+
+=over
+
+=item REPAIR_WEBAPP_PROXIES
+
+Re-points the caller's web application proxies at the ports its containers now
+hold, via the webapp plugin's root-side C<Cpanel::WebApps::Repair::repair_user()>,
+then syncs the plugin's health sweep schedule. Returns the records repaired, or an
+empty list when the plugin is absent or predates that entry point. A failed
+repair dies with a generic message; the reason goes to the error log.
+
+The restore calls this rather than the plugin's own C<repair_current_user()>,
+which goes through the plugin's adminbin, and that refuses an uncompiled caller.
+
+=back
+
 =head1 AUTHORIZATION
 
 Every action acts only for the peer-credential caller. Actions that create or
 run something require the C<ea_podman> feature: GIVE, REGISTER, ENSURE_USER when
-C<$CREATING>, EXEC_IN_CONTAINER, INSTALL, UPGRADE, START, RESTART and CMD.
+C<$CREATING>, EXEC_IN_CONTAINER, INSTALL, UPGRADE, START, RESTART, CMD and
+REPAIR_WEBAPP_PROXIES.
 
 The rest only read or remove the caller's own state, and are deliberately not
 feature-gated so an account whose feature is turned off can still see and remove
@@ -746,6 +826,12 @@ A command in its own registered container, re-mapped to the container's root
 
 The corresponding UAPI verb, as itself, on containers named for (and, where the
 registry matters, registered to) its own account.
+
+=item REPAIR_WEBAPP_PROXIES
+
+Takes no arguments. Re-points only its own applications' proxies, only to ports
+the port authority already gives it, and the plugin checks each domain is still
+its own. With nothing drifted it writes nothing. Feature-gated.
 
 =back
 
