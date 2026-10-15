@@ -1896,16 +1896,37 @@ sub _get_new_ports {
 
     my @new_ports;
     if ( $> == 0 ) {
-        @new_ports = grep { chomp; m/^[0-9]+$/ ? ($_) : () } `/scripts/cpuser_port_authority give root $count --service=$container_name 2>/dev/null`;
+        my @output = `/scripts/cpuser_port_authority give root $count --service=$container_name 2>&1`;
+        if ( $? != 0 ) {
+            die "Could not assign root ports: " . _stringify_items_before_first_blank( \@output );
+        }
+
+        @new_ports = grep { chomp; m/^[0-9]+$/ ? ($_) : () } @output;
     }
     else {
-        my $get_ports_response = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'GIVE', $count, $container_name );
+        my ( $get_ports_response, $rv ) = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'GIVE', $count, $container_name );
+        my @output = split( /\n/, $get_ports_response );
+        if ( $rv != 0 ) {
+            die "Could not assign user ports: " . _stringify_items_before_first_blank( \@output );
+        }
 
-        @new_ports = grep { m/^[0-9]+$/ ? ($_) : () } split( /\n/, $get_ports_response );
+        @new_ports = grep { chomp; m/^[0-9]+$/ ? ($_) : () } @output;
     }
 
     return @new_ports;
 
+}
+
+sub _stringify_items_before_first_blank {
+    my ($lines_ar) = @_;
+    my @head;
+    for my $line ( @{$lines_ar} ) {
+        chomp $line;
+        last if $line =~ /^\s*$/;    # blank or whitespace-only
+        push @head, "$line\n";
+    }
+    my $joined = join '', @head;
+    return $joined;
 }
 
 sub rename_containers {

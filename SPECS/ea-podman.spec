@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 34
+%define release_prefix 35
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -154,6 +154,9 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
+* Thu Oct 15 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-35
+- EA4-344: catch port assignment failures
+
 * Wed Oct 07 2026 Brian Mendoza <brian.mendoza@webpros.com> - 1.0-34
 - CPANEL-57396: Stop the pkgacct hook tarring `~/ea-podman.d` into
   `~/ea-podman-backups`, which put every container's files in an account backup
