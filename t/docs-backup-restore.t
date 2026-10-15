@@ -69,10 +69,12 @@ my %sub_in = (
     'perform_user_restore'               => 'SOURCES/util.pm',
     'register_container_as_root'         => 'SOURCES/util.pm',
     'rename_containers'                  => 'SOURCES/util.pm',
+    '_repair_webapp_proxies'             => 'SOURCES/util.pm',
     'restore_containers_for_user'        => 'SOURCES/util.pm',
     'remove_container_by_name'           => 'SOURCES/util.pm',
     'write_user_manifest'                => 'SOURCES/util.pm',
     '_restore_from_manifest'             => 'SOURCES/util.pm',
+    '_warn_of_changed_ports'             => 'SOURCES/util.pm',
 );
 
 for my $name ( sort keys %sub_in ) {

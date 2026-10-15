@@ -3210,6 +3210,7 @@ sub perform_user_restore {
 sub _warn_if_ports_changed {
     my (@containers) = @_;
 
+    my %drifted;
     foreach my $container (@containers) {
         my @new_ports = ea_podman::util::_get_current_ports( $container->{container_name} );
         my %new_ports_lookup;
@@ -3226,11 +3227,56 @@ sub _warn_if_ports_changed {
             }
         }
 
-        if ($ports_are_different) {
-            my $orig_ports = join( ', ', @orig_ports );
-            my $new_ports  = join( ', ', @new_ports );
+        $drifted{ $container->{container_name} } = { orig => \@orig_ports, curr => \@new_ports } if $ports_are_different;
+    }
 
-            warn qq{The TCP ports for $container->{container_name} have changed.
+    # New ports leave every web application's proxy naming the pre-backup port.
+    # Once for the whole restore: the plugin batches into one Apache reload.
+    my $repaired = _repair_webapp_proxies();
+    print "Re-pointed the web application proxy for $_->{domain} to port $_->{now}.\n" for @{$repaired};
+
+    _warn_of_changed_ports( \%drifted, $repaired );
+
+    return;
+}
+
+# The webapp plugin's proxy repair. Package variable so tests can point it
+# elsewhere.
+our $webapp_repair_module = "/usr/local/cpanel/Cpanel/WebApps/Repair.pm";
+
+# Re-point the account's proxies at the ports its containers now hold. Done as
+# root by the admin module: the plugin's own adminbin refuses an uncompiled caller.
+# Returns the { name, container, domain, was, now } records repaired.
+sub _repair_webapp_proxies {
+    return [] if !-e $webapp_repair_module;
+
+    my $repaired;
+    local $@;
+    eval { $repaired = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REPAIR_WEBAPP_PROXIES' ); 1 } or do {
+        require Cpanel::Exception;
+        my $msg = Cpanel::Exception::get_string_no_id($@);
+        chomp $msg;
+        warn "Could not repair the web application proxy wiring: $msg\n";
+        return [];
+    };
+
+    return ref $repaired eq 'ARRAY' ? $repaired : [];
+}
+
+# Report the containers whose ports moved, minus the ones just re-pointed:
+# calling those broken right after fixing them is worse than saying nothing.
+sub _warn_of_changed_ports {
+    my ( $drifted, $repaired ) = @_;
+
+    my %was_repaired = map { $_->{container} => 1 } grep { length( $_->{container} // '' ) } @{ $repaired || [] };
+
+    foreach my $container_name ( sort keys %{$drifted} ) {
+        next if $was_repaired{$container_name};
+
+        my $orig_ports = join( ', ', @{ $drifted->{$container_name}{orig} } );
+        my $new_ports  = join( ', ', @{ $drifted->{$container_name}{curr} } );
+
+        warn qq{The TCP ports for $container_name have changed.
 
 Things configured for the old ports may fail until it is corrected to use the current ports.
 
@@ -3239,8 +3285,9 @@ The ports originally assigned to the container are: $orig_ports
 The ports currently assigned to the container are: $new_ports
 
             };
-        }
     }
+
+    return;
 }
 
 ##################################################

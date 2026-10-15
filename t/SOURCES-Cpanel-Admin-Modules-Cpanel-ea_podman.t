@@ -44,6 +44,21 @@ our @FEATURE_CHECKS;
     };
 }
 
+# A stand-in for the webapp plugin's Repair.pm, at a fresh path each time so the
+# require never short-circuits on %INC.
+our @REPAIRED_FOR;
+our $STANDINS = File::Temp->newdir();
+my $standin_seq = 0;
+
+sub _repair_standin {
+    my ($body) = @_;
+    my $path = "$STANDINS/Repair-" . ++$standin_seq . ".pm";
+    open( my $fh, '>', $path ) or die "Could not write $path: $!";
+    print {$fh} "package Cpanel::WebApps::Repair;\n$body\n1;\n";
+    close $fh;
+    return $path;
+}
+
 our @system_cmds;
 our $list_json = "{}\n";    # what a mocked `cpuser_port_authority list` prints
 our $take_rv;               # what a mocked `cpuser_port_authority take` returns (nonzero == it failed)
@@ -55,7 +70,7 @@ BEGIN {
         push( @system_cmds, $str );
         if ( @args > 0 ) {
             print $list_json if ( $args[0] eq "/scripts/cpuser_port_authority" && ( $args[1] // "" ) eq "list" );
-            return $take_rv if ( $args[0] eq "/scripts/cpuser_port_authority" && ( $args[1] // "" ) eq "take" );
+            return $take_rv  if ( $args[0] eq "/scripts/cpuser_port_authority" && ( $args[1] // "" ) eq "take" );
         }
         return;
     };
@@ -70,6 +85,7 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
             is_deeply \@ret, [
                 qw(LIST GIVE TAKE ENSURE_USER RELEASE_USER REGISTER DEREGISTER REGISTERED_CONTAINERS EXEC_IN_CONTAINER),
                 qw(LIST_CONTAINERS INSTALL UPGRADE UNINSTALL START STOP RESTART STATUS CMD),
+                qw(REPAIR_WEBAPP_PROXIES),
             ];
         };
 
@@ -639,7 +655,7 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
         };
 
         it "should give the other lifecycle actions the in-process default" => sub {
-            is( _obj_for($_)->_alarm(), 350, $_ ) for qw(START STOP RESTART STATUS UNINSTALL CMD);
+            is( _obj_for($_)->_alarm(), 350, $_ ) for qw(START STOP RESTART STATUS UNINSTALL CMD REPAIR_WEBAPP_PROXIES);
         };
 
         it "should report a failure the user can act on as an AdminError, with its text" => sub {
@@ -672,15 +688,16 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
         };
 
         my @gated = (
-            [ GIVE              => 1, 'container.cptest1.01' ],
-            [ REGISTER          => 'container.cptest1.01' ],
-            [ ENSURE_USER       => 1 ],
-            [ EXEC_IN_CONTAINER => 'container.cptest1.01', '', 'true' ],
-            [ INSTALL           => { name           => 'ea-memcached16' } ],
-            [ UPGRADE           => { container_name => 'container.cptest1.01' } ],
-            [ START             => { container_name => 'container.cptest1.01' } ],
-            [ RESTART           => { container_name => 'container.cptest1.01' } ],
-            [ CMD               => { container_name => 'container.cptest1.01', arg => ['true'] } ],
+            [ GIVE                  => 1, 'container.cptest1.01' ],
+            [ REGISTER              => 'container.cptest1.01' ],
+            [ ENSURE_USER           => 1 ],
+            [ EXEC_IN_CONTAINER     => 'container.cptest1.01', '', 'true' ],
+            [ INSTALL               => { name           => 'ea-memcached16' } ],
+            [ UPGRADE               => { container_name => 'container.cptest1.01' } ],
+            [ START                 => { container_name => 'container.cptest1.01' } ],
+            [ RESTART               => { container_name => 'container.cptest1.01' } ],
+            [ CMD                   => { container_name => 'container.cptest1.01', arg => ['true'] } ],
+            [ REPAIR_WEBAPP_PROXIES => () ],
         );
 
         for my $case (@gated) {
@@ -720,6 +737,86 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
                 is_deeply( \@FEATURE_CHECKS, [], 'without consulting the feature' );
             };
         }
+    };
+
+    describe "REPAIR_WEBAPP_PROXIES" => sub {
+        share my %mi;
+        around {
+            local $HAS_FEATURE = 1;
+            %mi           = ( logged => [], synced => 0 );
+            @REPAIRED_FOR = ();
+
+            no warnings qw(redefine once);
+            local *Cpanel::Debug::log_warn                                           = sub { push @{ $mi{logged} }, $_[0] };
+            local $Cpanel::Admin::Modules::Cpanel::ea_podman::WEBAPP_REPAIR_MODULE   = "$STANDINS/not-installed.pm";
+            local $Cpanel::Admin::Modules::Cpanel::ea_podman::WEBAPP_SCHEDULE_MODULE = __FILE__;
+            local $INC{'Cpanel/WebApps/Schedule.pm'}                                 = __FILE__;
+            local *Cpanel::WebApps::Schedule::sync                                   = sub { $mi{synced}++; die $mi{sync_dies} if $mi{sync_dies}; 1 };
+
+            # A defined sub answers can() forever, so each case starts without one.
+            delete $Cpanel::WebApps::Repair::{repair_user};
+
+            yield;
+        };
+
+        my $record = { name => 'blog', container => 'blog.cptest1.01', domain => 'blog.tld', was => 10001, now => 10005 };
+
+        it "should do nothing, and not say so, without the plugin" => sub {
+            is_deeply( _obj_for('REPAIR_WEBAPP_PROXIES')->REPAIR_WEBAPP_PROXIES(), [] );
+            is_deeply( $mi{logged},                                                [] );
+            is( $mi{synced}, 0, 'and leave the schedule alone' );
+        };
+
+        it "should do nothing with a plugin that predates the root entry point" => sub {
+            local $Cpanel::Admin::Modules::Cpanel::ea_podman::WEBAPP_REPAIR_MODULE = _repair_standin('sub repair_current_user { die "adminbin" }');
+            is_deeply( _obj_for('REPAIR_WEBAPP_PROXIES')->REPAIR_WEBAPP_PROXIES(), [] );
+            is_deeply( $mi{logged},                                                [] );
+        };
+
+        it "should repair the caller's own wiring as root, and return what it repaired" => sub {
+            local $Cpanel::Admin::Modules::Cpanel::ea_podman::WEBAPP_REPAIR_MODULE = _repair_standin('sub repair_user { push @main::REPAIRED_FOR, $_[0]; return [ { name => "blog", container => "blog.cptest1.01", domain => "blog.tld", was => 10001, now => 10005 } ] }');
+            is_deeply( _obj_for('REPAIR_WEBAPP_PROXIES')->REPAIR_WEBAPP_PROXIES(), [$record] );
+            is_deeply( \@REPAIRED_FOR, ['cptest1'], 'through repair_user(), for the caller only' );
+            is( $mi{synced}, 1, 'then sync the health sweep schedule' );
+            is_deeply( $mi{logged}, [] );
+        };
+
+        it "should return nothing when nothing had drifted" => sub {
+            local $Cpanel::Admin::Modules::Cpanel::ea_podman::WEBAPP_REPAIR_MODULE = _repair_standin('sub repair_user { return [] }');
+            is_deeply( _obj_for('REPAIR_WEBAPP_PROXIES')->REPAIR_WEBAPP_PROXIES(), [] );
+            is( $mi{synced}, 1 );
+        };
+
+        for my $case ( [ 'warns' => 'warn "Could not repair the web application proxy wiring for \x{201c}cptest1\x{201d}: disk full\n"; return []' ], [ 'dies' => 'die "disk full\n"' ] ) {
+            my ( $how, $body ) = @{$case};
+            it "should report a repair that $how generically, and log the reason" => sub {
+                local $Cpanel::Admin::Modules::Cpanel::ea_podman::WEBAPP_REPAIR_MODULE = _repair_standin("sub repair_user { $body }");
+                local $@;
+                my $ok  = eval { _obj_for('REPAIR_WEBAPP_PROXIES')->REPAIR_WEBAPP_PROXIES(); 1 };
+                my $err = $@;
+                ok( !$ok,                                                'it died' );
+                ok( eval { $err->isa('Cpanel::Exception::AdminError') }, 'as an AdminError' );
+                like( _msg($err), qr/^The repair failed\. The server’s error log has the reason\.$/ );
+                unlike( _msg($err), qr/disk full/, 'without the root-side detail' );
+                like( join( '', @{ $mi{logged} } ), qr/disk full/, 'which is logged' );
+                is( $mi{synced}, 1, 'and the schedule is still synced' );
+            };
+        }
+
+        it "should report a plugin that will not load generically, and log why" => sub {
+            local $Cpanel::Admin::Modules::Cpanel::ea_podman::WEBAPP_REPAIR_MODULE = _repair_standin('this is not perl(');
+            local $@;
+            eval { _obj_for('REPAIR_WEBAPP_PROXIES')->REPAIR_WEBAPP_PROXIES() };
+            is( _msg($@), 'The repair could not be loaded. The server’s error log has the reason.' );
+            like( $mi{logged}[0], qr/^Could not load .+Repair-\d+\.pm.+ to repair the web application proxy wiring for .+cptest1/ );
+        };
+
+        it "should still return the repair when the schedule sync fails, and log it" => sub {
+            local $Cpanel::Admin::Modules::Cpanel::ea_podman::WEBAPP_REPAIR_MODULE = _repair_standin("sub repair_user { return [ { container => 'blog.cptest1.01' } ] }");
+            local $mi{sync_dies} = "registry unreadable\n";
+            is_deeply( _obj_for('REPAIR_WEBAPP_PROXIES')->REPAIR_WEBAPP_PROXIES(), [ { container => 'blog.cptest1.01' } ] );
+            like( $mi{logged}[0], qr/^Could not update the web app health sweep schedule for .+cptest1.+: registry unreadable/ );
+        };
     };
 
     describe "lifecycle actions" => sub {
