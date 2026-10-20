@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 34
+%define release_prefix 37
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -26,6 +26,7 @@ Source6:       pkg.prerm
 Source8:       PodmanHooks.pm
 Source9:       pkg.preinst
 Source10:      _update-public-hub-to-internal-hub
+Source11:      pkg.posttrans
 Source12:      Cpanel-API-EAPodman.pm
 
 # OpenAPI documents for the EAPodman UAPI verbs; shipped next to the module in
@@ -123,6 +124,10 @@ echo "{}" > %{buildroot}/opt/cpanel/ea-podman/registered-containers.json
 
 %include %{SOURCE5}
 
+%posttrans
+
+%include %{SOURCE11}
+
 %clean
 rm -rf %{buildroot}
 
@@ -154,6 +159,18 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
+* Mon Oct 19 2026 Jared Wright <jared.wright@webpros.com> - 1.0-37
+- EA4-339: Keep the PodmanHooks cPanel hooks registered across RPM upgrades,
+  reinstalls and downgrades
+
+* Thu Oct 15 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-36
+- EA4-344: catch port assignment failures
+
+* Fri Oct 09 2026 Jared Wright <jared.wright@webpros.com> - 1.0-35
+- CPANEL-55949: Re-point web application proxies at the end of a user-run
+  restore, so an account whose container ports were reassigned comes back
+  serving instead of 503ing until the wiring is repaired by hand
+
 * Wed Oct 07 2026 Brian Mendoza <brian.mendoza@webpros.com> - 1.0-34
 - CPANEL-57396: Stop the pkgacct hook tarring `~/ea-podman.d` into
   `~/ea-podman-backups`, which put every container's files in an account backup

@@ -1896,16 +1896,37 @@ sub _get_new_ports {
 
     my @new_ports;
     if ( $> == 0 ) {
-        @new_ports = grep { chomp; m/^[0-9]+$/ ? ($_) : () } `/scripts/cpuser_port_authority give root $count --service=$container_name 2>/dev/null`;
+        my @output = `/scripts/cpuser_port_authority give root $count --service=$container_name 2>&1`;
+        if ( $? != 0 ) {
+            die "Could not assign root ports: " . _stringify_items_before_first_blank( \@output );
+        }
+
+        @new_ports = grep { chomp; m/^[0-9]+$/ ? ($_) : () } @output;
     }
     else {
-        my $get_ports_response = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'GIVE', $count, $container_name );
+        my ( $get_ports_response, $rv ) = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'GIVE', $count, $container_name );
+        my @output = split( /\n/, $get_ports_response );
+        if ( $rv != 0 ) {
+            die "Could not assign user ports: " . _stringify_items_before_first_blank( \@output );
+        }
 
-        @new_ports = grep { m/^[0-9]+$/ ? ($_) : () } split( /\n/, $get_ports_response );
+        @new_ports = grep { chomp; m/^[0-9]+$/ ? ($_) : () } @output;
     }
 
     return @new_ports;
 
+}
+
+sub _stringify_items_before_first_blank {
+    my ($lines_ar) = @_;
+    my @head;
+    for my $line ( @{$lines_ar} ) {
+        chomp $line;
+        last if $line =~ /^\s*$/;    # blank or whitespace-only
+        push @head, "$line\n";
+    }
+    my $joined = join '', @head;
+    return $joined;
 }
 
 sub rename_containers {
@@ -3210,6 +3231,7 @@ sub perform_user_restore {
 sub _warn_if_ports_changed {
     my (@containers) = @_;
 
+    my %drifted;
     foreach my $container (@containers) {
         my @new_ports = ea_podman::util::_get_current_ports( $container->{container_name} );
         my %new_ports_lookup;
@@ -3226,11 +3248,56 @@ sub _warn_if_ports_changed {
             }
         }
 
-        if ($ports_are_different) {
-            my $orig_ports = join( ', ', @orig_ports );
-            my $new_ports  = join( ', ', @new_ports );
+        $drifted{ $container->{container_name} } = { orig => \@orig_ports, curr => \@new_ports } if $ports_are_different;
+    }
 
-            warn qq{The TCP ports for $container->{container_name} have changed.
+    # New ports leave every web application's proxy naming the pre-backup port.
+    # Once for the whole restore: the plugin batches into one Apache reload.
+    my $repaired = _repair_webapp_proxies();
+    print "Re-pointed the web application proxy for $_->{domain} to port $_->{now}.\n" for @{$repaired};
+
+    _warn_of_changed_ports( \%drifted, $repaired );
+
+    return;
+}
+
+# The webapp plugin's proxy repair. Package variable so tests can point it
+# elsewhere.
+our $webapp_repair_module = "/usr/local/cpanel/Cpanel/WebApps/Repair.pm";
+
+# Re-point the account's proxies at the ports its containers now hold. Done as
+# root by the admin module: the plugin's own adminbin refuses an uncompiled caller.
+# Returns the { name, container, domain, was, now } records repaired.
+sub _repair_webapp_proxies {
+    return [] if !-e $webapp_repair_module;
+
+    my $repaired;
+    local $@;
+    eval { $repaired = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'REPAIR_WEBAPP_PROXIES' ); 1 } or do {
+        require Cpanel::Exception;
+        my $msg = Cpanel::Exception::get_string_no_id($@);
+        chomp $msg;
+        warn "Could not repair the web application proxy wiring: $msg\n";
+        return [];
+    };
+
+    return ref $repaired eq 'ARRAY' ? $repaired : [];
+}
+
+# Report the containers whose ports moved, minus the ones just re-pointed:
+# calling those broken right after fixing them is worse than saying nothing.
+sub _warn_of_changed_ports {
+    my ( $drifted, $repaired ) = @_;
+
+    my %was_repaired = map { $_->{container} => 1 } grep { length( $_->{container} // '' ) } @{ $repaired || [] };
+
+    foreach my $container_name ( sort keys %{$drifted} ) {
+        next if $was_repaired{$container_name};
+
+        my $orig_ports = join( ', ', @{ $drifted->{$container_name}{orig} } );
+        my $new_ports  = join( ', ', @{ $drifted->{$container_name}{curr} } );
+
+        warn qq{The TCP ports for $container_name have changed.
 
 Things configured for the old ports may fail until it is corrected to use the current ports.
 
@@ -3239,8 +3306,9 @@ The ports originally assigned to the container are: $orig_ports
 The ports currently assigned to the container are: $new_ports
 
             };
-        }
     }
+
+    return;
 }
 
 ##################################################

@@ -79,7 +79,9 @@ human must do this:
 
 4. Fix up what moved. **Ports are reallocated, not reclaimed** — restore warns
    per container when the numbers differ, and whatever referenced the old ones
-   (proxy rules, app configs) needs updating. cPanel’s own firewall rules are
+   (proxy rules, app configs) needs updating. Web applications are the exception:
+   restore re-points their proxies itself (`_repair_webapp_proxies()`), so they
+   come back serving and are not warned about. cPanel’s own firewall rules are
    rebuilt automatically as ports are released and assigned; a third-party
    firewall is not.
 
@@ -189,9 +191,9 @@ tear down:
    rather than guess.
 3. Require the directory of every remaining container, or die before anything is
    created. With nothing left it prints `Nothing to restore`.
-4. Then steps 3 to 5 below, for those containers only.
+4. Then steps 3 to 6 below, for those containers only.
 
-**With a tarball** it runs all five steps:
+**With a tarball** it runs all six steps:
 
 1. **Tear down** — `remove_containers --all` (shelled out to the *installed*
    `/opt/cpanel/ea-podman/bin/ea-podman`, so even a checkout drives the installed
@@ -218,10 +220,27 @@ tear down:
    *currently installed* package’s `/opt/cpanel/<pkg>/ea-podman.json` for EA4
    packages), allocate **new** ports (`_get_new_ports()`), skip the package’s
    `local-dir-setup`/`-upgrade` hooks so the restored directory isn’t
-   re-scaffolded (the `elsif ($isrestore)` no-op), re-register, `podman create`
-   (pulling the image), regenerate the unit, enable, start.
-5. **Report port drift** against the manifest’s `curr_ports` (the loop at the end
-   of `perform_user_restore()`).
+   re-scaffolded (the `elsif ($isrestore)` no-op), re-register — the teardown
+   deregistered the container, so `register_container_as_root()` has no entry
+   left to preserve `webapp` from and takes it from the manifest, the only
+   surviving record of it — `podman create` (pulling the image), regenerate the
+   unit, enable, start.
+5. **Re-point the web application proxies.** New ports mean every proxy include
+   still names the pre-backup port, so the container is healthy and every request
+   503s. `_repair_webapp_proxies()` asks the admin module’s
+   `REPAIR_WEBAPP_PROXIES`, which runs the webapp plugin’s
+   `Cpanel::WebApps::Repair::repair_user()` as root for the calling account, once
+   for the whole restore — the plugin batches the rewrites, so a call per
+   container would be an Apache reload per application. It goes through root
+   because the plugin’s own adminbin refuses an uncompiled caller, which the CLI
+   is. The call is guarded (file present → `require` → `can()`), so a server
+   without the plugin, or with one predating the entry point, restores exactly
+   as it did before; a repair that fails is warned about and nothing more, since
+   the restore itself has already succeeded.
+6. **Report port drift** against the manifest’s `curr_ports`
+   (`_warn_of_changed_ports()`), skipping the containers the step above just
+   repaired — calling a web application broken immediately after fixing it is
+   worse than saying nothing.
 
 ### Automatic backup during pkgacct
 
@@ -281,7 +300,8 @@ Two cPanel-side notes:
 * **Ports are reallocated, not reclaimed.** The teardown releases the old
   assignments and `_get_new_ports()` takes the lowest free ones
   (`cpuser_port_authority`), so a same-host restore often lands back on the same
-  numbers and stays quiet. When it doesn’t, treat the warning as a to-do list.
+  numbers and stays quiet. When it doesn’t, treat the warning as a to-do list —
+  minus the web applications, which restore re-points for you.
 * **Image tags float**, and for an EA4 package the image comes from the
   *currently installed* package’s `ea-podman.json`, not the manifest — restoring
   onto a host with a newer package lands on the newer image. The manifest’s
