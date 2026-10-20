@@ -1,0 +1,6 @@
+#!/bin/bash
+
+# RPM runs the old package's preun after the new post, and older builds'
+# prerm deletes the hooks there, so register them again once both have run.
+/usr/local/cpanel/bin/manage_hooks prune; /bin/true;
+/usr/local/cpanel/bin/manage_hooks add module PodmanHooks
