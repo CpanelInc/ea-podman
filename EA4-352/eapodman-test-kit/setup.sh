@@ -124,4 +124,4 @@ for port in 8081 8082 8083; do
     echo "--- :$port"
     curl -fsS "http://127.0.0.1:$port/" | head -3
 done
-echo "done; now run ./verify.sh $U and ./lifecycle.sh $U"
+echo "done; now run ./verify.sh $U, ./loadtest.sh $U, then ./lifecycle.sh $U last (see README.md)"

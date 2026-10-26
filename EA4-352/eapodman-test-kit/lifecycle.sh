@@ -7,6 +7,7 @@
 #   4. P0-3 / invariant 19, with a unit of the same shape whose ExecStart writes a chosen PID
 #      into an account-owned PID file: PID 1 and a root process are refused, and stopping the
 #      unit kills neither; a PID inside the unit's cgroup is accepted (control case).
+# Run it last, after ./loadtest.sh: tests 1 and 3 leave web and worker down until recreated (F15).
 # Exits non-zero if a check fails. Usage: ./lifecycle.sh <cpuser>
 set -uo pipefail
 U=${1:?usage: $0 <cpuser>}
