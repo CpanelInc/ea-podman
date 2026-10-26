@@ -1,34 +1,31 @@
 #!/bin/bash
-# Run as root. Undoes ./setup.sh: units, slices, containers, runtime mount, /etc/eapodman-test,
+# Run as root. Undoes ./setup.sh: units, slice limits, containers, runtime mount, /etc/eapodman-test,
 # and the generated unit copies in ./systemd. With --purge, also deletes the test storage
 # ($HOME/.local/share/ea-podman/storage) and its pulled image.
 # Usage: ./teardown.sh <cpuser> [--purge]
 set -uo pipefail
 U=${1:?usage: $0 <cpuser> [--purge]}
 PURGE=${2:-}
-[ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 cd "$(dirname "$0")"
-UID_=$(id -u "$U"); GID_=$(id -g "$U"); HOME_=$(getent passwd "$U" | cut -d: -f6)
+. ./lib.sh
 for unit in /etc/systemd/system/ea-podman-*."$U".[0-9][0-9].service; do
     [ -e "$unit" ] || continue
     name=$(basename "$unit" .service); name=${name#ea-podman-}
     systemctl disable --now "ea-podman-$name.service"
-    systemd-run --quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" --pipe --wait --collect \
-        -p WorkingDirectory="$HOME_" \
-        --setenv=XDG_RUNTIME_DIR=/run/ea-podman/user/$UID_ \
-        --setenv=CONTAINERS_CONF=/etc/eapodman-test/containers.conf \
-        --setenv=CONTAINERS_STORAGE_CONF=/etc/eapodman-test/storage.conf \
-        --setenv=XDG_CONFIG_HOME=/etc/eapodman-test/empty \
-        /usr/bin/podman rm -f "$name" </dev/null
+    as_user /usr/bin/podman rm -f "$name"
     rm -f "$unit"
 done
+# Left behind only if ./lifecycle.sh was interrupted.
+rm -f "/run/systemd/system/eapodman-test-pidfile-$UID_.service"
 systemctl stop "ea-podman-runtime@$UID_.service"
-mountpoint -q "/run/ea-podman/user/$UID_" && umount "/run/ea-podman/user/$UID_"
-rmdir "/run/ea-podman/user/$UID_" 2>/dev/null
+mountpoint -q "$RUNDIR" && umount "$RUNDIR"
+rmdir "$RUNDIR" 2>/dev/null
+# The account slice's limits (the plan's clear_slice_properties), plus the slice file older kits wrote.
+rm -rf "/etc/systemd/system.control/eapodman-$UID_.slice.d"
 rm -f "/etc/systemd/system/eapodman-$UID_.slice" /etc/systemd/system/eapodman.slice /etc/systemd/system/ea-podman-runtime@.service
 systemctl daemon-reload
 systemctl reset-failed 'ea-podman-*' 'eapodman-*' 2>/dev/null
-rm -rf /etc/eapodman-test
+rm -rf $ETC
 # Generated copies setup.sh left in the kit (the shipped files stay).
 rm -f "systemd/eapodman-$UID_.slice" systemd/ea-podman-*."$U".[0-9][0-9].service
 if [ "$PURGE" = --purge ]; then
