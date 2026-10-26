@@ -1,0 +1,12 @@
+#!/bin/sh
+# Root-side helper run by the anchor's ExecStartPre=+ : capped per-uid runtime tmpfs (plan F8).
+set -eu
+uid=${1:-}
+case $uid in ''|*[!0-9]*|0) echo "bad uid" >&2; exit 1;; esac
+gid=$(getent passwd "$uid" | cut -d: -f4)
+[ -n "$gid" ] || { echo "unknown uid $uid" >&2; exit 1; }
+d=/run/ea-podman/user/$uid
+mkdir -p -m 0755 /run/ea-podman/user
+[ ! -L "$d" ] || { echo "$d is a symlink" >&2; exit 1; }
+[ -d "$d" ] || mkdir -m 0700 "$d"
+mountpoint -q "$d" || mount -t tmpfs -o "size=10%,mode=0700,uid=$uid,gid=$gid,nosuid,nodev" tmpfs "$d"
