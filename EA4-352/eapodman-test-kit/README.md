@@ -14,7 +14,7 @@ A hand-built version of the layout in `../PLAN.md` for one account. It sets up `
 
 `verify.sh` and `lifecycle.sh` exit non-zero if a check fails.
 
-**Run `lifecycle.sh` last, just before teardown.** Its tests 1 and 3 kill conmon. That leaves web and worker failed until they are recreated (F15). `loadtest.sh` needs all three units running, so it can't run after `lifecycle.sh`. Until F15 is fixed, expect `lifecycle.sh` to exit 1 with those 2 checks failed.
+**Run `lifecycle.sh` last, just before teardown.** Its tests 1 and 3 kill conmon. That leaves web and worker failed until they are recreated (F15). `loadtest.sh` needs all three units running, so it can't run after `lifecycle.sh`. Until F15 is fixed, expect `lifecycle.sh` to exit 1 with those 2 checks failed. They are marked `(known: F15, see PLAN.md)`, and the last line says `2 check(s) failed, all known (F15)`. Any other failure is new. If a known check starts passing, the script says to update `PLAN.md`.
 
 To run anything again after `lifecycle.sh`, recreate the containers with `./teardown.sh <cpuser>` and then `./setup.sh <cpuser>`.
 

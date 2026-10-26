@@ -22,6 +22,18 @@ prop()   { systemctl show -p "$2" --value "ea-podman-$1.service"; }
 comm()   { ps -o comm= -p "$1" 2>/dev/null; }
 alive()  { kill -0 "$1" 2>/dev/null; }
 # Wait for container $1 to be back: active, a new conmon as MainPID, NRestarts past $3, port answering.
+# Like check, for a failure PLAN.md already records as a finding: still a FAIL, but labelled
+# and counted apart. A pass means the finding no longer reproduces.
+KNOWN=0
+known_check() {    # finding, description, then the command
+    local finding=$1 what=$2; shift 2
+    if "$@"; then
+        echo "  PASS  $what (known $finding no longer reproduces; update PLAN.md)"
+    else
+        echo "  FAIL  $what (known: $finding, see PLAN.md)"
+        FAILS=$((FAILS + 1)); KNOWN=$((KNOWN + 1))
+    fi
+}
 recovered() {
     local n=$1 old_main=$2 old_nr=$3 i main
     for i in $(seq 60); do
@@ -42,6 +54,7 @@ journal_since() { journalctl -q --no-pager -o cat --after-cursor "$1" -u "$2" | 
 # A root process for the account to point PID files at. Nothing real is put at risk.
 setsid sleep 900 </dev/null >/dev/null 2>&1 &
 DECOY=$!
+disown "$DECOY"    # so killing it in cleanup prints no "Terminated" job notice
 TEST_UNIT=eapodman-test-pidfile-$UID_.service
 cleanup() {
     systemctl stop "$TEST_UNIT" 2>/dev/null
@@ -49,17 +62,21 @@ cleanup() {
     systemctl daemon-reload
     systemctl reset-failed "$TEST_UNIT" 2>/dev/null
     kill "$DECOY" 2>/dev/null
+    local n down=()
     for n in "${!PORT[@]}"; do
         systemctl reset-failed "ea-podman-$n.service" 2>/dev/null
-        systemctl start "ea-podman-$n.service"
+        systemctl start "ea-podman-$n.service" 2>/dev/null || down+=("$n")
     done
+    if [ ${#down[@]} -gt 0 ]; then
+        echo "cleanup: ${down[*]} can't start (F15); next run ./teardown.sh $U, then ./setup.sh $U to test again"
+    fi
 }
 trap cleanup EXIT
 
 echo "== 1. SIGKILL conmon of worker.$U.03"
 n=worker.$U.03; main=$(prop "$n" MainPID); nr=$(prop "$n" NRestarts); t=$(cursor)
 kill -KILL "$main"
-check "worker comes back through Restart=" recovered "$n" "$main" "$nr"
+known_check F15 "worker comes back through Restart=" recovered "$n" "$main" "$nr"
 journal_since "$t" "ea-podman-$n.service"
 
 echo; echo "== 2. SIGKILL the container's init in api.$U.02"
@@ -76,7 +93,7 @@ pidfile=$(prop "$n" PIDFile)
 as_user /bin/sh -c 'echo "$1" >"$2"' _ "$DECOY" "$pidfile"
 echo "  conmon.pid now holds $(cat "$pidfile")"
 kill -KILL "$main"
-check "web comes back through Restart=" recovered "$n" "$main" "$nr"
+known_check F15 "web comes back through Restart=" recovered "$n" "$main" "$nr"
 check "the root process is still alive" alive "$DECOY"
 check "web's MainPID is not the root process" test "$(prop "$n" MainPID)" != "$DECOY"
 journal_since "$t" "ea-podman-$n.service"
@@ -130,4 +147,6 @@ pid_case "root process" "$DECOY" refuse
 pid_case "control, own child" self accept
 
 echo
-[ "$FAILS" = 0 ] && echo "all checks passed" || { echo "$FAILS check(s) failed"; exit 1; }
+if [ "$FAILS" = 0 ]; then echo "all checks passed"
+elif [ "$FAILS" = "$KNOWN" ]; then echo "$FAILS check(s) failed, all known (F15)"; exit 1
+else echo "$FAILS check(s) failed, $KNOWN of them known (F15)"; exit 1; fi
