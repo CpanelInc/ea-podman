@@ -79,6 +79,13 @@ That gives those accounts back exactly what CLOS-4517 removed.
   - `--memory-swap` becomes `memory.swap.max` and needs kernel swap accounting. Without it, podman warns and drops the limit.
   
   Fix: the container unit carries `MemoryLow=` and `CPUWeight=` taken from the container's reservation and shares (Phase 1), and slice floors include the unit floors. P0-4 checks swap accounting on every target.
+- **F14: `podman exec` processes are not in the container's cgroup.** An exec'd process stays in its caller's cgroup. crun can't move it into the container's `libpod-payload-*` cgroup: on cgroup v2 a move needs write access to `cgroup.procs` of the common ancestor, which is the root-owned `eapodman-<uid>.slice`. Rootless crun ignores the failure. This happens even when the caller is a delegated transient. Since every 2.0 exec goes through the slice runner, an exec'd process runs in the runner's transient unit under `eapodman-<uid>.slice`:
+  - it is bound by the account slice (`MemoryMax`, `TasksMax`, CPU weight), LVE (P0-6) and the namespace rule (F11), but **not** by the container's `--memory`/`--cpus`/`--pids-limit`, and it is not counted in the container's cgroup or `podman stats`;
+  - it lives only as long as the runner: `RuntimeMaxSec` and `KillMode=control-group` end it, so `podman exec -d` can't outlive the call.
+
+  **Decision: accept and document.** Per-container limits are a resource-planning tool, not a boundary against the account, which can run any process outside them from its own shell. The alternative (root moves the exec'd process into the container unit's delegated subtree) is a follow-up (Open items). 2.0 refuses `exec -d`/`--detach` through ea-podman (Phase 3b) and documents the rest (Phase 7). 1.x very likely behaves the same (an SSH session and `user@<uid>` share only the root-owned `user-<uid>.slice`); P0-13 confirms it.
+
+  **Evidence** (AlmaLinux 8.10, cgroup v2, systemd 239, podman 4.4.1; `EA4-352/eapodman-test-kit/loadtest.sh`): `podman exec <web> cat /proc/self/cgroup` shows the runner's `run-u*.service`, with and without `Delegate=yes` on it; a 600M allocation by `podman exec` succeeds in a container with `--memory=512m`, and is OOM-killed (exit 137, `oom_kill` 0 → 1) when the same process is placed in the container's cgroup. The same run confirmed F12/F13: `--cpus` caps exact (1.01/2.01/0.50); `memory.swap.max=0` with no swap used while the host had swap; with the unit's `MemoryLow=` the page cache held at its floor under slice pressure (web 400M → 251M, floor 256M; worker 200M → 61M, floor 64M), and without it web lost all of it (400M → 0M) despite its container's `memory.low=256M`; with equal unit weights, the containers' own `--cpu-shares` (crun weights 39/79/20) made no difference.
 
 ## Phase 0: spikes (gate everything)
 
@@ -97,6 +104,7 @@ Run each probe on EL8 (cgroup v1), EL9, CL9 with CageFS 7.6.39+ masked, EL10, an
 | P0-9 | Can a non-root user run `systemctl show` on a system unit on CloudLinux? | STATUS always goes through admin (expected) |
 | P0-10 | The CLOS-7971 canary (`test.sh`) after migration and after reboot: it must never run, and no `user@<uid>` may exist | Acceptance |
 | P0-11 | The bounded as-user runner (4.2a): `systemd-run --uid --gid --pipe --wait --collect -p RuntimeMaxSec=` running `podman` against old **and** new storage. On a timeout, does systemd reap a SIGSTOPped child, a ptrace-stopped child, and a grandchild that called `setsid`/double-forked? How does `systemd-run --wait` report `Result=timeout` vs a non-zero exit (systemd 239, 249, 252, 255)? On v1, can the account move a runner process into its own delegated cgroup, and does `--wait` still return? | Runner mechanism; timeout detection |
+| P0-13 | `podman exec` cgroup placement (F14), on every target (podman 3.4 and 4+, crun versions). From the slice runner: is the exec'd process in the runner's transient (not the container's cgroup), under `eapodman-<uid>.slice`, inside the LVE (P0-6), and killed at `RuntimeMaxSec`? 1.x parity, on an unmasked 1.x account: is a `podman exec` from an SSH session in the session scope rather than the container's cgroup? | F14 docs and release-note wording |
 | P0-12 | BPF-LSM namespace boundary (F11), on EL9, CL9, EL10 and Ubuntu 24.04. Does the kernel have the `userns_create` LSM hook, and can `lsm=bpf` be enabled? Load a test-only BPF-LSM program that denies `userns_create` unless the task is under the `eapodman.slice` cgroup. Then all of these must work: install, upgrade, start/stop/restart, reboot, the full migration, plugin builds, backup and restore, `ea-podman bash`, and an anchor restart after the pause process is killed. From the account's SSH shell, cron and a CGI, `unshare -U` and raw `podman run` must be denied | F11 holds; platforms where the rule is supported |
 
 ## Phase 1: root-side units module
@@ -293,6 +301,7 @@ All in `SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm`.
   `--network=host` is not a path, so this rule doesn't cover it. It is listed with `-v` as a decision for EA4-343, and the release notes name it.
 - **Cgroup start args are refused (F12).** `validate_start_args` refuses `--cgroups`, `--cgroup-parent` and `--cgroup-conf`. Otherwise the account could move a container out of its unit's cgroup and escape both the slice limits and the namespace rule (F11).
 - **CMD and code in the slice.** `podman unshare`/`run`/`exec` through CMD run account-chosen code inside the slice. That is the same as what the account's container workloads already do, so it is not new exposure under F11. Still, refuse `unshare` unless it is already a supported verb.
+- **`exec` runs outside the container's limits (F14).** An exec'd process is bound by the account slice, not by the container's limits, and ends with the runner. Refuse `exec -d`/`--detach` with a message that says so, rather than letting the process be killed silently when the call returns.
 - Every action: `registered => 1` ownership where a container is named, the feature gate where the UAPI had one (`Cpanel-API-EAPodman.pm:63-77` moves into the actions), and existing timeouts (install/upgrade 1800s).
 - `run_in_user_session` (`util.pm:3339`) stays only as the admin child's wrapper. Rename it (e.g. `run_as_cpuser_captured`). It applies `podman_env`, captures output, and `chdir`s to home. Its cpsrvd comments go.
 - **`_as_cpuser` runs in the slice (F11).** The admin module's `_as_cpuser` (`Cpanel-Admin-Modules-Cpanel-ea_podman.pm:567-593`) runs its child through `units::run_as_user_in_slice`, with the action's existing timeout (350 s or 1800 s) as `RuntimeMaxSec`, instead of forking under cpsrvd. The 1 MB cap below and the per-account semaphore still apply.
@@ -790,6 +799,7 @@ On the plugin side:
     - path arguments to ea-podman (other than `-v`/`--mount`, EA4-343) must be inside the account's home;
     - per-account limits on concurrent ea-podman operations and on the number of containers;
     - per-container `--memory`/`--memory-swap`/`--cpus`/`--pids-limit` are now enforced on cgroup v2 (`--cgroups=split`); `--memory-swap` needs kernel swap accounting; `--memory-reservation` and `--cpu-shares` now take effect between containers through the unit's `MemoryLow=`/`CPUWeight=` (F13), and changing them needs a recreate; `--cgroups`, `--cgroup-parent` and `--cgroup-conf` start args are refused;
+    - per-container limits cover the container's own processes, not `podman exec` sessions: exec'd work (including `ea-podman bash`) is bound by the account slice and LVE, isn't counted in `podman stats`, and ends when the call does; `exec -d` is refused (F14);
     - once `migration/complete` exists, every user namespace ea-podman creates comes from `eapodman.slice`, so hosts can deny namespace creation elsewhere with a BPF-LSM rule; list the kernels where that works (P0-12);
     - raw-podman notes;
     - downgrade unsupported.
@@ -843,6 +853,7 @@ On the plugin side:
   - `clos7971-canary-live.t`
   - `bpf-lsm-userns-live.t` (P0-12; runs only on kernels with the hook)
   - a `--memory` enforcement case in the normal live test, plus `--memory-swap`, `--cpus`, `--memory-reservation` and `--cpu-shares` cases that check the container cgroup, the unit and both slices (F13).
+  - an exec placement case (F14): a `podman exec` through the admin path runs under `eapodman-<uid>.slice` in the runner's transient, not in the container's cgroup, and `exec -d`/`--detach` is refused. If a podman or crun update starts placing exec'd processes in the container, this case fails, so the docs get revisited.
 
 ## Sequence
 
@@ -868,6 +879,7 @@ On the plugin side:
 - **Swap accounting and crun conversion:** which targets lack `memory.swap.max`, and what `cpu.weight` each target's crun writes for `--cpu-shares` (P0-4). Where swap accounting is missing, does INSTALL refuse `--memory-swap` or only warn?
 - **BPF-LSM support matrix:** which platforms can enable the F11 rule (P0-12).
 - **Follow-up:** a root-owned graphroot to close F4.
+- **Follow-up: exec'd processes under the container's limits (F14 option 2).** Root forks a child that drops to the account and waits on a pipe, writes the child's PID into a sub-cgroup of the container unit (its delegated subtree), then lets it run `podman exec`; crun's own move into `libpod-payload-*` then succeeds because the common ancestor is the delegated unit. Gains: Docker-like accounting, `exec -d` lives as long as the container. Costs: root writes into a tree the account controls (it can remove or retype the target, or set `pids.max=0`, a tiny `memory.max` or `cgroup.freeze`; all self-DoS, but paths must be checked and failures must refuse, never fall back); the process leaves the runner's cgroup, so `RuntimeMaxSec`/`KillMode=control-group` no longer bound it and root must enforce the timeout and reaping itself (4.2a); exec'd work competes with the serving container and can get it OOM-killed. Do it only if the plugin needs exec'd work held to a container's budget.
 - **Follow-up:** a shipped or documented BPF-LSM namespace policy (F11).
 
 ## Verification
