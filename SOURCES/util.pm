@@ -23,7 +23,7 @@ sub init_user {
     ea_podman::subids::assert_has_user_namespaces();
 
     check_proc();
-    warn_if_cgroup_v1();
+    warn_if_not_cgroup_v2();
 
     # Order matters (CPANEL-54037): ensure_user() bootstraps the rootless
     # session *as root* (subuid/subgid + `loginctl enable-linger`, which
@@ -397,19 +397,18 @@ sub _is_cloudlinux {
     return 0;
 }
 
-# Outside CloudLinux, cgroup v2 is what we want: it is what lets resource limits
-# be enforced on rootless containers (v1 delegates no controllers to users).
-# Both work, so like the hidepid advice in check_proc() this is a root-only
-# heads-up, given once per process. We do not switch it for them: it takes a
-# reboot and can affect other things on the server. (EA4-360)
-our $cgroup_v1_warned = 0;
+# cgroup v2 is what we want, CloudLinux included: it is what lets resource
+# limits be enforced on rootless containers (v1 delegates no controllers to
+# users). Both work, so like the hidepid advice in check_proc() this is a
+# root-only heads-up, given once per process. We do not switch it for them: it
+# takes a reboot and can affect other things on the server. (EA4-360)
+our $cgroup_v2_warned = 0;
 
 sub _is_root { return $> == 0 ? 1 : 0; }
 
-sub warn_if_cgroup_v1 {
-    return 1 if !_is_root();
-    return 1 if _is_cgroup_v2() || _is_cloudlinux();    # CloudLinux needs v1, see above
-    return 0 if $cgroup_v1_warned++;
+sub warn_if_not_cgroup_v2 {
+    return 1 if !_is_root() || _is_cgroup_v2();
+    return 0 if $cgroup_v2_warned++;
 
     warn "ea-podman: this server is using cgroup v1. We recommend cgroup v2 so that container resource limits can be enforced.\n"
       . "For example, on AlmaLinux 8:\n"

@@ -127,14 +127,23 @@ cptest1:165537:65536
         around {
             my $dir = File::Temp->newdir();
 
-            # A /proc/sys with only what a stock RHEL-family host has.
-            local $conf{sysctl} = sub {
-                my ( $key, $val ) = @_;
-                ( my $rel = $key ) =~ tr{.}{/};
-                Path::Tiny::path("$dir/sys/$rel")->touchpath->spew("$val\n");
+            # Only what a stock RHEL-family host has. A key that isn't there
+            # throws like Cpanel::Sysctl does for a missing /proc/sys file.
+            my %sysctl = (
+                'user.max_user_namespaces' => 15000,
+                'kernel.threads-max'       => 30000,
+            );
+            local $conf{sysctl} = sub { $sysctl{ $_[0] } = $_[1] };
+            local $conf{unset}  = sub { delete $sysctl{ $_[0] } };
+
+            no warnings qw/redefine once/;
+            local *Cpanel::Sysctl::get = sub {
+                my ($key) = @_;
+                die bless( { key => $key }, 'Cpanel::Exception::IO::FileNotFound' ) if !exists $sysctl{$key};
+                die "${ $sysctl{$key} }\n" if ref $sysctl{$key};    # any other read error
+                return "$sysctl{$key}\n";
             };
-            $conf{sysctl}->( 'user.max_user_namespaces' => 15000 );
-            $conf{sysctl}->( 'kernel.threads-max'       => 30000 );
+            use warnings qw/redefine once/;
 
             Path::Tiny::path("$dir/ns-user")->touch;
             Path::Tiny::path("$dir/apparmor.d")->mkpath;
@@ -144,7 +153,6 @@ cptest1:165537:65536
             local $conf{dir} = $dir;
 
             no warnings qw/once/;
-            local $ea_podman::subids::dir_proc_sys = "$dir/sys";
             local $ea_podman::subids::file_ns_user = "$dir/ns-user";
             local $ea_podman::subids::dir_apparmor = "$dir/apparmor.d";
             local @ea_podman::subids::files_podman = ("$dir/podman");
@@ -171,22 +179,42 @@ cptest1:165537:65536
             like( $@, qr{https://go\.cpanel\.net/userns} );
         };
 
-        it "should die when max_user_namespaces is below the floor" => sub {
+        it "should warn root, not die, when max_user_namespaces is below the floor" => sub {
             $conf{sysctl}->( 'user.max_user_namespaces' => 499 );
-            eval { ea_podman::subids::assert_has_user_namespaces(); };
-            like( $@, qr/is 499, below the minimum of 500/ );
+            my @warns;
+            local $SIG{__WARN__} = sub { push @warns, $_[0] };
+            is( ea_podman::subids::assert_has_user_namespaces(), 499 );
+            if ( $> == 0 ) {
+                is( scalar(@warns), 1, "one warning, not also the kernel default one" );
+                like( $warns[0], qr/=499 is below the recommended minimum of 500/ );
+            }
+            else {
+                is( scalar(@warns), 0, "users are not told" );
+            }
+        };
+
+        it "should die as root, but skip as a user, on any other read error" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => \"Permission denied" );
+            my $val = eval { ea_podman::subids::assert_has_user_namespaces(); };
+            if   ( $> == 0 ) { like( $@, qr/Cannot read user\.max_user_namespaces: Permission denied/ ) }
+            else             { is( $@, "" ); is( $val, undef ); }
+        };
+
+        it "should refuse a key that is not allowlisted" => sub {
+            eval { ea_podman::subids::_sysctl_num("//.//.etc.shadow") };
+            like( $@, qr/Invalid sysctl key/ );
         };
 
         it "should die when max_user_namespaces is missing, as root" => sub {
             return pass("skipped: needs root") if $> != 0;
-            unlink "$conf{dir}/sys/user/max_user_namespaces";
+            $conf{unset}->('user.max_user_namespaces');
             eval { ea_podman::subids::assert_has_user_namespaces(); };
             like( $@, qr/user\.max_user_namespaces is missing/ );
         };
 
         it "should skip (not die) when max_user_namespaces is hidden from a user" => sub {
             return pass("skipped: needs a non-root user") if $> == 0;
-            unlink "$conf{dir}/sys/user/max_user_namespaces";
+            $conf{unset}->('user.max_user_namespaces');
             my $val = eval { ea_podman::subids::assert_has_user_namespaces(); };
             is( $@,   "" );
             is( $val, undef );

@@ -14,12 +14,13 @@ package ea_podman::subids;
 
 use Path::Tiny 'path';
 use Cpanel::OS;
-use Cwd         ();
-use Errno       ();    # for %!, loaded explicitly: the CLI is a compiled binary
-use Digest::SHA ();
-use Fcntl       qw(:flock);
-use IPC::Open3  ();
-use Time::HiRes ();
+use Cpanel::Sysctl ();
+use Cwd            ();
+use Scalar::Util   ();
+use Digest::SHA    ();
+use Fcntl          qw(:flock);
+use IPC::Open3     ();
+use Time::HiRes    ();
 
 our $good = "✅";
 our $bad  = "❌";
@@ -1360,10 +1361,7 @@ sub remove_stale_linger_marker {
 # nothing container related works at all, so commands that need podman die up
 # front with a pointer to the docs instead of failing later inside podman.
 #
-# Read from /proc directly (no sysctl(8), no Cpanel::Sysctl): a missing file is
-# ENOENT, which is how a key the kernel doesn't have shows up, and anything else
-# is a real read error. Package variables so tests can point them at fixtures.
-our $dir_proc_sys = "/proc/sys";
+# Package variables so tests can point them at fixtures.
 our $file_ns_user = "/proc/self/ns/user";
 our $dir_apparmor = "/etc/apparmor.d";
 our @files_podman = ( "/usr/bin/podman", "/bin/podman", "/usr/local/bin/podman" );
@@ -1371,8 +1369,19 @@ our $url_userns   = "https://go.cpanel.net/userns";
 
 # Floor for user.max_user_namespaces. The limit is per user and counts every
 # namespace the user owns, including ones created inside their containers.
-# Heavy accounts land in the low hundreds; this is a judgment call.
+# Heavy accounts land in the low hundreds; this is a judgment call, so going
+# under it is a warning, not fatal.
 our $min_user_namespaces = 500;
+
+# The only keys _sysctl_num() accepts. Cpanel::Sysctl turns a key into a path
+# under /proc/sys without checking it, so a crafted key (e.g. "//.//.etc.shadow")
+# would read any file as root. Anything not listed here is rejected first.
+my %sysctl_allowed = map { $_ => 1 } qw(
+  user.max_user_namespaces
+  kernel.threads-max
+  kernel.unprivileged_userns_clone
+  kernel.apparmor_restrict_unprivileged_userns
+);
 
 # Dies when user namespaces are unavailable (or too restricted for rootless
 # podman to work), returns user.max_user_namespaces otherwise.
@@ -1403,11 +1412,14 @@ sub assert_has_user_namespaces {
         return;    # hidden from this user, see above
     }
     $die->("user.max_user_namespaces is 0, which disables them for everyone") if $max_uns == 0;
-    $die->("user.max_user_namespaces is $max_uns, below the minimum of $min_user_namespaces") if $max_uns < $min_user_namespaces;
 
-    # 3. Lowered from the kernel default (threads-max / 2 at boot). It still
-    #    works, someone just set it on purpose, so tell root and carry on.
-    if ( $> == 0 ) {
+    # 3. Low enough that busy accounts can hit the limit (each container uses
+    #    at least one), or lowered from the kernel default (threads-max / 2 at
+    #    boot). Either still works, so tell root and carry on.
+    if ( $> == 0 && $max_uns < $min_user_namespaces ) {
+        warn "ea-podman: user.max_user_namespaces=$max_uns is below the recommended minimum of $min_user_namespaces. Busy accounts may hit that limit. To learn more read $url_userns\n";
+    }
+    elsif ( $> == 0 ) {
         my $threads = _sysctl_num('kernel.threads-max');
         my $default = defined $threads ? int( $threads / 2 ) : undef;
         warn "ea-podman: user.max_user_namespaces=$max_uns is below the kernel default (~$default); it was lowered on purpose. Busy accounts may hit that limit.\n"
@@ -1437,22 +1449,23 @@ sub assert_has_user_namespaces {
     return $max_uns;
 }
 
-# Value of a numeric sysctl, or undef if the kernel doesn't have it. As root any
-# other read error dies; as a user it is undef too (see above).
+# Value of an allowlisted numeric sysctl, or undef if the kernel doesn't have
+# it. As root any other read error dies; as a user it is undef too (see above).
 sub _sysctl_num {
     my ($key) = @_;
 
-    die "Invalid sysctl key “$key”\n" if $key !~ m/\A[a-z0-9_-]+(?:\.[a-z0-9_-]+)+\z/;
-    ( my $file = "$dir_proc_sys/$key" ) =~ tr{.}{/};
+    die "Invalid sysctl key “" . ( $key // '' ) . "”\n" if !defined $key || !$sysctl_allowed{$key};
 
-    my $val;
-    if ( open( my $fh, '<', $file ) ) {
-        $val = <$fh>;
-        close $fh;
-    }
-    else {
-        return if $!{ENOENT} || $!{ENOTDIR} || $> != 0;
-        die "$bad Cannot read $key ($file): $!\n";
+    # get() throws for a missing key too. Cpanel::LoadFile reports ENOENT and
+    # ENOTDIR as IO::FileNotFound, so that class alone means "doesn't exist";
+    # any other error (e.g. IO::FileOpenError for EACCES) is a real read error.
+    local $@;
+    my $val = eval { Cpanel::Sysctl::get($key) };
+    if ( my $err = $@ ) {
+        return if Scalar::Util::blessed($err) && $err->isa('Cpanel::Exception::IO::FileNotFound');
+        return if $> != 0;
+        ( my $msg = "$err" ) =~ s/\s+\z//;
+        die "$bad Cannot read $key: $msg\n";
     }
 
     $val //= "";

@@ -69,11 +69,11 @@ subtest 'non-CloudLinux: never warns, on either cgroup version' => sub {
     }
 };
 
-# warn_if_cgroup_v1() is the EA4-360 recommendation: outside CloudLinux, root
-# is told (once per process) that cgroup v2 is what lets limits be enforced.
-# Never fatal, never for users, never on CloudLinux (which needs v1).
+# warn_if_not_cgroup_v2() is the EA4-360 recommendation: root is told (once per
+# process) that cgroup v2 is what lets limits be enforced, CloudLinux included.
+# Never fatal, never for users.
 
-sub _check_v1 {
+sub _check_v2 {
     my ( $is_root, $is_cl, $is_v2 ) = @_;
     no warnings 'redefine';
     local *ea_podman::util::_is_root       = sub { $is_root };
@@ -81,26 +81,28 @@ sub _check_v1 {
     local *ea_podman::util::_is_cgroup_v2  = sub { $is_v2 };
     use warnings 'redefine';
 
-    local $ea_podman::util::cgroup_v1_warned = 0;
+    local $ea_podman::util::cgroup_v2_warned = 0;
     my @warns;
     local $SIG{__WARN__} = sub { push @warns, $_[0] };
-    my @rets = map { scalar eval { ea_podman::util::warn_if_cgroup_v1() } } 1 .. 2;
+    my @rets = map { scalar eval { ea_podman::util::warn_if_not_cgroup_v2() } } 1 .. 2;
     return ( $@, \@rets, \@warns );
 }
 
-subtest 'root, non-CloudLinux, cgroup v1: warns once with the A8 fix, not fatal' => sub {
-    my ( $err, $rets, $warns ) = _check_v1( 1, 0, 0 );
-    ok( !$err, "does not die" );
-    is_deeply( $rets, [ 0, 0 ], "returns false (v1 detected)" );
-    is( scalar(@$warns), 1, "warns only once per process" );
-    like( $warns->[0], qr/cgroup v1/,                         "says what it is" );
-    like( $warns->[0], qr/recommend cgroup v2/,               "says what we recommend" );
-    like( $warns->[0], qr/systemd\.unified_cgroup_hierarchy=1/, "gives the AlmaLinux 8 fix" );
+subtest 'root on cgroup v1 (CloudLinux or not): warns once with the A8 fix, not fatal' => sub {
+    for my $is_cl ( 0, 1 ) {
+        my ( $err, $rets, $warns ) = _check_v2( 1, $is_cl, 0 );
+        ok( !$err, "CL=$is_cl: does not die" );
+        is_deeply( $rets, [ 0, 0 ], "CL=$is_cl: returns false (v1 detected)" );
+        is( scalar(@$warns), 1, "CL=$is_cl: warns only once per process" );
+        like( $warns->[0], qr/cgroup v1/,                           "CL=$is_cl: says what it is" );
+        like( $warns->[0], qr/recommend cgroup v2/,                 "CL=$is_cl: says what we recommend" );
+        like( $warns->[0], qr/systemd\.unified_cgroup_hierarchy=1/, "CL=$is_cl: gives the AlmaLinux 8 fix" );
+    }
 };
 
-subtest 'silent everywhere else' => sub {
-    for my $case ( [ 1, 0, 1, "root, v2" ], [ 1, 1, 0, "root, CloudLinux v1" ], [ 0, 0, 0, "user, v1" ] ) {
-        my ( $err, $rets, $warns ) = _check_v1( @{$case}[ 0 .. 2 ] );
+subtest 'silent on cgroup v2, and for users' => sub {
+    for my $case ( [ 1, 0, 1, "root, v2" ], [ 1, 1, 1, "root, CloudLinux v2" ], [ 0, 0, 0, "user, v1" ] ) {
+        my ( $err, $rets, $warns ) = _check_v2( @{$case}[ 0 .. 2 ] );
         ok( !$err, "$case->[3]: does not die" );
         is_deeply( $rets, [ 1, 1 ], "$case->[3]: returns true" );
         is( scalar(@$warns), 0, "$case->[3]: no warning" );
