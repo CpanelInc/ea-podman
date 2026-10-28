@@ -181,6 +181,8 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
             mkdir $ea_podman::subids::dir_granted_linger;
             Path::Tiny::path("$ea_podman::subids::dir_linger/cptest1")->touch if $opts{already_lingering};
 
+            local *ea_podman::subids::assert_has_user_namespaces = $opts{no_userns} ? sub { die "❌ ea-podman requires user namespaces …\n" } : sub { return 15000 };
+
             $ensured = undef;
             local *ea_podman::subids::ensure_user_root = sub {
                 my ( $user, $num_uids, $session ) = @_;
@@ -208,6 +210,18 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
             );
 
             is( $ensured->{user}, "cptest1" );
+        };
+
+        it "should die with the user namespace reason, before ensuring anything, when they are unavailable" => sub {
+            eval {
+                $with_registry->(
+                    [ { name => "redis.cptest1.01", user => "cptest1" } ],
+                    sub { $mi{mocks}->{object}->ENSURE_USER() },
+                    no_userns => 1,
+                );
+            };
+            like( "$@", qr/requires user namespaces/, "the reason reaches the user" );
+            is( $ensured, undef, "no subids or session were set up" );
         };
 
         it "should give a session to an account that has containers" => sub {

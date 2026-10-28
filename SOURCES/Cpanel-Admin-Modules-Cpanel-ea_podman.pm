@@ -204,6 +204,12 @@ sub ENSURE_USER ( $self, $creating = undef ) {
 
     _require_ea_podman_or_die();
 
+    # Every user's init_user() comes through here, so this is where their
+    # commands get the user namespace check, as root where it is conclusive.
+    # Its message is about the host, not other accounts, and tells them what
+    # to ask for, so pass it through. (EA4-360)
+    eval { ea_podman::subids::assert_has_user_namespaces(); 1 } or _die_with_message("$@");
+
     # subuid/subgid ranges are for anybody who runs podman at all. A lingering
     # user session is not: it exists to keep an account’s containers running, so
     # only an account that has containers — or says it is about to install its

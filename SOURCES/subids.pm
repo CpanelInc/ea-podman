@@ -1386,13 +1386,15 @@ my %sysctl_allowed = map { $_ => 1 } qw(
 # Dies when user namespaces are unavailable (or too restricted for rootless
 # podman to work), returns user.max_user_namespaces otherwise.
 #
-# As root every check is strict. As a cPanel user some of what is read can be
-# hidden (CageFS, CloudLinux's /proc restrictions), and hidden is not the same
-# as disabled, so a value a user cannot see is skipped rather than fatal. The
-# values are host-wide, so whatever root path the user's command goes through
-# (the adminbin, root's own runs) still sees the real numbers.
+# Root only. As a cPanel user much of what is read can be hidden (CageFS,
+# CloudLinux's /proc restrictions, a jail without /etc/apparmor.d), so a user's
+# answer is not conclusive either way. The values are host-wide, so a user's
+# command gets them checked root-side: init_user() always reaches the
+# ENSURE_USER admin action, which runs this. (EA4-360)
 sub assert_has_user_namespaces {
     my ($verbose) = @_;
+
+    die "assert_has_user_namespaces() must run as root\n" if !_is_root();
 
     my $die = sub {
         my ($why) = @_;
@@ -1407,19 +1409,16 @@ sub assert_has_user_namespaces {
 
     # 2. user.max_user_namespaces: 0 disables them for everyone, root included.
     my $max_uns = _sysctl_num('user.max_user_namespaces');
-    if ( !defined $max_uns ) {
-        $die->("user.max_user_namespaces is missing") if $> == 0;
-        return;    # hidden from this user, see above
-    }
+    $die->("user.max_user_namespaces is missing") if !defined $max_uns;
     $die->("user.max_user_namespaces is 0, which disables them for everyone") if $max_uns == 0;
 
     # 3. Low enough that busy accounts can hit the limit (each container uses
     #    at least one), or lowered from the kernel default (threads-max / 2 at
     #    boot). Either still works, so tell root and carry on.
-    if ( $> == 0 && $max_uns < $min_user_namespaces ) {
+    if ( $max_uns < $min_user_namespaces ) {
         warn "ea-podman: user.max_user_namespaces=$max_uns is below the recommended minimum of $min_user_namespaces. Busy accounts may hit that limit. To learn more read $url_userns\n";
     }
-    elsif ( $> == 0 ) {
+    else {
         my $threads = _sysctl_num('kernel.threads-max');
         my $default = defined $threads ? int( $threads / 2 ) : undef;
         warn "ea-podman: user.max_user_namespaces=$max_uns is below the kernel default (~$default); it was lowered on purpose. Busy accounts may hit that limit.\n"
@@ -1449,8 +1448,10 @@ sub assert_has_user_namespaces {
     return $max_uns;
 }
 
+sub _is_root { return $> == 0 ? 1 : 0; }
+
 # Value of an allowlisted numeric sysctl, or undef if the kernel doesn't have
-# it. As root any other read error dies; as a user it is undef too (see above).
+# it. Any other read error dies.
 sub _sysctl_num {
     my ($key) = @_;
 
@@ -1463,7 +1464,6 @@ sub _sysctl_num {
     my $val = eval { Cpanel::Sysctl::get($key) };
     if ( my $err = $@ ) {
         return if Scalar::Util::blessed($err) && $err->isa('Cpanel::Exception::IO::FileNotFound');
-        return if $> != 0;
         ( my $msg = "$err" ) =~ s/\s+\z//;
         die "$bad Cannot read $key: $msg\n";
     }

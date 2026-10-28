@@ -19,8 +19,10 @@ sub init_user {
 
     # Every command that needs podman comes through here (the CLI's and the
     # UAPI/adminbin verbs' alike), and none of them can work without user
-    # namespaces, so stop before doing anything. (EA4-360)
-    ea_podman::subids::assert_has_user_namespaces();
+    # namespaces, so stop before doing anything. The check is only conclusive
+    # as root: a user's run gets it from the ENSURE_USER admin action that
+    # ensure_user() below always calls, before anything else is done. (EA4-360)
+    ea_podman::subids::assert_has_user_namespaces() if $> == 0;
 
     check_proc();
     warn_if_not_cgroup_v2();

@@ -1127,7 +1127,9 @@ NOTE:
 sub subids {
     my ( $app, @other ) = @_;
 
-    ea_podman::subids::assert_has_user_namespaces(1);
+    # Only conclusive as root. A user's init_user() already had it checked
+    # root-side by the ENSURE_USER admin action. (EA4-360)
+    ea_podman::subids::assert_has_user_namespaces(1) if $> == 0;
 
     if ( @other == 1 && $other[0] eq "--ensure" ) {
         ea_podman::util::ensure_user();    # do not need init_user because we don’t care aboue the su login stuff here

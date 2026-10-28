@@ -152,12 +152,19 @@ cptest1:165537:65536
 
             local $conf{dir} = $dir;
 
-            no warnings qw/once/;
+            no warnings qw/once redefine/;
+            local *ea_podman::subids::_is_root = sub { $conf{is_root} // 1 };
             local $ea_podman::subids::file_ns_user = "$dir/ns-user";
             local $ea_podman::subids::dir_apparmor = "$dir/apparmor.d";
             local @ea_podman::subids::files_podman = ("$dir/podman");
 
             yield;
+        };
+
+        it "should refuse to run as a user, whose answer is not conclusive" => sub {
+            local $conf{is_root} = 0;
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/must run as root/ );
         };
 
         it "should return max_user_namespaces when supported" => sub {
@@ -184,20 +191,23 @@ cptest1:165537:65536
             my @warns;
             local $SIG{__WARN__} = sub { push @warns, $_[0] };
             is( ea_podman::subids::assert_has_user_namespaces(), 499 );
-            if ( $> == 0 ) {
-                is( scalar(@warns), 1, "one warning, not also the kernel default one" );
-                like( $warns[0], qr/=499 is below the recommended minimum of 500/ );
-            }
-            else {
-                is( scalar(@warns), 0, "users are not told" );
-            }
+            is( scalar(@warns), 1, "one warning, not also the kernel default one" );
+            like( $warns[0], qr/=499 is below the recommended minimum of 500/ );
         };
 
-        it "should die as root, but skip as a user, on any other read error" => sub {
+        it "should warn when max_user_namespaces was lowered from the kernel default" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => 10000 );
+            my @warns;
+            local $SIG{__WARN__} = sub { push @warns, $_[0] };
+            is( ea_podman::subids::assert_has_user_namespaces(), 10000 );
+            is( scalar(@warns), 1 );
+            like( $warns[0], qr/=10000 is below the kernel default \(~15000\)/ );
+        };
+
+        it "should die on any other read error" => sub {
             $conf{sysctl}->( 'user.max_user_namespaces' => \"Permission denied" );
-            my $val = eval { ea_podman::subids::assert_has_user_namespaces(); };
-            if   ( $> == 0 ) { like( $@, qr/Cannot read user\.max_user_namespaces: Permission denied/ ) }
-            else             { is( $@, "" ); is( $val, undef ); }
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/Cannot read user\.max_user_namespaces: Permission denied/ );
         };
 
         it "should refuse a key that is not allowlisted" => sub {
@@ -205,19 +215,10 @@ cptest1:165537:65536
             like( $@, qr/Invalid sysctl key/ );
         };
 
-        it "should die when max_user_namespaces is missing, as root" => sub {
-            return pass("skipped: needs root") if $> != 0;
+        it "should die when max_user_namespaces is missing" => sub {
             $conf{unset}->('user.max_user_namespaces');
             eval { ea_podman::subids::assert_has_user_namespaces(); };
             like( $@, qr/user\.max_user_namespaces is missing/ );
-        };
-
-        it "should skip (not die) when max_user_namespaces is hidden from a user" => sub {
-            return pass("skipped: needs a non-root user") if $> == 0;
-            $conf{unset}->('user.max_user_namespaces');
-            my $val = eval { ea_podman::subids::assert_has_user_namespaces(); };
-            is( $@,   "" );
-            is( $val, undef );
         };
 
         it "should die when unprivileged_userns_clone is 0" => sub {
