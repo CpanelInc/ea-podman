@@ -19,19 +19,10 @@ my %conf = (
 
 require $conf{require};
 
-our $max_usernamespaces = 15000;
-our $os                 = "AlmaLinux8";
-
 our @qx_calls;
 
 our $current_qx = sub {
     push @qx_calls, [@_];
-    if ( $_[0] =~ m/user\.max_user_namespaces/ ) {
-        return $max_usernamespaces;
-    }
-    elsif ( $_[0] =~ m:source /etc/os-release: ) {
-        return $os;
-    }
     return "";
 };
 
@@ -133,25 +124,111 @@ cptest1:165537:65536
     };
 
     describe "assert_has_user_namespaces" => sub {
-        it "should work correctly if max_usernamespaces is supported" => sub {
+        around {
+            my $dir = File::Temp->newdir();
+
+            # A /proc/sys with only what a stock RHEL-family host has.
+            local $conf{sysctl} = sub {
+                my ( $key, $val ) = @_;
+                ( my $rel = $key ) =~ tr{.}{/};
+                Path::Tiny::path("$dir/sys/$rel")->touchpath->spew("$val\n");
+            };
+            $conf{sysctl}->( 'user.max_user_namespaces' => 15000 );
+            $conf{sysctl}->( 'kernel.threads-max'       => 30000 );
+
+            Path::Tiny::path("$dir/ns-user")->touch;
+            Path::Tiny::path("$dir/apparmor.d")->mkpath;
+            Path::Tiny::path("$dir/podman")->spew("#!/bin/sh\n");
+            chmod 0755, "$dir/podman";
+
+            local $conf{dir} = $dir;
+
+            no warnings qw/once/;
+            local $ea_podman::subids::dir_proc_sys = "$dir/sys";
+            local $ea_podman::subids::file_ns_user = "$dir/ns-user";
+            local $ea_podman::subids::dir_apparmor = "$dir/apparmor.d";
+            local @ea_podman::subids::files_podman = ("$dir/podman");
+
+            yield;
+        };
+
+        it "should return max_user_namespaces when supported" => sub {
             my $val = ea_podman::subids::assert_has_user_namespaces();
             is( $val, 15000 );
         };
 
-        it "should output horrible things if not supported" => sub {
-            local $max_usernamespaces = 0;
+        it "should die pointing at the docs when the kernel has no user namespaces" => sub {
+            unlink "$conf{dir}/ns-user";
             eval { ea_podman::subids::assert_has_user_namespaces(); };
-
-            ok( $@ =~ m/User Namespaces not available/ );
+            like( $@, qr/requires user namespaces.*kernel was built without/s );
+            like( $@, qr{https://go\.cpanel\.net/userns} );
         };
 
-        it "should output more horrible things if on c7" => sub {
-            local $max_usernamespaces = 0;
-            local $os                 = "centos7";
-
+        it "should die when max_user_namespaces is 0" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => 0 );
             eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/user\.max_user_namespaces is 0/ );
+            like( $@, qr{https://go\.cpanel\.net/userns} );
+        };
 
-            ok( $@ =~ m/CentOS 7 running these command/ );
+        it "should die when max_user_namespaces is below the floor" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => 499 );
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/is 499, below the minimum of 500/ );
+        };
+
+        it "should die when max_user_namespaces is missing, as root" => sub {
+            return pass("skipped: needs root") if $> != 0;
+            unlink "$conf{dir}/sys/user/max_user_namespaces";
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/user\.max_user_namespaces is missing/ );
+        };
+
+        it "should skip (not die) when max_user_namespaces is hidden from a user" => sub {
+            return pass("skipped: needs a non-root user") if $> == 0;
+            unlink "$conf{dir}/sys/user/max_user_namespaces";
+            my $val = eval { ea_podman::subids::assert_has_user_namespaces(); };
+            is( $@,   "" );
+            is( $val, undef );
+        };
+
+        it "should die when unprivileged_userns_clone is 0" => sub {
+            $conf{sysctl}->( 'kernel.unprivileged_userns_clone' => 0 );
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/unprivileged_userns_clone is 0/ );
+        };
+
+        it "should be fine when unprivileged_userns_clone is 1" => sub {
+            $conf{sysctl}->( 'kernel.unprivileged_userns_clone' => 1 );
+            is( ea_podman::subids::assert_has_user_namespaces(), 15000 );
+        };
+
+        it "should die when AppArmor restricts userns and no profile exempts podman" => sub {
+            $conf{sysctl}->( 'kernel.apparmor_restrict_unprivileged_userns' => 1 );
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/no enabled profile .* grants `userns`/ );
+        };
+
+        it "should be fine when AppArmor restricts userns but a profile exempts podman" => sub {
+            $conf{sysctl}->( 'kernel.apparmor_restrict_unprivileged_userns' => 1 );
+            my $podman = Cwd::abs_path("$conf{dir}/podman");
+            Path::Tiny::path("$conf{dir}/apparmor.d/podman")->spew(qq{abi <abi/4.0>,\n\nprofile podman $podman flags=(unconfined) {\n  userns,\n}\n});
+            is( ea_podman::subids::assert_has_user_namespaces(), 15000 );
+        };
+
+        it "should ignore a disabled AppArmor profile" => sub {
+            $conf{sysctl}->( 'kernel.apparmor_restrict_unprivileged_userns' => 1 );
+            my $podman = Cwd::abs_path("$conf{dir}/podman");
+            Path::Tiny::path("$conf{dir}/apparmor.d/podman")->spew(qq{profile podman $podman {\n  userns,\n}\n});
+            Path::Tiny::path("$conf{dir}/apparmor.d/disable/podman")->touchpath;
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/no enabled profile/ );
+        };
+
+        it "should die on a non-numeric value" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => 'lots' );
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/Unexpected value “lots” for user\.max_user_namespaces/ );
         };
     };
 

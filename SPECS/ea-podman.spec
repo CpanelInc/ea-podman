@@ -1,7 +1,7 @@
 Name:           ea-podman
 Version:        1.0
 # Doing release_prefix this way for Release allows for OBS-proof versioning, See EA-4552 for more details
-%define release_prefix 37
+%define release_prefix 38
 Release:        %{release_prefix}%{?dist}.cpanel
 Summary:        Bring in podman and helpers for container based EA4 packages
 License:        GPL
@@ -159,6 +159,9 @@ rm -rf %{buildroot}
 %attr(0644, root, root) /usr/lib/systemd/system/ea-podman-user-managers.service
 
 %changelog
+* Wed Oct 28 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-38
+- EA4-360: Die early when user namespaces are unavailable; recommend cgroup v2
+
 * Mon Oct 19 2026 Jared Wright <jared.wright@webpros.com> - 1.0-37
 - EA4-339: Keep the PodmanHooks cPanel hooks registered across RPM upgrades,
   reinstalls and downgrades

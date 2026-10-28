@@ -14,6 +14,8 @@ package ea_podman::subids;
 
 use Path::Tiny 'path';
 use Cpanel::OS;
+use Cwd         ();
+use Errno       ();    # for %!, loaded explicitly: the CLI is a compiled binary
 use Digest::SHA ();
 use Fcntl       qw(:flock);
 use IPC::Open3  ();
@@ -1353,37 +1355,141 @@ sub remove_stale_linger_marker {
     return unlink("$dir_linger/$user") ? 1 : 0;
 }
 
+# Rootless podman, and the per-account isolation ea-podman builds on it, needs
+# the kernel to let unprivileged users create user namespaces. Without them
+# nothing container related works at all, so commands that need podman die up
+# front with a pointer to the docs instead of failing later inside podman.
+#
+# Read from /proc directly (no sysctl(8), no Cpanel::Sysctl): a missing file is
+# ENOENT, which is how a key the kernel doesn't have shows up, and anything else
+# is a real read error. Package variables so tests can point them at fixtures.
+our $dir_proc_sys = "/proc/sys";
+our $file_ns_user = "/proc/self/ns/user";
+our $dir_apparmor = "/etc/apparmor.d";
+our @files_podman = ( "/usr/bin/podman", "/bin/podman", "/usr/local/bin/podman" );
+our $url_userns   = "https://go.cpanel.net/userns";
+
+# Floor for user.max_user_namespaces. The limit is per user and counts every
+# namespace the user owns, including ones created inside their containers.
+# Heavy accounts land in the low hundreds; this is a judgment call.
+our $min_user_namespaces = 500;
+
+# Dies when user namespaces are unavailable (or too restricted for rootless
+# podman to work), returns user.max_user_namespaces otherwise.
+#
+# As root every check is strict. As a cPanel user some of what is read can be
+# hidden (CageFS, CloudLinux's /proc restrictions), and hidden is not the same
+# as disabled, so a value a user cannot see is skipped rather than fatal. The
+# values are host-wide, so whatever root path the user's command goes through
+# (the adminbin, root's own runs) still sees the real numbers.
 sub assert_has_user_namespaces {
     my ($verbose) = @_;
 
-    chomp( my $max_uns = `sysctl --values user.max_user_namespaces 2>/dev/null` );
+    my $die = sub {
+        my ($why) = @_;
+        die "$bad ea-podman requires user namespaces for container security and functionality, but this server does not allow them:\n"
+          . "    • $why\n"
+          . "    • Container based packages will not work until they are.\n"
+          . "    • To learn more read $url_userns\n";
+    };
 
-    if ( !$max_uns ) {
-        my $c7_msg = <<'C7';
+    # 1. Kernel support (CONFIG_USER_NS).
+    $die->("$file_ns_user is missing: the kernel was built without user namespace support") if !-e $file_ns_user;
 
-    • On CentOS 7 running these command enable user namespaces:
-        1. grubby --args="namespce.unpriv_enable=1 user_namespace.enable=1" --update-kernel="$(grubby --default-kernel)"
-        2. echo "user.max_user_namespaces=15076" >> /etc/sysctl.conf
-        3. reboot
-C7
-        chomp($c7_msg);
+    # 2. user.max_user_namespaces: 0 disables them for everyone, root included.
+    my $max_uns = _sysctl_num('user.max_user_namespaces');
+    if ( !defined $max_uns ) {
+        $die->("user.max_user_namespaces is missing") if $> == 0;
+        return;    # hidden from this user, see above
+    }
+    $die->("user.max_user_namespaces is 0, which disables them for everyone") if $max_uns == 0;
+    $die->("user.max_user_namespaces is $max_uns, below the minimum of $min_user_namespaces") if $max_uns < $min_user_namespaces;
 
-        # I wish there was a better way …
-        my $os = -f '/etc/os-release' ? `source /etc/os-release; echo \$ID\$VERSION_ID` : "??";
+    # 3. Lowered from the kernel default (threads-max / 2 at boot). It still
+    #    works, someone just set it on purpose, so tell root and carry on.
+    if ( $> == 0 ) {
+        my $threads = _sysctl_num('kernel.threads-max');
+        my $default = defined $threads ? int( $threads / 2 ) : undef;
+        warn "ea-podman: user.max_user_namespaces=$max_uns is below the kernel default (~$default); it was lowered on purpose. Busy accounts may hit that limit.\n"
+          if defined $default && $max_uns < $default;
+    }
 
-        chomp($os);
-        $c7_msg = "" if $os ne "centos7";
+    # 4. Debian/Ubuntu-only patch; missing on the RHEL family is normal. 0
+    #    means only root may create user namespaces, which is rootless podman broken.
+    my $clone = _sysctl_num('kernel.unprivileged_userns_clone');
+    $die->("kernel.unprivileged_userns_clone is 0, which allows them for root only") if defined $clone && $clone == 0;
 
-        die <<"END_NO_UNS";
-$bad User Namespaces not available (`sysctl --values user.max_user_namespaces`):
-    • Container based packages will not work until they are.
-    • To learn more read `man user_namespaces`$c7_msg
-END_NO_UNS
+    # 5. Ubuntu 23.10+: AppArmor confines unprivileged user namespaces unless
+    #    the program's own profile grants `userns`.
+    my $aa = _sysctl_num('kernel.apparmor_restrict_unprivileged_userns');
+    if ( defined $aa && $aa == 1 ) {
+        my $podman = _podman_path();
+        $die->("AppArmor restricts unprivileged user namespaces and podman is not installed, so no profile exempting it can be checked") if !defined $podman;
+
+        my $profile = _apparmor_userns_profile_for($podman);
+        $die->("AppArmor restricts unprivileged user namespaces and no enabled profile in $dir_apparmor grants `userns` to $podman") if !defined $profile;
+
+        print "$good AppArmor restricts unprivileged user namespaces; $podman is exempted by $profile\n" if $verbose;
     }
 
     print "$good user.max_user_namespaces = '$max_uns'\n" if $verbose;
 
     return $max_uns;
+}
+
+# Value of a numeric sysctl, or undef if the kernel doesn't have it. As root any
+# other read error dies; as a user it is undef too (see above).
+sub _sysctl_num {
+    my ($key) = @_;
+
+    die "Invalid sysctl key “$key”\n" if $key !~ m/\A[a-z0-9_-]+(?:\.[a-z0-9_-]+)+\z/;
+    ( my $file = "$dir_proc_sys/$key" ) =~ tr{.}{/};
+
+    my $val;
+    if ( open( my $fh, '<', $file ) ) {
+        $val = <$fh>;
+        close $fh;
+    }
+    else {
+        return if $!{ENOENT} || $!{ENOTDIR} || $> != 0;
+        die "$bad Cannot read $key ($file): $!\n";
+    }
+
+    $val //= "";
+    chomp $val;
+    die "$bad Unexpected value “$val” for $key\n" if $val !~ m/\A[0-9]+\z/;
+
+    return $val;
+}
+
+sub _podman_path {
+    for my $bin (@files_podman) {
+        next if !-f $bin || !-x _;
+        return Cwd::abs_path($bin) // $bin;    # AppArmor matches the real path
+    }
+
+    return;
+}
+
+# Heuristic: an enabled profile that attaches to $bin by its literal path and
+# has a `userns` rule. Globs, variables and includes are not expanded, so a
+# profile written that way reads as "not found".
+sub _apparmor_userns_profile_for {
+    my ($bin) = @_;
+
+    opendir( my $dh, $dir_apparmor ) or return;
+    my @files = sort grep { -f "$dir_apparmor/$_" } readdir($dh);
+    closedir($dh);
+
+    for my $f (@files) {
+        next if -e "$dir_apparmor/disable/$f";    # disabled profiles aren't loaded
+
+        my $text = eval { path("$dir_apparmor/$f")->slurp_utf8 } // next;
+        next if $text !~ m/^\s*(?:profile\s+\S+\s+)?"?\Q$bin\E"?[\s{]/m;
+        return "$dir_apparmor/$f" if $text =~ m/^\s*(?:allow\s+)?userns\b[^,\n]*,/m;
+    }
+
+    return;
 }
 
 sub get_subuids {

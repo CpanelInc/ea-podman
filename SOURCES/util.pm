@@ -17,7 +17,13 @@ package ea_podman::util;
 sub init_user {
     my (%opts) = @_;    # creating => 1 when about to make a container
 
+    # Every command that needs podman comes through here (the CLI's and the
+    # UAPI/adminbin verbs' alike), and none of them can work without user
+    # namespaces, so stop before doing anything. (EA4-360)
+    ea_podman::subids::assert_has_user_namespaces();
+
     check_proc();
+    warn_if_cgroup_v1();
 
     # Order matters (CPANEL-54037): ensure_user() bootstraps the rootless
     # session *as root* (subuid/subgid + `loginctl enable-linger`, which
@@ -388,6 +394,27 @@ sub _is_cloudlinux {
         close $fh;
         return 1 if $c =~ /cloudlinux/i;
     }
+    return 0;
+}
+
+# Outside CloudLinux, cgroup v2 is what we want: it is what lets resource limits
+# be enforced on rootless containers (v1 delegates no controllers to users).
+# Both work, so like the hidepid advice in check_proc() this is a root-only
+# heads-up, given once per process. We do not switch it for them: it takes a
+# reboot and can affect other things on the server. (EA4-360)
+our $cgroup_v1_warned = 0;
+
+sub _is_root { return $> == 0 ? 1 : 0; }
+
+sub warn_if_cgroup_v1 {
+    return 1 if !_is_root();
+    return 1 if _is_cgroup_v2() || _is_cloudlinux();    # CloudLinux needs v1, see above
+    return 0 if $cgroup_v1_warned++;
+
+    warn "ea-podman: this server is using cgroup v1. We recommend cgroup v2 so that container resource limits can be enforced.\n"
+      . "For example, on AlmaLinux 8:\n"
+      . "\tgrubby --update-kernel=ALL --args=\"systemd.unified_cgroup_hierarchy=1\" && reboot\n"
+      . "(verify afterward: `podman info --format '{{.Host.CgroupsVersion}}'` reports v2).\n";
     return 0;
 }
 
