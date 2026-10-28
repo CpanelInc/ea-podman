@@ -81,12 +81,6 @@ sub run {
         exit 1;
     }
 
-    # We are on the direct CLI path: only root or an unrestricted-shell user
-    # reaches here (restricted shells were routed to delegate_to_admin above).
-    # Stay silent about the cgroup config for them; the UAPI/restricted path
-    # never runs through here and keeps the CloudLinux + cgroup v2 advisory.
-    $ea_podman::util::EMIT_CGROUP_ADVISORY = 0;
-
     # An account can also be unreachable directly for a reason the shell check
     # above can't see: CageFS. A CageFS-caged account can have an unrestricted
     # shell (so it isn't routed to delegate_to_admin above), but a real login

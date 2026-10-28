@@ -369,42 +369,16 @@ sub _cap_output {
     return ( substr( $text, 0, $EXEC_OUTPUT_CAP ), 1 );
 }
 
-# ea-podman manages containers through each user's systemd manager, and either
-# cgroup hierarchy works for bring-up and serving — the shipped units are plain
-# Type=forking (`podman generate systemd --name`, never `--new`/`--sdnotify`),
-# so they reach "active" and the container runs on cgroup v1 or v2. We therefore
-# never *block* on the cgroup version. The one genuinely problematic combination
-# is **CloudLinux + cgroup v2**: the LVE kernel relocates every non-root user's
-# processes into its own cgroup (`/lvub/lve<uid>`), and under cgroup v2's single
-# unified hierarchy a process can live in only one node, so LVE's placement and
-# systemd's per-user `user.slice` are mutually exclusive — `systemd --user` dies
-# and the restricted/CageFS path that depends on it fails. On CloudLinux the
-# supported configuration is cgroup v1; we advise (warn only, never die) when we
-# detect CloudLinux running on v2.
-sub _is_cgroup_v2 { return -e '/sys/fs/cgroup/cgroup.controllers' ? 1 : 0; }
-
-# True only on CloudLinux, whose LVE kernel is the source of the v2 conflict.
-sub _is_cloudlinux {
-    return 1 if -e '/etc/cloudlinux-release';
-    for my $f ( '/etc/redhat-release', '/etc/os-release' ) {
-        next if !-r $f;
-        open my $fh, '<', $f or next;
-        local $/;
-        my $c = <$fh> // '';
-        close $fh;
-        return 1 if $c =~ /cloudlinux/i;
-    }
-    return 0;
-}
-
-# cgroup v2 is what we want, CloudLinux included: it is what lets resource
-# limits be enforced on rootless containers (v1 delegates no controllers to
-# users). Both work, so like the hidepid advice in check_proc() this is a
-# root-only heads-up, given once per process. We do not switch it for them: it
-# takes a reboot and can affect other things on the server. (EA4-360)
+# cgroup v2 is what we want, on every OS: it is what lets resource limits be
+# enforced on rootless containers (v1 delegates no controllers to users). Both
+# work, so like the hidepid advice in check_proc() this is a root-only heads-up,
+# given once per process. We do not switch it for them: it takes a reboot and
+# can affect other things on the server. (EA4-360)
 our $cgroup_v2_warned = 0;
 
 sub _is_root { return $> == 0 ? 1 : 0; }
+
+sub _is_cgroup_v2 { return -e '/sys/fs/cgroup/cgroup.controllers' ? 1 : 0; }
 
 sub warn_if_not_cgroup_v2 {
     return 1 if !_is_root() || _is_cgroup_v2();
@@ -417,32 +391,7 @@ sub warn_if_not_cgroup_v2 {
     return 0;
 }
 
-# Direct CLI (root / unrestricted-shell) sets this to 0 in ea-podman.pl::run()
-# to stay silent. The UAPI/restricted path loads this module directly and leaves
-# it at 1, so it keeps the advisory (non-fatal).
-our $EMIT_CGROUP_ADVISORY = 1;
-
-# Returns true when the host's cgroup configuration is fine for ea-podman (or
-# the advisory is suppressed). Returns false after a non-fatal warning on the
-# one problematic combination — CloudLinux + cgroup v2 — which breaks the
-# per-user systemd manager under LVE.
-sub warn_if_problematic_cgroup {
-    return 1 unless _is_cloudlinux() && _is_cgroup_v2();
-    return 1 unless $EMIT_CGROUP_ADVISORY;                 # direct CLI path: stay silent
-    warn "ea-podman: this CloudLinux host is using cgroup v2.\n"
-      . "CloudLinux's LVE kernel and cgroup v2 are mutually exclusive with the per-user systemd manager ea-podman relies on, so the user session can fail to start and containers may not come up.\n"
-      . "Switch back to cgroup v1 and reboot:  tuned-adm profile cloudlinux-default-cgv1 && reboot\n"
-      . "(verify afterward: `stat -fc %T /sys/fs/cgroup` reports tmpfs, not cgroup2fs).\n";
-    return 0;
-}
-
 sub sysctl {
-
-    # Advise about a problematic cgroup config only for bring-up actions;
-    # stop/disable/etc. never warn so an existing container can be torn down
-    # quietly on a CloudLinux + cgroup v2 host.
-    warn_if_problematic_cgroup() if grep { $_ eq 'start' || $_ eq 'restart' || $_ eq 'enable' } @_;
-
     system( systemctl => "--user", @_ );    # ¿ if $> == 0 do --root => "~/.config/systemd/user" instead of `--user` ?
     my $rv = $? == 0 ? 1 : 0;
     return $rv;
@@ -1244,8 +1193,6 @@ sub _ensure_latest_container {
     my ( $container_name, $opts, @start_args ) = @_;
 
     $opts ||= {};
-
-    warn_if_problematic_cgroup();    # advise (non-fatal) on CloudLinux + cgroup v2
 
     validate_user_container_name($container_name);
 

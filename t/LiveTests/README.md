@@ -30,8 +30,8 @@ state behind. Use a throwaway VM you can discard afterward.
 
 ## The tests
 
-ea-podman no longer requires cgroup v2 (the direct CLI runs on cgroup v1; the
-UAPI path warns but proceeds). All three live tests run on **both** cgroup v1
+ea-podman does not require cgroup v2, though it recommends it (root is warned on
+cgroup v1). All three live tests run on **both** cgroup v1
 and v2 — none has a cgroup-version gate. Their bring-up + serving assertions are
 verified on cgroup v1 (AlmaLinux 8 and CloudLinux 8/9/10, which default to v1)
 as well as v2 (AlmaLinux 9/10 and Ubuntu 24.04, which default to v2).
@@ -401,11 +401,9 @@ them. Run one, then
 
 The cagefs test only runs on **CloudLinux** with CageFS installed **and
 initialized**; otherwise it skips. It works on the stock **cgroup v1** that
-CloudLinux defaults to — do **not** switch CloudLinux to cgroup v2: its LVE
-kernel places user processes in `/lvub/lve<uid>`, which under cgroup v2's single
-hierarchy collides with systemd's `user.slice` and breaks the per-user systemd
-manager the feature relies on. On a fresh CloudLinux VM, as root, set it up in
-this order, then run the test:
+CloudLinux defaults to, and on cgroup v2, which we recommend everywhere
+(EA4-360). On a fresh CloudLinux VM, as root, set it up in this order, then run
+the test:
 
 ```sh
 # 1. ea-podman (must be a CPANEL-54037-aware build, not the stock EA4 package)
@@ -437,9 +435,8 @@ Notes:
 - The stock EA4 `ea-podman` predates CPANEL-54037; the test skips on it. Install
   the rebuilt RPM from the `CPANEL-54037` branch.
 - The tests run on whatever cgroup hierarchy the host defaults to — no cgroup
-  switch is needed. CloudLinux 8/9/10 stay on their default cgroup v1 (do **not**
-  switch CloudLinux to v2 — see the warning above); AlmaLinux 8 runs the tests on
-  its default cgroup v1; AlmaLinux 9/10 and Ubuntu 24.04 run on cgroup v2.
+  switch is needed. CloudLinux 8/9/10 and AlmaLinux 8 run the tests on their
+  default cgroup v1; AlmaLinux 9/10 and Ubuntu 24.04 run on cgroup v2.
 - **`cagefsctl --init`/`--reinit` may print a one-off mount error** on newer
   kernels (seen on CloudLinux 10 / AlmaLinux 10.2, kernel 6.12), e.g.:
   ```

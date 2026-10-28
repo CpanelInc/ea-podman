@@ -581,7 +581,6 @@ subtest 'every creation path gets past the operation dispatch' => sub {
 
     no warnings qw(redefine once);
     local *ea_podman::util::get_next_available_container_name  = sub { return "dispatch.alice.01" };
-    local *ea_podman::util::warn_if_problematic_cgroup         = sub { return 1 };
     local *ea_podman::util::validate_user_container_name       = sub { return 1 };
     local *ea_podman::util::ensure_container_session           = sub { return 1 };
     local *ea_podman::util::_ensure_backup_conf_excludes_files = sub { return 1 };
