@@ -79,6 +79,9 @@ to call it. See `DESIGN.md` for the internals.
 > included. Its unified hierarchy gives the user systemd manager proper
 > cgroup-subtree delegation, so resource limits can be enforced. cgroup v1 still
 > works, and ea-podman warns root when a server is on it (EA4-360).
+> CloudLinux has only been verified on cgroup v1 so far. Whether LVE's per-user
+> cgroups and the user systemd manager work together on v2 is what EA4-352 is
+> testing, so on CloudLinux try v2 on a non-production server first.
 > AlmaLinux / RHEL 9+ and Ubuntu already default to cgroup v2. **AlmaLinux /
 > RHEL 8 and CloudLinux** default to cgroup v1; to move to v2, add the kernel
 > arg and reboot:
