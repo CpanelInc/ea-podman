@@ -24,7 +24,9 @@ sub _check {
     local *ea_podman::util::_is_cgroup_v2 = sub { $is_v2 };
     use warnings 'redefine';
 
+    no warnings 'once';
     local $ea_podman::util::cgroup_v2_warned = 0;
+    use warnings 'once';
     my @warns;
     local $SIG{__WARN__} = sub { push @warns, $_[0] };
     my @rets = map { scalar eval { ea_podman::util::warn_if_not_cgroup_v2() } } 1 .. 2;
