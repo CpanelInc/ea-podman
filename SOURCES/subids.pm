@@ -1398,10 +1398,7 @@ sub assert_has_user_namespaces {
 
     my $die = sub {
         my ($why) = @_;
-        die "$bad ea-podman requires user namespaces for container security and functionality, but this server does not allow them:\n"
-          . "    • $why\n"
-          . "    • Container based packages will not work until they are.\n"
-          . "    • To learn more read $url_userns\n";
+        die "$bad ea-podman requires user namespaces for container security and functionality, but this server does not allow them:\n" . "    • $why\n" . "    • Container based packages will not work until they are.\n" . "    • To learn more read $url_userns\n";
     };
 
     # 1. Kernel support (CONFIG_USER_NS).
@@ -1409,7 +1406,7 @@ sub assert_has_user_namespaces {
 
     # 2. user.max_user_namespaces: 0 disables them for everyone, root included.
     my $max_uns = _sysctl_num('user.max_user_namespaces');
-    $die->("user.max_user_namespaces is missing") if !defined $max_uns;
+    $die->("user.max_user_namespaces is missing")                             if !defined $max_uns;
     $die->("user.max_user_namespaces is 0, which disables them for everyone") if $max_uns == 0;
 
     # 3. Low enough that busy accounts can hit the limit (each container uses
@@ -1446,6 +1443,19 @@ sub assert_has_user_namespaces {
     print "$good user.max_user_namespaces = '$max_uns'\n" if $verbose;
 
     return $max_uns;
+}
+
+# The same check as a warning, for a verb whose own work needs no podman: the
+# removals, so a server that lost user namespaces after its containers were
+# made can still be cleaned up (their podman steps fail without them, their
+# root-side ones do not), and reading the registry. Root only, like the
+# assertion. Returns whether they are available. (EA4-360)
+sub warn_if_no_user_namespaces {
+    local $@;
+    return 1 if eval { assert_has_user_namespaces(); 1 };
+
+    warn $@ . "    • Carrying on, as this command does not need podman for its own work. Anything it does ask of podman fails; a removal still cleans up the ports, registration, systemd unit and container directory, but podman’s copy of the container and its image stay until user namespaces are available again.\n";
+    return 0;
 }
 
 sub _is_root { return $> == 0 ? 1 : 0; }
@@ -1498,7 +1508,7 @@ sub _apparmor_userns_profile_for {
         next if -e "$dir_apparmor/disable/$f";    # disabled profiles aren't loaded
 
         my $text = eval { path("$dir_apparmor/$f")->slurp_utf8 } // next;
-        next if $text !~ m/^\s*(?:profile\s+\S+\s+)?"?\Q$bin\E"?[\s{]/m;
+        next                      if $text !~ m/^\s*(?:profile\s+\S+\s+)?"?\Q$bin\E"?[\s{]/m;
         return "$dir_apparmor/$f" if $text =~ m/^\s*(?:allow\s+)?userns\b[^,\n]*,/m;
     }
 

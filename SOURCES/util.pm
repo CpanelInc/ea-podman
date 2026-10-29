@@ -15,14 +15,23 @@ package ea_podman::util;
 # All consumers of this module must ensure ea_podman::util::init_user()
 #    is called prior to calling other functions (there are some exceptions in POD)
 sub init_user {
-    my (%opts) = @_;    # creating => 1 when about to make a container
+    my (%opts) = @_;    # creating => 1 when about to make a container, userns_optional => 1 when the verb's own work needs no podman
 
     # Every command that needs podman comes through here (the CLI's and the
     # UAPI/adminbin verbs' alike), and none of them can work without user
     # namespaces, so stop before doing anything. The check is only conclusive
     # as root: a user's run gets it from the ENSURE_USER admin action that
-    # ensure_user() below always calls, before anything else is done. (EA4-360)
-    ea_podman::subids::assert_has_user_namespaces() if $> == 0;
+    # ensure_user() below always calls, before anything else is done.
+    #
+    # A verb whose own work needs no podman (userns_optional) only warns: the
+    # removals, since dying would leave the registry, ports and units of a
+    # server that lost user namespaces with no way to clean them up (the
+    # package's own prerm and the account-deletion hook are removals), and
+    # `containers`, which only reads the registry. (EA4-360)
+    if ( $> == 0 ) {
+        if   ( $opts{userns_optional} ) { ea_podman::subids::warn_if_no_user_namespaces() }
+        else                            { ea_podman::subids::assert_has_user_namespaces() }
+    }
 
     check_proc();
     warn_if_not_cgroup_v2();
@@ -42,7 +51,7 @@ sub init_user {
     #
     # Nothing for a caller to pass about the grant: whether this is the call that
     # turns the linger on is decided root-side, from what is on disk.
-    my $has_session = ensure_user( $opts{creating} );
+    my $has_session = ensure_user( $opts{creating}, $opts{userns_optional} );
     ensure_su_login($has_session);
 
     return $has_session;
@@ -386,10 +395,7 @@ sub warn_if_not_cgroup_v2 {
     return 1 if !_is_root() || _is_cgroup_v2();
     return 0 if $cgroup_v2_warned++;
 
-    warn "ea-podman: this server is using cgroup v1. We recommend cgroup v2 so that container resource limits can be enforced.\n"
-      . "For example, on AlmaLinux 8:\n"
-      . "\tgrubby --update-kernel=ALL --args=\"systemd.unified_cgroup_hierarchy=1\" && reboot\n"
-      . "(verify afterward: `podman info --format '{{.Host.CgroupsVersion}}'` reports v2).\n";
+    warn "ea-podman: this server is using cgroup v1. We recommend cgroup v2 so that container resource limits can be enforced.\n" . "For example, on AlmaLinux 8:\n" . "\tgrubby --update-kernel=ALL --args=\"systemd.unified_cgroup_hierarchy=1\" && reboot\n" . "(verify afterward: `podman info --format '{{.Host.CgroupsVersion}}'` reports v2).\n";
     return 0;
 }
 
@@ -843,14 +849,14 @@ sub _podman_output_tail {
 
     return '' if !defined $out;
 
-    $out =~ s/\r\n?/\n/g;                          # a progress bar redraws with \r
-    $out =~ s/\e\[[0-9;?]*[ -\/]*[@-~]//g;          # ANSI escape sequences
-    $out =~ tr/\x00-\x08\x0b-\x1f\x7f//d;           # other control characters, keeping \n and \t
+    $out =~ s/\r\n?/\n/g;                     # a progress bar redraws with \r
+    $out =~ s/\e\[[0-9;?]*[ -\/]*[@-~]//g;    # ANSI escape sequences
+    $out =~ tr/\x00-\x08\x0b-\x1f\x7f//d;     # other control characters, keeping \n and \t
     $out =~ s/\s+\z//;
 
     if ( length($out) > $CREATE_OUTPUT_CAP ) {
         $out = substr( $out, -$CREATE_OUTPUT_CAP );
-        $out =~ s/\A[\x80-\xBF]+//;                   # do not start on half a UTF-8 character
+        $out =~ s/\A[\x80-\xBF]+//;           # do not start on half a UTF-8 character
     }
 
     $out =~ s/\A\s+//;
@@ -1469,8 +1475,7 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             # is worse than naming none -- the point of this branch is to stop
             # guessing at causes, not to guess differently.
             my $why =
-              $rate_limited
-              ? "the registry is rate limiting this server"
+                $rate_limited                ? "the registry is rate limiting this server"
               : $pull_reason eq "disk_quota" ? "the account has run out of disk space or reached its disk quota"
               :                                "the pull failed";
 
@@ -2689,7 +2694,7 @@ sub deregister_container {
 }
 
 sub ensure_user {
-    my ($creating) = @_;
+    my ( $creating, $userns_optional ) = @_;
 
     # The very first command has to be ensure_user which establishes this user
     # in the /etc/subuid and /etc/subgid files, critical to podman.
@@ -2720,7 +2725,7 @@ sub ensure_user {
 
     # The adminbin decides the same thing root-side, from the container
     # registry only it can read, and reports back what it did.
-    return Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER', $creating ? 1 : 0 ) ? 1 : 0;
+    return Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER', $creating ? 1 : 0, $userns_optional ? 1 : 0 ) ? 1 : 0;
 }
 
 sub user_has_containers_as_root {
@@ -3333,7 +3338,7 @@ sub run_in_user_session {
         sub {
             local $@;
             eval {
-                init_user( creating => $opts{creating} );
+                init_user( creating => $opts{creating}, userns_optional => $opts{userns_optional} );
                 @rv = $code->();
                 1;
             } or $err = $@ || "ea-podman: unknown error";
@@ -3414,7 +3419,8 @@ sub api_uninstall {
             verify_own_container($container_name);
             remove_container_by_name($container_name);
             return 1;
-        }
+        },
+        userns_optional => 1,
     );
 
     return 1;
@@ -3524,6 +3530,21 @@ That is C<install> (CLI and UAPI) and C<perform_user_restore()>. Every other
 verb acts on a container that already exists, so the registry answers for it.
 Without C<creating>, an account with no containers gets its subuid/subgid
 ranges and no session, and C<init_user()> returns false to say so.
+
+=head2 Without user namespaces
+
+C<init_user()> dies when the server does not allow user namespaces, since no
+podman command can work without them. A caller whose own work does not need
+podman must say so instead:
+
+    ea_podman::util::init_user( userns_optional => 1 );
+
+That only warns. It is for the removals, so a server that lost user namespaces
+after its containers were made can still be cleaned up: the ports,
+registration, systemd unit and container directory go, and only podman's own
+steps fail. That is C<uninstall> (CLI and UAPI), C<remove_containers> (which
+the package's prerm runs) and the account-deletion hook. It is also for
+C<containers>, which only reads the registry. (EA4-360)
 
 =head2 Giving the linger back
 

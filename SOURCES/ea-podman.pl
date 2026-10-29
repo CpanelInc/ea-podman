@@ -424,7 +424,7 @@ If the pull fails, this reports the failure and leaves the container untouched r
                     return;
                 }
 
-                ea_podman::util::init_user();
+                ea_podman::util::init_user( userns_optional => 1 );
                 ea_podman::util::remove_container_by_name($container_name);
             },
         },
@@ -550,7 +550,8 @@ If the pull fails, this reports the failure and leaves the container untouched r
 
                 my $user = getpwuid($>);
 
-                ea_podman::util::init_user();
+                # Only reads the registry, so it works without user namespaces too (EA4-360)
+                ea_podman::util::init_user( userns_optional => 1 );
 
                 my $containers_hr = ea_podman::util::load_known_containers();
 
@@ -591,7 +592,7 @@ This is intended to make it easier for a user to purge their ea-podman based con
 
                 die "Please provide a package name or the flag `--all`\n" if ( !$pkg );
 
-                ea_podman::util::init_user();
+                ea_podman::util::init_user( userns_optional => 1 );
 
                 # TODO ZC-9746: have them verify they want to do this destructive thing
 
@@ -638,7 +639,7 @@ This is intended to make it easier for a user to purge their ea-podman based con
                                         local $ENV{USER} = $c_user;
 
                                         chdir($homedir);
-                                        ea_podman::util::init_user();
+                                        ea_podman::util::init_user( userns_optional => 1 );
                                         ea_podman::util::remove_containers_for_a_user( @{ $user_breakdown{$c_user} } );
                                     }
                                 );
@@ -661,7 +662,7 @@ This is intended to make it easier for a user to purge their ea-podman based con
                     }
                 }
                 else {
-                    ea_podman::util::init_user();
+                    ea_podman::util::init_user( userns_optional => 1 );
                     ea_podman::util::remove_containers_for_a_user(@containers);
                 }
             },
