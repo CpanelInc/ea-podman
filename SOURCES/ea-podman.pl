@@ -463,7 +463,7 @@ If the pull fails, this reports the failure and leaves the container untouched r
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
 
-                ea_podman::util::init_user();
+                ea_podman::util::init_user( userns_optional => 1 );    # systemd only
 
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
                 ea_podman::util::sysctl( stop => $service_name );
@@ -496,7 +496,7 @@ If the pull fails, this reports the failure and leaves the container untouched r
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
 
-                ea_podman::util::init_user();
+                ea_podman::util::init_user( userns_optional => 1 );    # systemd only
 
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
                 ea_podman::util::sysctl( status => $service_name );

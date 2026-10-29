@@ -1410,17 +1410,9 @@ sub assert_has_user_namespaces {
     $die->("user.max_user_namespaces is 0, which disables them for everyone") if $max_uns == 0;
 
     # 3. Low enough that busy accounts can hit the limit (each container uses
-    #    at least one), or lowered from the kernel default (threads-max / 2 at
-    #    boot). Either still works, so tell root and carry on.
-    if ( $max_uns < $min_user_namespaces ) {
-        warn "ea-podman: user.max_user_namespaces=$max_uns is below the recommended minimum of $min_user_namespaces. Busy accounts may hit that limit. To learn more read $url_userns\n";
-    }
-    else {
-        my $threads = _sysctl_num('kernel.threads-max');
-        my $default = defined $threads ? int( $threads / 2 ) : undef;
-        warn "ea-podman: user.max_user_namespaces=$max_uns is below the kernel default (~$default); it was lowered on purpose. Busy accounts may hit that limit.\n"
-          if defined $default && $max_uns < $default;
-    }
+    #    at least one). It still works, so tell root and carry on.
+    warn "ea-podman: user.max_user_namespaces=$max_uns is below the recommended minimum of $min_user_namespaces. Busy accounts may hit that limit. To learn more read $url_userns\n"
+      if $max_uns < $min_user_namespaces;
 
     # 4. Debian/Ubuntu-only patch; missing on the RHEL family is normal. 0
     #    means only root may create user namespaces, which is rootless podman broken.
@@ -1440,7 +1432,18 @@ sub assert_has_user_namespaces {
         print "$good AppArmor restricts unprivileged user namespaces; $podman is exempted by $profile\n" if $verbose;
     }
 
-    print "$good user.max_user_namespaces = '$max_uns'\n" if $verbose;
+    if ($verbose) {
+        print "$good user.max_user_namespaces = '$max_uns'\n";
+
+        # FYI only: going under the kernel default (threads-max / 2 at boot,
+        # sized from RAM) is a choice, not a problem, so it is not a warning on
+        # every command. The floor above is what matters. Best-effort: an FYI
+        # must not make the check die.
+        my $threads = eval { _sysctl_num('kernel.threads-max') };
+        my $default = defined $threads ? int( $threads / 2 ) : undef;
+        print "    • FYI: that is below the kernel default of ~$default (half of kernel.threads-max), so it was lowered on purpose.\n"
+          if defined $default && $max_uns < $default;
+    }
 
     return $max_uns;
 }
@@ -1448,7 +1451,8 @@ sub assert_has_user_namespaces {
 # The same check as a warning, for a verb whose own work needs no podman: the
 # removals, so a server that lost user namespaces after its containers were
 # made can still be cleaned up (their podman steps fail without them, their
-# root-side ones do not), and reading the registry. Root only, like the
+# root-side ones do not), reading the registry, and stopping or checking on a
+# container, which is systemd only. Root only, like the
 # assertion. Returns whether they are available. (EA4-360)
 sub warn_if_no_user_namespaces {
     local $@;
@@ -1496,7 +1500,8 @@ sub _podman_path {
 
 # Heuristic: an enabled profile that attaches to $bin by its literal path and
 # has a `userns` rule. Globs, variables and includes are not expanded, so a
-# profile written that way reads as "not found".
+# profile written that way reads as "not found". An attachment opens a block
+# (`[profile NAME] PATH [flags=(...)] {`); a bare `PATH r,` file rule does not.
 sub _apparmor_userns_profile_for {
     my ($bin) = @_;
 
@@ -1507,8 +1512,9 @@ sub _apparmor_userns_profile_for {
     for my $f (@files) {
         next if -e "$dir_apparmor/disable/$f";    # disabled profiles aren't loaded
 
-        my $text = eval { path("$dir_apparmor/$f")->slurp_utf8 } // next;
-        next                      if $text !~ m/^\s*(?:profile\s+\S+\s+)?"?\Q$bin\E"?[\s{]/m;
+        # Raw: a profile need not be valid UTF-8, and only ASCII is matched.
+        my $text = eval { path("$dir_apparmor/$f")->slurp_raw } // next;
+        next                      if $text !~ m/^\s*(?:profile\s+\S+\s+)?"?\Q$bin\E"?(?:\s[^,\n{]*)?\{/m;
         return "$dir_apparmor/$f" if $text =~ m/^\s*(?:allow\s+)?userns\b[^,\n]*,/m;
     }
 

@@ -131,7 +131,7 @@ cptest1:165537:65536
             # throws like Cpanel::Sysctl does for a missing /proc/sys file.
             my %sysctl = (
                 'user.max_user_namespaces' => 15000,
-                'kernel.threads-max'       => 30000,
+                'kernel.threads-max'       => 63289,
             );
             local $conf{sysctl} = sub { $sysctl{ $_[0] } = $_[1] };
             local $conf{unset}  = sub { delete $sysctl{ $_[0] } };
@@ -191,17 +191,33 @@ cptest1:165537:65536
             my @warns;
             local $SIG{__WARN__} = sub { push @warns, $_[0] };
             is( ea_podman::subids::assert_has_user_namespaces(), 499 );
-            is( scalar(@warns), 1, "one warning, not also the kernel default one" );
+            is( scalar(@warns), 1 );
             like( $warns[0], qr/=499 is below the recommended minimum of 500/ );
         };
 
-        it "should warn when max_user_namespaces was lowered from the kernel default" => sub {
-            $conf{sysctl}->( 'user.max_user_namespaces' => 10000 );
+        # 15000 is what docs/uapi.md has admins set, far below threads-max / 2 on most servers.
+        it "should not warn at or above the floor, however far below the kernel default" => sub {
             my @warns;
             local $SIG{__WARN__} = sub { push @warns, $_[0] };
-            is( ea_podman::subids::assert_has_user_namespaces(), 10000 );
-            is( scalar(@warns),                                  1 );
-            like( $warns[0], qr/=10000 is below the kernel default \(~15000\)/ );
+            is( ea_podman::subids::assert_has_user_namespaces(), 15000 );
+            is( scalar(@warns),                                  0 );
+        };
+
+        it "should mention, when verbose, that max_user_namespaces is below the kernel default" => sub {
+            my $out = _stdout_of( sub { ea_podman::subids::assert_has_user_namespaces(1) } );
+            like( $out, qr/user\.max_user_namespaces = '15000'/ );
+            like( $out, qr/FYI: that is below the kernel default of ~31644 \(half of kernel\.threads-max\)/ );
+        };
+
+        it "should not mention the kernel default when verbose and at it" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => 31644 );
+            unlike( _stdout_of( sub { ea_podman::subids::assert_has_user_namespaces(1) } ), qr/FYI/ );
+        };
+
+        it "should not let an unreadable threads-max fail the verbose check" => sub {
+            $conf{sysctl}->( 'kernel.threads-max' => \"Permission denied" );
+            my $out = _stdout_of( sub { is( ea_podman::subids::assert_has_user_namespaces(1), 15000 ) } );
+            unlike( $out, qr/FYI/ );
         };
 
         it "should die on any other read error" => sub {
@@ -242,6 +258,21 @@ cptest1:165537:65536
             $conf{sysctl}->( 'kernel.apparmor_restrict_unprivileged_userns' => 1 );
             my $podman = Cwd::abs_path("$conf{dir}/podman");
             Path::Tiny::path("$conf{dir}/apparmor.d/podman")->spew(qq{abi <abi/4.0>,\n\nprofile podman $podman flags=(unconfined) {\n  userns,\n}\n});
+            is( ea_podman::subids::assert_has_user_namespaces(), 15000 );
+        };
+
+        it "should not take a bare file rule on podman for a profile attachment" => sub {
+            $conf{sysctl}->( 'kernel.apparmor_restrict_unprivileged_userns' => 1 );
+            my $podman = Cwd::abs_path("$conf{dir}/podman");
+            Path::Tiny::path("$conf{dir}/apparmor.d/other")->spew(qq{profile other /usr/bin/other {\n  $podman r,\n  userns,\n}\n});
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/no enabled profile/ );
+        };
+
+        it "should read a profile that is not valid UTF-8" => sub {
+            $conf{sysctl}->( 'kernel.apparmor_restrict_unprivileged_userns' => 1 );
+            my $podman = Cwd::abs_path("$conf{dir}/podman");
+            Path::Tiny::path("$conf{dir}/apparmor.d/podman")->spew_raw(qq{# caf\xe9\n$podman {\n  userns,\n}\n});
             is( ea_podman::subids::assert_has_user_namespaces(), 15000 );
         };
 
@@ -1883,3 +1914,11 @@ cptest1:165537:65536
 
 runtests unless caller;
 
+sub _stdout_of {
+    my ($code) = @_;
+    open( my $fh, '>', \my $out ) or die "Cannot capture STDOUT: $!";
+    my $old = select($fh);
+    eval { $code->(); 1 } or do { select($old); die $@ };
+    select($old);
+    return $out // "";
+}

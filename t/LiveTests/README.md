@@ -422,8 +422,9 @@ yum install -y cagefs
 #    - user namespaces enabled (CL10 ships user.max_user_namespaces=0, which
 #      silently breaks rootless podman's newuidmap/newgidmap step — install
 #      fails during image unpack with something like "potentially insufficient
-#      UIDs or GIDs"; `sysctl user.max_user_namespaces` to check):
-#      echo 'user.max_user_namespaces=15000' > /etc/sysctl.d/90-userns.conf && sysctl --system
+#      UIDs or GIDs"; `sysctl user.max_user_namespaces` to check). Put it
+#      back to the kernel default, half of kernel.threads-max:
+#      echo "user.max_user_namespaces=$(( $(sysctl -n kernel.threads-max) / 2 ))" > /etc/sysctl.d/90-userns.conf && sysctl --system
 
 # 5. run the cagefs live test (copy the .t file to the VM first)
 EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl cagefs-podman-live.t

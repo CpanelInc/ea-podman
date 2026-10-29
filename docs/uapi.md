@@ -106,13 +106,19 @@ to call it. See `DESIGN.md` for the internals.
 > **User namespaces are required.** ea-podman refuses to run podman commands
 > without them and points to https://go.cpanel.net/userns (EA4-360). Removing
 > containers (`uninstall`, `remove_containers`, account deletion, removing the
-> package) and `ea-podman containers` only warn, so they can still be cleaned up. Note that
+> package), `ea-podman containers`, and `stop` and `status` (CLI and UAPI) only
+> warn, so containers can still be stopped and cleaned up. Note that
 > **CloudLinux 10 ships `user.max_user_namespaces=0`**; check with
-> `sysctl user.max_user_namespaces`, and if it's `0`:
+> `sysctl user.max_user_namespaces`, and if it's `0`, put it back to the kernel
+> default, half of `kernel.threads-max`:
 >
 > ```sh
-> echo 'user.max_user_namespaces=15000' > /etc/sysctl.d/90-userns.conf && sysctl --system
+> echo "user.max_user_namespaces=$(( $(sysctl -n kernel.threads-max) / 2 ))" > /etc/sysctl.d/90-userns.conf && sysctl --system
 > ```
+>
+> Anything under 500 makes root's commands warn that busy accounts may hit the
+> limit; `ea-podman subids` (as root) also notes when it is below the kernel
+> default.
 
 ## The verbs
 

@@ -208,8 +208,9 @@ sub ENSURE_USER ( $self, $creating = undef, $userns_optional = undef ) {
     # commands get the user namespace check, as root where it is conclusive.
     # Its message is about the host, not other accounts, and tells them what
     # to ask for, so pass it through. A verb whose own work needs no podman
-    # ($userns_optional: the removals, `containers`) only warns, as init_user()
-    # does for root, so the account can still be cleaned up. (EA4-360)
+    # ($userns_optional: the removals, `containers`, `stop`, `status`) only
+    # warns, as init_user() does for root, so the account can still be cleaned
+    # up. (EA4-360)
     if ($userns_optional) {
         ea_podman::subids::warn_if_no_user_namespaces();
     }

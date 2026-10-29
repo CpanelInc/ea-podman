@@ -26,8 +26,9 @@ sub init_user {
     # A verb whose own work needs no podman (userns_optional) only warns: the
     # removals, since dying would leave the registry, ports and units of a
     # server that lost user namespaces with no way to clean them up (the
-    # package's own prerm and the account-deletion hook are removals), and
-    # `containers`, which only reads the registry. (EA4-360)
+    # package's own prerm and the account-deletion hook are removals),
+    # `containers`, which only reads the registry, and `stop` and `status`,
+    # which are systemd only, so what is running can still be stopped. (EA4-360)
     if ( $> == 0 ) {
         if   ( $opts{userns_optional} ) { ea_podman::subids::warn_if_no_user_namespaces() }
         else                            { ea_podman::subids::assert_has_user_namespaces() }
@@ -3469,7 +3470,11 @@ sub api_lifecycle {
             }
 
             return $rv;
-        }
+        },
+
+        # Stopping is systemd only, so a server that lost user namespaces can
+        # still stop what is running. A bring-up needs podman. (EA4-360)
+        userns_optional => $action eq 'stop' ? 1 : 0,
     );
 }
 
@@ -3487,7 +3492,8 @@ sub api_status {
                 running => sysctl( 'is-active'  => $service ),
                 enabled => sysctl( 'is-enabled' => $service ),
             };
-        }
+        },
+        userns_optional => 1,    # systemd only
     );
 }
 
@@ -3544,7 +3550,9 @@ after its containers were made can still be cleaned up: the ports,
 registration, systemd unit and container directory go, and only podman's own
 steps fail. That is C<uninstall> (CLI and UAPI), C<remove_containers> (which
 the package's prerm runs) and the account-deletion hook. It is also for
-C<containers>, which only reads the registry. (EA4-360)
+C<containers>, which only reads the registry, and for C<stop> and C<status>
+(CLI and UAPI), which are systemd only, so what is still running can be
+stopped. (EA4-360)
 
 =head2 Giving the linger back
 
