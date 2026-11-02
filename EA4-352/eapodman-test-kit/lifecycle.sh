@@ -25,7 +25,10 @@ alive()  { kill -0 "$1" 2>/dev/null; }
 # Like check, for a failure PLAN.md already records as F15: still a FAIL, but counted as known
 # only when the unit's journal since the cursor carries F15's signature (PLAN.md F15 evidence).
 # Any other failure is new, and its journal is printed in full. A pass means F15 no longer reproduces.
-F15_SIGNATURE="Failed with result 'signal'|container state improper|[Ss]tart request repeated too quickly|start-limit"
+# The signature must be something the test's own action can't produce: these tests SIGKILL conmon,
+# which always logs "Failed with result 'signal'", and a start limit can be hit for other reasons.
+# Only F15's failed restart, podman refusing the stale state, counts.
+F15_SIGNATURE="container state improper"
 KNOWN=0
 f15_check() {    # cursor, unit, description, then the command
     local t=$1 unit=$2 what=$3; shift 3
@@ -54,7 +57,12 @@ recovered() {
     echo "  not back after 60s: $(systemctl is-active "ea-podman-$n.service"), MainPID $main, NRestarts $(prop "$n" NRestarts)"
     return 1
 }
-cursor()        { journalctl -q -n0 --show-cursor | sed -n 's/^-- cursor: //p'; }
+# An empty cursor would unscope --after-cursor (and the F15 classification with it): stop instead.
+cursor() {
+    local c; c=$(journalctl -q -n0 --show-cursor | sed -n 's/^-- cursor: //p')
+    [ -n "$c" ] || { echo "no journal cursor (is journald running?); can't scope the journal checks" >&2; exit 1; }
+    echo "$c"
+}
 journal_since() { journalctl -q --no-pager -o cat --after-cursor "$1" -u "$2" | grep -iE 'pid|refus|fail|error' | sed 's/^/    journal: /'; }
 
 # A root process for the account to point PID files at. Nothing real is put at risk.
@@ -80,7 +88,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== 1. SIGKILL conmon of worker.$U.03"
-n=worker.$U.03; main=$(prop "$n" MainPID); nr=$(prop "$n" NRestarts); t=$(cursor)
+n=worker.$U.03; main=$(prop "$n" MainPID); nr=$(prop "$n" NRestarts); t=$(cursor) || exit 1
 if safe_target "$main" conmon "/ea-podman-$n.service"; then
     kill -KILL "$main"
     f15_check "$t" "ea-podman-$n.service" "worker comes back through Restart=" recovered "$n" "$main" "$nr"
@@ -90,7 +98,7 @@ else
 fi
 
 echo; echo "== 2. SIGKILL the container's init in api.$U.02"
-n=api.$U.02; main=$(prop "$n" MainPID); nr=$(prop "$n" NRestarts); t=$(cursor)
+n=api.$U.02; main=$(prop "$n" MainPID); nr=$(prop "$n" NRestarts); t=$(cursor) || exit 1
 init=$(as_user /usr/bin/podman container inspect --format '{{.State.Pid}}' "$n")
 echo "  container init PID $init ($(comm "$init"))"
 # The init's comm depends on the image, so check the PID is in the container's payload cgroup instead.
@@ -103,7 +111,7 @@ else
 fi
 
 echo; echo "== 3. account writes root PID $DECOY into web.$U.01's conmon.pid, then conmon dies"
-n=web.$U.01; main=$(prop "$n" MainPID); nr=$(prop "$n" NRestarts); t=$(cursor)
+n=web.$U.01; main=$(prop "$n" MainPID); nr=$(prop "$n" NRestarts); t=$(cursor) || exit 1
 pidfile=$(prop "$n" PIDFile)
 # The test only means something if the hostile PID really is in the file when conmon dies.
 if ! safe_target "$main" conmon "/ea-podman-$n.service"; then
@@ -144,7 +152,7 @@ TimeoutStopSec=5
 UNIT
     systemctl daemon-reload
     systemctl reset-failed "$TEST_UNIT" 2>/dev/null
-    t=$(cursor)
+    t=$(cursor) || exit 1
     systemctl start "$TEST_UNIT" 2>/dev/null; rc=$?
     main=$(systemctl show -p MainPID --value "$TEST_UNIT")
     written=$(cat "$RUNDIR/test.pid" 2>/dev/null)

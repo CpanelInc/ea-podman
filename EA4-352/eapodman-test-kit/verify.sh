@@ -66,6 +66,15 @@ for unit in /etc/systemd/system/ea-podman-*."$U".[0-9][0-9].service; do
     check "$u MainPID is conmon" test "$(ps -o comm= -p "$main" 2>/dev/null)" = conmon
     check "$u MainPID is inside the unit's cgroup" \
         grep -q "/eapodman.slice/$slice/$u/" "/proc/$main/cgroup"
+    # F12: without split there is no container cgroup, and none of the per-container limits apply.
+    payload=
+    for p in "$A/$u"/libpod-payload-*; do [ -d "$p" ] && payload=$p && break; done
+    check "$u has a libpod-payload-* container cgroup (--cgroups=split in effect)" test -n "$payload"
+    if [ -n "$payload" ]; then
+        for f in memory.max memory.swap.max cpu.max pids.max; do
+            check "$u container cgroup has $f" test -e "$payload/$f"
+        done
+    fi
 done
 
 echo

@@ -154,8 +154,9 @@ file_mib() { mib "$(stat_of "$(payload "$1")/memory.stat" file)"; }
 mem_floor_round() {    # label
     local label=$1 w="web.$U.01" k="worker.$U.03" a="api.$U.02" cur target
     # Re-warm both caches; the pages stay charged to the container that first read them.
-    in_container "$w" cat "$SCRATCH/web.bin" >/dev/null
-    in_container "$k" cat "$SCRATCH/worker.bin" >/dev/null
+    # A failed warm-up must not pass for F13's uncharged page cache below.
+    in_container "$w" cat "$SCRATCH/web.bin" >/dev/null || { echo "  warming web's cache failed" >&2; exit 1; }
+    in_container "$k" cat "$SCRATCH/worker.bin" >/dev/null || { echo "  warming worker's cache failed" >&2; exit 1; }
     sleep 2
     bg_alive
     # Where page cache isn't charged to the writer's cgroup (CloudLinux, F13), there is nothing to protect.
@@ -189,8 +190,12 @@ mem_floor_test() {
     local w="web.$U.01" k="worker.$U.03" a="api.$U.02" i
     echo; echo "== memory: floors under slice pressure (web 400M + worker 200M page cache, api 400M anon)"
     install -d -o "$UID_" -g "$GID_" -m 0700 "$SCRATCH"
-    in_container "$w" dd if=/dev/zero of="$SCRATCH/web.bin" bs=1M count=400 conv=fsync 2>/dev/null
-    in_container "$k" dd if=/dev/zero of="$SCRATCH/worker.bin" bs=1M count=200 conv=fsync 2>/dev/null
+    in_container "$w" dd if=/dev/zero of="$SCRATCH/web.bin" bs=1M count=400 conv=fsync 2>/dev/null \
+        && [ "$(stat -c %s "$SCRATCH/web.bin")" = $(( 400 * 1048576 )) ] \
+        || { echo "  writing $SCRATCH/web.bin (400M) failed" >&2; exit 1; }
+    in_container "$k" dd if=/dev/zero of="$SCRATCH/worker.bin" bs=1M count=200 conv=fsync 2>/dev/null \
+        && [ "$(stat -c %s "$SCRATCH/worker.bin")" = $(( 200 * 1048576 )) ] \
+        || { echo "  writing $SCRATCH/worker.bin (200M) failed" >&2; exit 1; }
     in_container_bg "$a" python3 -c 'import time; x = b"a" * (400 << 20); time.sleep(600)'
     local reached=0
     for i in $(seq 60); do

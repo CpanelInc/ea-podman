@@ -3,7 +3,8 @@
 # and the per-uid XDG_CONFIG_HOME (F16).
 set -eu
 uid=${1:-}
-case $uid in ''|*[!0-9]*|0) echo "bad uid" >&2; exit 1;; esac
+# Canonical non-zero decimal only: 0, 00 or 0123 would resolve through getent as other uids.
+case $uid in ''|*[!0-9]*|0*) echo "bad uid" >&2; exit 1;; esac
 gid=$(getent passwd "$uid" | cut -d: -f4)
 [ -n "$gid" ] || { echo "unknown uid $uid" >&2; exit 1; }
 d=/run/ea-podman/user/$uid
@@ -13,6 +14,9 @@ mkdir -p -m 0755 /run/ea-podman/user
 mountpoint -q "$d" || mount -t tmpfs -o "size=10%,mode=0700,uid=$uid,gid=$gid,nosuid,nodev" tmpfs "$d"
 # F16: XDG_CONFIG_HOME is root-owned and holds only a root-owned cni symlink into the tmpfs, where
 # rootless CNI (EL8's podman 4.x default) can write. Rebuilt every time, so nothing else survives.
+# $d is the account's own tmpfs, so it could swap cni for a symlink or a file between starts;
+# only a real directory is kept (an existing one holds live CNI state, so it isn't wiped).
+if [ -L "$d/cni" ] || { [ -e "$d/cni" ] && [ ! -d "$d/cni" ]; }; then rm -f "$d/cni"; fi
 [ -d "$d/cni" ] || install -d -o "$uid" -g "$gid" -m 0700 "$d/cni"
 mkdir -p -m 0755 /run/ea-podman/xdg
 x=/run/ea-podman/xdg/$uid
