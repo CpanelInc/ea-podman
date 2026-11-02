@@ -401,9 +401,11 @@ them. Run one, then
 
 The cagefs test only runs on **CloudLinux** with CageFS installed **and
 initialized**; otherwise it skips. It works on the stock **cgroup v1** that
-CloudLinux defaults to, and on cgroup v2, which we recommend everywhere
-(EA4-360). On a fresh CloudLinux VM, as root, set it up in this order, then run
-the test:
+CloudLinux defaults to, and on cgroup v2 on CloudLinux 9/10. Do **not** switch
+CloudLinux 8 to cgroup v2: its systemd 239 cannot start a user manager under
+CloudLinux's default `hidepid=2` there, so every manager started after boot fails
+(EA4-360, EA4-365). On a fresh CloudLinux VM, as root, set it up in this order,
+then run the test:
 
 ```sh
 # 1. ea-podman (must be a CPANEL-54037-aware build, not the stock EA4 package)

@@ -161,6 +161,7 @@ rm -rf %{buildroot}
 %changelog
 * Wed Oct 28 2026 Dan Muey <daniel.muey@webpros.com> - 1.0-38
 - EA4-360: Die early when user namespaces are unavailable; recommend cgroup v2
+  (except on CloudLinux 8)
 
 * Mon Oct 19 2026 Jared Wright <jared.wright@webpros.com> - 1.0-37
 - EA4-339: Keep the PodmanHooks cPanel hooks registered across RPM upgrades,

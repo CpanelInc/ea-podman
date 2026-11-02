@@ -75,16 +75,34 @@ to call it. See `DESIGN.md` for the internals.
   does not gate them. They can only act on containers the account already
   has: with the feature off from the start, it cannot create any.
 
-> **Host recommendation — cgroups:** use **cgroup v2** on every OS, CloudLinux
-> included. Its unified hierarchy gives the user systemd manager proper
+> **Host recommendation — cgroups:** use **cgroup v2** on every OS except
+> **CloudLinux 8**. Its unified hierarchy gives the user systemd manager proper
 > cgroup-subtree delegation, so resource limits can be enforced. cgroup v1 still
-> works, and ea-podman warns root when a server is on it (EA4-360).
-> CloudLinux has only been verified on cgroup v1 so far. Whether LVE's per-user
-> cgroups and the user systemd manager work together on v2 is what EA4-352 is
-> testing, so on CloudLinux try v2 on a non-production server first.
+> works, and ea-podman warns root when a server is on it (EA4-360), except on
+> CloudLinux 8.
+>
+> - **CloudLinux 8: stay on cgroup v1.** On v2, its systemd 239 cannot start a
+>   user manager under CloudLinux's default `hidepid=2` on `/proc`. Managers
+>   started at boot come up, but every one started after that fails
+>   (`Failed to determine supported controllers: No such process`), including a
+>   restart of an existing account's manager and a new account's first. That
+>   account's containers go down. This was seen with caged, jailshell and normal
+>   accounts alike on CloudLinux 8.10 (EA4-360). Getting v2 working there is
+>   EA4-365.
+> - **CloudLinux 9 / 10:** verified on cgroup v2 (EA4-343). CloudLinux sets the
+>   cgroup version through its tuned profile, which appends
+>   `systemd.unified_cgroup_hierarchy=0` after the `grubby` arg below, so the
+>   `grubby` route leaves the server on v1. Switch the profile instead:
+>
+>   ```sh
+>   tuned-adm profile cloudlinux-default-cgv2
+>   reboot
+>   # verify after reboot — should print cgroup2fs:
+>   stat -fc %T /sys/fs/cgroup
+>   ```
+>
 > AlmaLinux / RHEL 9+ and Ubuntu already default to cgroup v2. **AlmaLinux /
-> RHEL 8 and CloudLinux** default to cgroup v1; to move to v2, add the kernel
-> arg and reboot:
+> RHEL 8** default to cgroup v1; to move to v2, add the kernel arg and reboot:
 >
 > ```sh
 > grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=1"

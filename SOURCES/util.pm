@@ -80,6 +80,7 @@ sub check_proc {
 
 use Cpanel::JSON           ();
 use Cpanel::AdminBin::Call ();
+use Cpanel::OS             ();
 use Cpanel::Time           ();
 use File::Path::Tiny       ();
 use Errno                  ();    # for %!, loaded explicitly: the CLI is a compiled binary
@@ -381,22 +382,41 @@ sub _cap_output {
     return ( substr( $text, 0, $EXEC_OUTPUT_CAP ), 1 );
 }
 
-# cgroup v2 is what we want, on every OS: it is what lets resource limits be
-# enforced on rootless containers (v1 delegates no controllers to users). Both
-# work, so like the hidepid advice in check_proc() this is a root-only heads-up,
-# given once per process. We do not switch it for them: it takes a reboot and
-# can affect other things on the server. (EA4-360)
+# cgroup v2 is what we want: it is what lets resource limits be enforced on
+# rootless containers (v1 delegates no controllers to users). Both work, so like
+# the hidepid advice in check_proc() this is a root-only heads-up, given once
+# per process. We do not switch it for them: it takes a reboot and can affect
+# other things on the server. (EA4-360)
+#
+# Except on CloudLinux 8: its systemd 239 cannot start a user manager under
+# CloudLinux's default hidepid=2 on cgroup v2, so every `user@` started after
+# boot fails and takes the account's containers with it. Stay quiet there until
+# that works (EA4-365).
 our $cgroup_v2_warned = 0;
 
 sub _is_root { return $> == 0 ? 1 : 0; }
 
 sub _is_cgroup_v2 { return -e '/sys/fs/cgroup/cgroup.controllers' ? 1 : 0; }
 
+# The CloudLinux major version, or undef when this is not CloudLinux.
+sub _cloudlinux_major { return Cpanel::OS::is_cloudlinux() ? Cpanel::OS::major() : undef; }
+
 sub warn_if_not_cgroup_v2 {
     return 1 if !_is_root() || _is_cgroup_v2();
+
+    my $cl_major = _cloudlinux_major();
+    return 1 if defined $cl_major && $cl_major == 8;
+
     return 0 if $cgroup_v2_warned++;
 
-    warn "ea-podman: this server is using cgroup v1. We recommend cgroup v2 so that container resource limits can be enforced.\n" . "For example, on AlmaLinux 8:\n" . "\tgrubby --update-kernel=ALL --args=\"systemd.unified_cgroup_hierarchy=1\" && reboot\n" . "(verify afterward: `podman info --format '{{.Host.CgroupsVersion}}'` reports v2).\n";
+    # On CloudLinux the tuned profile sets the cgroup version, and its
+    # systemd.unified_cgroup_hierarchy=0 wins over one added with grubby.
+    my $how =
+      defined $cl_major
+      ? "On CloudLinux, switch to the cgroup v2 tuned profile:\n\ttuned-adm profile cloudlinux-default-cgv2 && reboot\n"
+      : "For example, on AlmaLinux 8:\n\tgrubby --update-kernel=ALL --args=\"systemd.unified_cgroup_hierarchy=1\" && reboot\n";
+
+    warn "ea-podman: this server is using cgroup v1. We recommend cgroup v2 so that container resource limits can be enforced.\n" . $how . "(verify afterward: `podman info --format '{{.Host.CgroupsVersion}}'` reports v2).\n";
     return 0;
 }
 
@@ -2725,8 +2745,20 @@ sub ensure_user {
     }
 
     # The adminbin decides the same thing root-side, from the container
-    # registry only it can read, and reports back what it did.
-    return Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER', $creating ? 1 : 0, $userns_optional ? 1 : 0 ) ? 1 : 0;
+    # registry only it can read, and reports back what it did. Its refusals
+    # (no user namespaces, a subid conflict) are meant for the user, so give
+    # them the message, not the exception's stack trace. (EA4-360)
+    my $has_session;
+    local $@;
+    eval { $has_session = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER', $creating ? 1 : 0, $userns_optional ? 1 : 0 ); 1 } or do {
+        require Cpanel::Exception;
+        my $msg = Cpanel::Exception::get_string_no_id($@);
+        $msg = "Unable to set up this account for ea-podman" if !length( $msg // '' );
+        chomp $msg;
+        die "$msg\n";
+    };
+
+    return $has_session ? 1 : 0;
 }
 
 sub user_has_containers_as_root {
