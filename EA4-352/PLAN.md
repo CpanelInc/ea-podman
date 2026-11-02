@@ -41,15 +41,30 @@ That gives those accounts back exactly what CLOS-4517 removed.
   - `XDG_RUNTIME_DIR=/run/user/<uid>` and `DBUS_SESSION_BUS_ADDRESS`;
   - the plugin's `ENSURE_SESSION` and its `user@.service.d` delegate drop-in.
 - **Every `systemctl --user` call.**
-- **The LVE + cgroup v2 "kills systemd --user" advisory** (`util.pm:366-411`). There is no user manager left for it to warn about. The LVE question moves to P0-6.
+- **The CloudLinux 8 carve-out in the cgroup v2 advice** (`warn_if_not_cgroup_v2`, `util.pm:404-421`; EA4-365).
+  - **What EA4-360 already did** (1.0-38): it replaced the old "LVE + cgroup v2 kills `systemd --user`" advisory with a root-only "we recommend cgroup v2" warning. That warning stays quiet on CloudLinux 8, where systemd 239 can't start a `user@` manager on v2 under CloudLinux's default `hidepid=2`.
+  - **Why the carve-out can go:** 2.0 has no `user@`. System units on CL8 v2 with `hidepid=2` start, restart, serve, and enforce `--memory`/`--cpus` with split (Julian, EA4-360 comment 1805876).
+  - **What 2.0 does:** it recommends v2 on CL8 too, with `tuned-adm profile cloudlinux-default-cgv2` as on CL9/10. The warning itself stays.
+  - The CL8 v2 checks still open in EA4-365 (CPU throttling, a reboot, the uninstall order) are in P0-3 and P0-4. The LVE question is F18.
 
 **Stays:**
 - **The admin execution path** (`delegate_to_admin`, `_as_cpuser`). Phase 3b makes it the *only* non-root path and removes the restricted-shell/CageFS detection and the EAPodman UAPI. podman still can't run inside the cage: nosuid breaks newuidmap, and jailshell lacks the binaries. That is why everything except `bash` runs outside the cage via admin, and `bash` stays direct for unrestricted shells only.
 - **User namespaces.** Rootless podman still creates a user namespace per container, plus mount, net, pid and other namespaces inside it. It also still needs subuid/subgid allocation (`subids.pm` `_ensure_subids`) and the setuid `newuidmap`/`newgidmap`. **The kernel-CVE exposure is unchanged.** This plan fixes CLOS-4517, not the userns CVEs. 2.0 does make the exposure narrowable: every user namespace ea-podman creates is created inside `eapodman.slice`, so a host BPF-LSM rule on `userns_create` can deny namespace creation everywhere else (F11, invariant 20; EA4-352 comment 1802820).
+- **The user namespace gate (EA4-360).**
+  - **What it does:** `init_user` refuses up front when the host doesn't allow unprivileged user namespaces (`subids::assert_has_user_namespaces`, `subids.pm:1394`). The refusal points to https://go.cpanel.net/userns.
+  - **Root-only:** CageFS and CloudLinux's `/proc` restrictions can hide what the check reads. So a user's command gets the check root-side, from `ENSURE_USER($creating, $userns_optional)` (`Cpanel-Admin-Modules-Cpanel-ea_podman.pm:201`).
+  - **Warn-only verbs:** verbs whose own work needs no podman pass `userns_optional`, and only warn (`warn_if_no_user_namespaces`, `subids.pm:1457`). A host that lost user namespaces can still stop and clean up.
+
+  2.0 keeps the same split, now on root-side actions:
+  - **refuse:** INSTALL, UPGRADE, START, RESTART, UNIT_INSTALL, and `ensure_runtime` (the anchor runs `podman unshare`);
+  - **warn only:** STOP, STATUS/UNIT_SHOW, UNIT_REMOVE, RESET_FAILED, UNINSTALL, `remove_containers`, the account hooks and `containers`;
+  - **`migrate_units`:** checks once per run (Phase 4, entry point). Without user namespaces it migrates nothing and marks no account `failed`. On masked hosts it still applies step 12, which is root-only;
+  - **CloudLinux 10:** new installs ship with `user.max_user_namespaces=0` (CLOS-2616; Julian, EA4-357 comment 1803523). The gate catches it, and the host docs (Phase 3b) say how to restore the value. Raise it with CloudLinux together with F11: a BPF-LSM rule is a narrow alternative to that blanket `0`.
 - **cgroups.** Containers still get their own cgroups:
   - `Delegate=yes` on the system units hands the account's processes a subtree;
-  - podman uses `cgroupfs` there, with `--cgroups=split` (pinned), instead of asking the user manager over D-Bus. Split puts conmon and the container in sub-cgroups of the unit's delegated cgroup;
-  - per-container limits (`--memory`, `--pids-limit`) are enforced on cgroup v2 **only with split**; without it they are silently ignored (Julian, EA4-352 comment 1801665). As today, they don't work for rootless on v1 (F12).
+  - podman uses `cgroupfs` there instead of asking the user manager over D-Bus, with `cgroups = "split"` pinned on cgroup v2 (F17). Split puts conmon and the container in sub-cgroups of the unit's delegated cgroup;
+  - the cgroup manager and the cgroups mode come only from the pinned config. Start args and CMD can't override them (F17, Phase 3b);
+  - per-container limits (`--memory`, `--pids-limit`) are enforced on cgroup v2 **only with split**; without it they are silently ignored (Julian, EA4-352 comment 1801665). As today, they don't work for rootless on v1 (F12). Split isn't pinned there, because it stops containers starting (F17).
 - **A smaller "session".** The per-user runtime directory now comes from the anchor unit `ea-podman-runtime@<uid>`, and `podman_env()` gives every podman call the same environment. That replaces the whole linger/carveout layer.
 
 ## Findings that shape the design
@@ -59,11 +74,14 @@ That gives those accounts back exactly what CLOS-4517 removed.
   - So we use a root-created `/run/ea-podman/user/<uid>`, set up by a per-user anchor unit.
   - Existing libpod DBs record `runroot=/run/user/<uid>`, so existing containers must be recreated in fresh storage.
 - **F2: the cgroup manager has to change.** Existing containers may record `CgroupManager=systemd`, which needs the user bus. New containers are created with cgroupfs and `Delegate=yes`. This is a second reason to recreate.
-- **F3: LVE limits may be lost.** A `User=` unit gets no PAM session, so CloudLinux `pam_lve` limits might not apply. Probe this. If needed, add `PAMName=ea-podman` with a root-owned `/etc/pam.d/ea-podman` (pam_lve/pam_limits only). Do not use `systemd-user`, which would start the user manager again. **Observed:** in a 2.0 prototype the containers were not in an LVE (Julian, EA4-352 comment 1801665). The PAM/LVE-entry step is therefore required; P0-6 now verifies the fix, not the need.
+- **F3: LVE limits are lost.** A `User=` unit gets no PAM session, so CloudLinux `pam_lve` limits don't apply.
+  - **Observed** in a 2.0 prototype (Julian, EA4-352 comment 1801665) and on all three CloudLinux boxes in the EA4-357 run: CL8, CL9 and CL10 (Julian, EA4-357 comment 1803523). Every conmon and container process sat under `/eapodman.slice`, and `lveps` showed nothing for the account.
+  - **Entering the LVE doesn't fix this on cgroup v2** (F18).
+  - If an entry step is used anyway, it is `PAMName=ea-podman` with a root-owned `/etc/pam.d/ea-podman` (pam_lve/pam_limits only). It is never `systemd-user`, which would start the user manager again.
 - **F4: residual (not root, not a regression).** The account owns its libpod DB. From inside the cage it could change a container's OCI runtime or hooks, which would then run as the user outside the cage. Pinning `CONTAINERS_CONF` does not close this. A root-owned graphroot would (follow-up).
-- **F5: lifecycle actions don't check registration.** START/STOP/RESTART/STATUS only check the name suffix (`Cpanel-Admin-Modules-Cpanel-ea_podman.pm:404,414,423,432`). They must require `registered => 1`.
+- **F5: lifecycle actions don't check registration.** START/STOP/RESTART/STATUS only check the name suffix (`Cpanel-Admin-Modules-Cpanel-ea_podman.pm:418,428,437,446`). They must require `registered => 1`.
 - **F7: an account's containers need a grouping cgroup.** As separate units in `system.slice`, nothing groups an account's containers. The Web Apps plugin's `MemoryLow` floor on `user-<uid>.slice` would protect nothing, and account totals could never be enforced. Fix: a per-account slice (see Phase 1). Requested on EA4-352 (comment 1800842).
-- **F6: restore deletes too much.** `perform_user_restore` deletes all of `~/.config/systemd/user` (`util.pm:3185`), including the user's own units. Stop doing that.
+- **F6: restore deletes too much.** `perform_user_restore` deletes all of `~/.config/systemd/user` (`util.pm:3199`), including the user's own units. Stop doing that.
 - **F8: the runtime dir loses its size cap.** In 1.x, `/run/user/<uid>` is its own tmpfs, capped by logind (`RuntimeDirectorySize=10%`). A plain directory under `/run` shares the system tmpfs with PID 1, journald, `/run/systemd/transient` and every daemon's PID files, and disk quotas don't apply to tmpfs. Fix: the anchor mounts a capped per-uid tmpfs (Phase 1).
 - **F9: moving out of `user-<uid>.slice` drops per-user limits and changes CPU fairness.** In 1.x every account's processes share the one `user.slice` weight and get logind's `TasksMax` (33%) plus any admin drop-ins on `user.slice`, `user-.slice` or `user-<uid>.slice`. Slices directly under the root would each be a sibling of `system.slice` with the same weight, and per-unit `DefaultTasksMax` (15%) has no per-account total. Fix: account slices nest under a packaged `eapodman.slice` (Phase 1).
 - **F10: the as-user processes the migration starts must not get root's terminal.** `systemd-run --pipe` gives the transient unit `systemd-run`'s own stdin, stdout and stderr. When an admin runs `migrate_units` in a shell, stdin is root's TTY. The account can open `/proc/<pid>/fd/0` of its own podman process (same uid, not setuid; Yama doesn't restrict this), then read root's input or inject keystrokes with TIOCSTI (allowed on the EL8/EL9 and Ubuntu 22.04 kernels). Fix: 4.2a.
@@ -72,41 +90,127 @@ That gives those accounts back exactly what CLOS-4517 removed.
   - code running inside the account's containers can still create namespaces. The rule stops the account's shell, cron and CGI processes, not its container workloads;
   - enabled only after `migration/complete`, because 1.x containers run under `user@`;
   - needs a kernel with the `userns_create` LSM hook and `lsm=bpf` (P0-12). EL8's 4.18 has neither.
-- **F12: per-container limits need `--cgroups=split`** (EA4-352 comment 1801665). With cgroupfs and `Delegate=yes` alone, podman doesn't place the container in a sub-cgroup of the unit, so `--memory` is not enforced. Fix: pin `cgroups = "split"` (Phase 1), and refuse start args that override it (Phase 3b).
+- **F12: per-container limits need `--cgroups=split`** (EA4-352 comment 1801665). With cgroupfs and `Delegate=yes` alone, podman doesn't place the container in a sub-cgroup of the unit, so `--memory` is not enforced. Fix: pin `cgroups = "split"` on cgroup v2 only (Phase 1, F17), and refuse start args that override it (Phase 3b).
 - **F13: relative limits need matching values on the container unit.** `--memory`, `--memory-swap`, `--cpus` and `--pids-limit` are hard caps on the container's own cgroup, so split alone makes them work. `--memory-reservation` and `--cpu-shares` are not:
   - `--memory-reservation` becomes `memory.low`, which only protects up to what every ancestor is protected for. The chain is container → `ea-podman-<name>.service` → `eapodman-<uid>.slice` → `eapodman.slice`. The unit's own `memory.low` belongs to systemd (`MemoryLow=`, default 0), not to the delegated subtree. So on EL8 (4.18, no `memory_recursiveprot`) the reservation does nothing, and on newer kernels (`memory_recursiveprot`) the unit only gets a usage-weighted share of the slice's unclaimed floor, not a guaranteed amount;
-  - `--cpu-shares` becomes `cpu.weight` (the OCI runtime's conversion: about 39 for 1024 with runc 1.1 (measured, EL8) and older crun, 100 with newer crun). A weight only counts against sibling cgroups. Inside the unit, the container's only sibling is conmon's cgroup; between containers, the units compete with systemd's `CPUWeight=` (default 100). So `--cpu-shares` does nothing between containers;
+  - `--cpu-shares` becomes `cpu.weight`. The conversion depends on the podman and OCI runtime versions: for 1024/2048/512, podman 4 with runc gives 39/79/20, and podman 5 with crun gives 100/174/59 (Julian, EA4-357 comment 1803523). A weight only counts against sibling cgroups. Inside the unit, the container's only sibling is conmon's cgroup; between containers, the units compete with systemd's `CPUWeight=` (default 100). So `--cpu-shares` does nothing between containers;
   - `--memory-swap` becomes `memory.swap.max` and needs kernel swap accounting. Without it, podman warns and drops the limit.
-  
+
   Fix: the container unit carries `MemoryLow=` and `CPUWeight=` taken from the container's reservation and shares (Phase 1), and slice floors include the unit floors. P0-4 checks swap accounting on every target.
+
+  **Memory floors are best effort, by platform** (EA4-357 comments 1802943 and 1803523). `CPUWeight=` behaved as designed on every OS. The unit's `MemoryLow=` is only as good as the kernel's protection:
+  - **Newer kernels:** it holds. On Ubuntu 24.04, AlmaLinux 9.8 and AlmaLinux 10.2, web's page cache stayed at about 250M against its 256M floor, and at about 165M without the floor.
+  - **EL8:** it is unreliable. One AlmaLinux 8.10 run held 251M, but held 232M without the floor, so the floor barely mattered. Another dropped to 0M with the floor set.
+  - **CloudLinux:** it may protect nothing. Page cache isn't charged to the writer's cgroup (CL8, CL9 and CL10, reproduced outside the kit), so there is nothing in the cgroup for a floor to keep.
+
+  The units still carry `MemoryLow=`. The plugin's account floor (Phase 6) and the release notes say where it works.
 - **F14: `podman exec` processes are not in the container's cgroup.** An exec'd process stays in its caller's cgroup. The OCI runtime (runc on EL8, crun elsewhere) can't move it into the container's `libpod-payload-*` cgroup: on cgroup v2 a move needs write access to `cgroup.procs` of the common ancestor, which is the root-owned `eapodman-<uid>.slice`. The rootless runtime ignores the failure. This happens even when the caller is a delegated transient. Since every 2.0 exec goes through the slice runner, an exec'd process runs in the runner's transient unit under `eapodman-<uid>.slice`:
   - it is bound by the account slice (`MemoryMax`, `TasksMax`, CPU weight), LVE (P0-6) and the namespace rule (F11), but **not** by the container's `--memory`/`--cpus`/`--pids-limit`, and it is not counted in the container's cgroup or `podman stats`;
   - it lives only as long as the runner: `RuntimeMaxSec` and `KillMode=control-group` end it, so `podman exec -d` can't outlive the call.
 
   **Decision: accept and document.** Per-container limits are a resource-planning tool, not a boundary against the account, which can run any process outside them from its own shell. The alternative (root moves the exec'd process into the container unit's delegated subtree) is a follow-up (Open items). 2.0 refuses `exec -d`/`--detach` through ea-podman (Phase 3b) and documents the rest (Phase 7). 1.x very likely behaves the same (an SSH session and `user@<uid>` share only the root-owned `user-<uid>.slice`); P0-13 confirms it.
 
-  **Evidence** (AlmaLinux 8.10, cgroup v2, systemd 239, podman 4.4.1, runc 1.1.4; `EA4-352/eapodman-test-kit/loadtest.sh`): `podman exec <web> cat /proc/self/cgroup` shows the runner's `run-u*.service`, with and without `Delegate=yes` on it; a 600M allocation by `podman exec` succeeds in a container with `--memory=512m`, and is OOM-killed (exit 137, `oom_kill` 0 → 1) when the same process is placed in the container's cgroup. The same run confirmed F12/F13: `--cpus` caps exact (1.01/2.01/0.50); `memory.swap.max=0` with no swap used while the host had swap; with the unit's `MemoryLow=` the page cache held at its floor under slice pressure (web 400M → 251M, floor 256M; worker 200M → 61M, floor 64M), and without it web lost all of it (400M → 0M) despite its container's `memory.low=256M`; with equal unit weights, the containers' own `--cpu-shares` (runc weights 39/79/20) made no difference.
+  **Evidence** (AlmaLinux 8.10, cgroup v2, systemd 239, podman 4.4.1, runc 1.1.4; `EA4-352/eapodman-test-kit/loadtest.sh`): `podman exec <web> cat /proc/self/cgroup` shows the runner's `run-u*.service`, with and without `Delegate=yes` on it; a 600M allocation by `podman exec` succeeds in a container with `--memory=512m`, and is OOM-killed (exit 137, `oom_kill` 0 → 1) when the same process is placed in the container's cgroup. The same run confirmed F12/F13: `--cpus` caps exact (1.01/2.01/0.50); `memory.swap.max=0` with no swap used while the host had swap; with equal unit weights, the containers' own `--cpu-shares` (runc weights 39/79/20) made no difference. With the unit's `MemoryLow=`, the page cache held near its floor under slice pressure: web 400M → 251M against a 256M floor, worker 200M → 61M against 64M. But the control without it kept about as much (web 232M, worker 88M; EA4-357 comment 1802943), so on EL8 this run doesn't show the floor protecting (F13).
 
 - **F15: a SIGKILLed conmon leaves the container down until it is recreated.** conmon is the unit's main process (`PIDFile=`). With `--cgroups=split` it shares the unit's cgroup with the container, so when conmon dies systemd kills the container too, and no exit status is ever recorded. podman 4.4 then still lists the container as running (or as stopping, after the `ExecStopPost=podman stop` that 1.x units also carry). Every `Restart=` attempt's `podman start` fails ("must be in Created or Stopped state"), the start limit is reached and the unit stays failed. `podman container cleanup` doesn't clear it; only `podman rm -f` and a recreate do. Killing the container's own init instead recovers in about 7 s.
   - **Who can cause it:** the account, which owns conmon, and an OOM kill in the account slice (`MemoryMax`, Phase 6), which can pick conmon. A rootless conmon can't lower its own `oom_score_adj`.
-  - **Not yet known:** whether 1.x behaves the same. Under 1.x, conmon and the container are in different cgroups, so the container probably survives a conmon kill. Also unknown: whether newer podman versions recover.
-  - **Decision: open** (Open items). This needs a fix or a documented recovery before 2.0 ships, because an account-slice OOM is a normal event.
+  - **Which podman versions** (Julian, EA4-357 comment 1803523):
+    - **Reproduces:** podman 4.4.1 (the AlmaLinux 8.10 host below) and 4.9.3 on Ubuntu 24.04.
+    - **Doesn't reproduce:** 4.9.4-rhel (AlmaLinux 8.10, CloudLinux 8) and 5.8.2 (AlmaLinux 9.8 and 10.2, CloudLinux 9 and 10). There the container whose conmon was killed is back in about 7 s.
+    - **Untested:** Ubuntu 22.04 (podman 3.4).
+  - **Not yet known:** whether 1.x behaves the same. Under 1.x, conmon and the container are in different cgroups, so the container probably survives a conmon kill.
+  - **Decision: open** (Open items). Ubuntu 24.04 (and any host still on an affected podman) needs a fix or a documented recovery before 2.0 ships, because an account-slice OOM is a normal event.
   - **Evidence** (same host; `EA4-352/eapodman-test-kit/lifecycle.sh` tests 1 and 3): `Failed with result 'signal'`, then on each restart `Error: unable to start container …: container state improper` and `Failed with result 'exit-code'`, and finally the start limit.
+
+- **F16: rootless CNI needs a writable `$XDG_CONFIG_HOME/cni`** (Julian, EA4-357 comment 1803523).
+  - **The failure:** podman 4.9.4 on AlmaLinux 8 and CloudLinux 8 uses the CNI network backend, the EL8 default, and rootless CNI creates `$XDG_CONFIG_HOME/cni`. With `XDG_CONFIG_HOME` pinned to a root-owned empty dir (Phase 1), the anchor fails: `mkdir /etc/eapodman-test/empty/cni: permission denied`.
+  - **Not seen on Dan's A8 run** (podman 4.4.1). Why is unknown; it may use a different network backend.
+  - **Don't make the whole dir account-writable.** The account could then add `containers/policy.json`, `registries.d` and other config that podman reads.
+  - **Fix (Phase 1):** `XDG_CONFIG_HOME` is a root-owned per-account dir, `/run/ea-podman/xdg/<uid>` (root 0755). It holds only a root-owned symlink, `cni` → `/run/ea-podman/user/<uid>/cni`, which lives in the account's capped runtime tmpfs (F8).
+  - **What the account controls:** only its own CNI network config. That is the same class as F4 (it owns its libpod DB) and as netavark's rootless default (`<graphroot>/networks`, in the account's storage), so requiring netavark would not remove it.
+  - P0-8 confirms that nothing else under `XDG_CONFIG_HOME` is needed or read.
+
+- **F17: the `split` pin breaks cgroup v1, and a command-line `--cgroups` overrides it** (Chris, EA4-352 comment 1806521; full text on ea-podman PR #43, comment 6528455200).
+  - **On cgroup v1** (AlmaLinux 8.10, podman 4.9.4), a system unit with `User=` and `Delegate=yes`:
+    - **`--cgroups=split`:** the container is created, then fails to start: `mkdir /sys/fs/cgroup/pids/system.slice/<unit>/runtime: permission denied`.
+    - **`--cgroups=enabled` or no flag:** it starts, with podman's "Resource limits are not supported and ignored on cgroups V1 rootless systems" warning, as today.
+
+    EA4-357 ran only on v2. The plugin's Limits design (CPANEL-58034, LIM-ENF-4a) already leaves split off on v1.
+  - **On cgroup v2,** under the plan's units (AlmaLinux 10.2, podman 5.8.2, crun, `--cgroup-manager=cgroupfs`):
+    - **`--cgroups=split`, or no flag with `cgroups = "split"` pinned:** `--memory` and `--cpus` are enforced.
+    - **`--cgroups=enabled`:** the container stays in the unit's cgroup and nothing is enforced, with or without the pin. The flag overrides the pin.
+    - In the account's own `user@` session, with the systemd manager, all three forms enforced. That was tested on AlmaLinux 10.2 only.
+    - **On CloudLinux 8.10** (runc), `--cgroups=enabled` failed to start. That is unexplained; it may be the exit-143 race of a foreground `podman run` (Dan, EA4-352 comment 1806527 and EA4-358 comment 1806496).
+  - **Fix:**
+    - **v2 only:** the split pin is conditional on the host's cgroup version, and the pinned file follows the host when the version changes (Phase 1).
+    - **One source:** the pinned config is the only source of the cgroups mode and the cgroup manager. `validate_start_args` and CMD refuse `--cgroups*`, `--cgroup-parent`, `--cgroup-conf` and the global `--cgroup-manager` (Phase 3b; EA4-358 comment 1806496). ea-podman's own creates never pass `--cgroups`. CPANEL-57893 (ea-podman PR #44, merged into `CPANEL-57513`, not yet on main) passes `--cgroups=enabled` for capped containers; it drops that flag when this pin lands.
+    - **The mode is fixed when a container is created** (P0-4 confirms). A container created before a cgroup switch keeps its old mode until it is recreated (`ea-podman upgrade`):
+      - after v1 → v2, it runs without limits;
+      - after v2 → v1, it won't start.
+
+      The registry records `cgroup_v` at create, and root's cgroup check names those containers.
+
+- **F18: on CloudLinux cgroup v2, a process is in its LVE or in the unit's cgroups, not both** (Chris, EA4-358 comment 1806575; tested on CloudLinux 10, 9.8 and 8.10).
+  - **What entering the LVE does:** a process that enters through `PAMName=` (with `pam_lve`) or `lve_wrapper` leaves the unit's cgroup. It moves into the LVE's own cgroup under `lvub` (`/lve.slice/lvub/full/lve<uid>` on the later hosts), outside the account slice:
+    - **the slice's limit stops applying:** a slice `MemoryMax=100M` didn't limit a 300M allocation, while the LVE's 1024M limit killed an 1100M one;
+    - **podman can't create per-container cgroups there.** The LVE cgroup is root-owned (`mkdir …/lve<uid>/runtime: permission denied`). After a `chown`, crun can't write `memory.max`, because no controller can be enabled in a cgroup that holds processes;
+    - **`lve_wrapper` loses the process:** its unit's process survived `systemctl stop`, so systemd had lost track of it. A `PAMName=` unit and a plain unit stopped cleanly.
+  - **Why it's a conflict:** plain `User=` units with `Delegate=yes` and cgroupfs stay out of the LVE (F3). So on CloudLinux v2, P0-6's gate (every process inside its LVE) and F7/F12/F13 (the account slice and per-container limits) can't both hold.
+  - **It answers EA4-358 comment 1805194.** Without a user manager, the 1.x "CloudLinux + cgroup v2 breaks the user manager" problem moves rather than goes away.
+  - **Decision: open.** It blocks 2.0 on CloudLinux only. The candidates (Open items):
+    1. **Limits win.** Containers run outside the LVE, and the account slice owns account totals on CloudLinux too.
+    2. **LVE wins.** `PAMName=ea-podman`; no per-container or slice limits on CloudLinux v2, and LVE owns account totals.
+    3. **A per-host choice,** set in `runtime.conf`.
+    4. **A CloudLinux-side change** that lets an LVE account for a systemd-delegated subtree. This is for the CloudLinux conversation, together with CL10's `max_user_namespaces=0` and F11.
+  - **cgroup v1 may differ.** LVE and systemd use separate hierarchies there, so LVE membership and the unit's placement may coexist. Per-container limits are unenforced on v1 anyway (F12, F17). P0-6 probes it.
 
 ## Phase 0: spikes (gate everything)
 
-Run each probe on EL8 (cgroup v1), EL9, CL9 with CageFS 7.6.39+ masked, EL10, and Ubuntu 22.04 (podman 3.4) / 24.04.
+Run each probe on these hosts:
+- EL8, on cgroup v1 and on v2;
+- EL9 and EL10;
+- CL8 (v2, with CloudLinux's default `hidepid=2`), CL9 and CL10, each with CageFS 7.6.39+ masked;
+- Ubuntu 22.04 (podman 3.4) and 24.04.
+
+**PoC coverage so far** (`EA4-352/eapodman-test-kit`, a hand-built version of the Phase 1 layout for one account).
+- **The hosts** (Julian, EA4-357 comment 1803523), each on cgroup v2:
+
+  | OS | podman | OCI runtime |
+  |---|---|---|
+  | Ubuntu 24.04 | 4.9.3 | crun 1.14.1 |
+  | AlmaLinux 8.10 | 4.9.4-rhel | runc |
+  | CloudLinux 8 + CageFS (`hidepid=2`) | 4.9.4-rhel | runc |
+  | CloudLinux 9 + CageFS | 5.8.2 | crun 1.27 |
+  | CloudLinux 10 + CageFS | 5.8.2 | crun 1.30.1 |
+  | AlmaLinux 9.8 | 5.8.2 | crun 1.27 |
+  | AlmaLinux 10.2 | 5.8.2 | crun 1.30.1 |
+
+  Plus Dan's A8: AlmaLinux 8.10, podman 4.4.1, runc 1.1.4 (EA4-357 comment 1802943).
+- **Held on every host:**
+  - `user@<uid>` stayed inactive;
+  - the PID-file refusal passed (P0-3, invariant 19);
+  - the hard memory cap held;
+  - the unit's `CPUWeight=` decided CPU share within the account.
+- **What the runs found:** F3, F15's version split, F16, and the per-platform floor results in F13.
+- **Not covered yet:** a reboot, a second account, `PAMName`, cgroup v1 (Chris covered v1 separately: F17), and the CLI, admin and migration code. Those need product code.
+
+**PoC kit follow-ups.** These feed the task that turns the kit into `t/LiveTests`:
+- real pass/fail checks in `loadtest.sh`, and in `verify.sh` where it only prints;
+- a second account, a reboot test, and `PAMName`/LVE checks on CloudLinux (EA4-357 comment 1802943);
+- CPU test A assumes 4 CPUs;
+- CPU test B's tolerance is loose on some hosts;
+- the floor test must skip when its before-values are 0, as they are on CloudLinux (F13; EA4-357 comment 1803523).
 
 | # | Probe | Decides |
 |---|---|---|
 | P0-1 | Use an existing DB with a new `XDG_RUNTIME_DIR` and pinned `CONTAINERS_*`. Do we get an error or a silent fallback? | Confirms recreate-in-fresh-storage |
 | P0-2 | Start an old container from a system unit using cgroupfs, for a rootless **and** a rootful container. For rootful, also: does `podman rename` of a stopped container keep its CID and named-volume mounts (podman 3.4 and 4+)? | Recreate required? Rootful in-place branch (4.4). Root's containers are always recreated now, because a 1.x container has no `--conmon-pidfile` (Phase 1), so for rootful only the `rename` question remains |
-| P0-3 | Unit shape: `Type=forking` + `podman start` + `PIDFile` of conmon.pid (set with `--conmon-pidfile`), vs `start --attach`. Test stop, Restart, killing conmon, reboot. **EL8 so far:** Restart recovers from a killed container init, but not from a killed conmon (F15); `--conmon-pidfile` works for containers created outside the unit; hostile PIDs are refused (invariant 19). Does conmon land inside the unit's own cgroup? It must, because systemd refuses a PID read through a path the account owns unless that PID is in the unit's cgroup. Also: write `1`, and the PID of a root process, into `conmon.pid`; systemd must refuse both, and `systemctl stop` must kill neither. With `--cgroups=split`, a container *created* outside the unit (by the migration runner or the admin runner) and *started* by the forking unit: do conmon and the container land in sub-cgroups of the unit's cgroup (podman 3.4 and 4+)? | Template |
-| P0-4 | `Delegate=yes` + cgroupfs on v1/v2. Where do conmon and the pause process land? Does stopping one unit hurt the account's other containers? Do container cgroups under `eapodman-<uid>.slice` receive delegated controllers on v2? Does `MemoryLow` on the account slice protect under memory pressure when `eapodman.slice` carries the sum of the floors? Is today's floor on `user-<uid>.slice` effective (`user.slice` has no `MemoryLow`)? Under CPU contention, do all container accounts together get no more than one `user.slice`-sized share against `system.slice`? Are the `memory` and `cpu` controllers in `cgroup.subtree_control` of `eapodman.slice`, `eapodman-<uid>.slice` and the unit, and received by the container cgroup? Is `--memory` enforced with split and not without it? Does every target have `memory.swap.max` (swap accounting), and is `--memory-swap` equal to `--memory` enforced as `memory.swap.max=0`? Does `--memory-reservation` protect a container under memory pressure with and without `MemoryLow=` on its unit, on EL8 (no `memory_recursiveprot`) and on EL9+? What `cpu.weight` does each target's OCI runtime (crun or runc) write for `--cpu-shares=1024` (runc 1.1.4 on EL8: 39), and under contention do two containers of one account split CPU by their units' `CPUWeight=`? The plugin is waiting on these answers (EA4-352 comment 1801665) | Anchor unit; parent slice values; plugin limits |
+| P0-3 | Unit shape: `Type=forking` + `podman start` + `PIDFile` of conmon.pid (set with `--conmon-pidfile`), vs `start --attach`. Test stop, Restart, killing conmon, reboot. **So far (all 8 PoC hosts, v2):** Restart recovers from a killed container init everywhere, and from a killed conmon except on podman 4.4.1 and Ubuntu's 4.9.3 (F15); `--conmon-pidfile` works for containers created outside the unit; hostile PIDs are refused (invariant 19). The forking shape has conmon as the main process, so a foreground podman's exit 143 on SIGTERM never decides the unit's result; if this probe picks `start --attach` instead, the template needs `SuccessExitStatus=143` (EA4-358 comment 1806496). **`hidepid=2` (EA4-366):** on CL8 a rootless `podman stop` times out (`timed out waiting for file …/exits/<id>`, exit 125) and the unit ends `failed`, in 1.x too; check what that does to STOP's verdict, to `KillMode` reaping and to the UNIT_REMOVE order, on every target with `hidepid=2`. **CL8 on v2** (EA4-365): a reboot test and the uninstall order. Does conmon land inside the unit's own cgroup? It must, because systemd refuses a PID read through a path the account owns unless that PID is in the unit's cgroup. Also: write `1`, and the PID of a root process, into `conmon.pid`; systemd must refuse both, and `systemctl stop` must kill neither. With `--cgroups=split`, a container *created* outside the unit (by the migration runner or the admin runner) and *started* by the forking unit: do conmon and the container land in sub-cgroups of the unit's cgroup (podman 3.4 and 4+)? | Template |
+| P0-4 | `Delegate=yes` + cgroupfs on v1/v2. Where do conmon and the pause process land? Does stopping one unit hurt the account's other containers? Do container cgroups under `eapodman-<uid>.slice` receive delegated controllers on v2? Does `MemoryLow` on the account slice protect under memory pressure when `eapodman.slice` carries the sum of the floors? Is today's floor on `user-<uid>.slice` effective (`user.slice` has no `MemoryLow`)? Under CPU contention, do all container accounts together get no more than one `user.slice`-sized share against `system.slice`? Are the `memory` and `cpu` controllers in `cgroup.subtree_control` of `eapodman.slice`, `eapodman-<uid>.slice` and the unit, and received by the container cgroup? Is `--memory` enforced with split and not without it? Does every target have `memory.swap.max` (swap accounting), and is `--memory-swap` equal to `--memory` enforced as `memory.swap.max=0`? Does `--memory-reservation` protect a container under memory pressure with and without `MemoryLow=` on its unit, on EL8 (no `memory_recursiveprot`) and on EL9+? What `cpu.weight` does each target's OCI runtime (crun or runc) write for `--cpu-shares=1024` (podman 4 + runc: 39; podman 5 + crun: 100), and under contention do two containers of one account split CPU by their units' `CPUWeight=` (EA4-357: yes on all 8 hosts)? Do CPU caps actually throttle on CL8 v2, not only show in `cpu.max` (EA4-365)? Is page cache charged to the writer's cgroup on CloudLinux (EA4-357: no on CL8/9/10), and on which kernels does a unit's `MemoryLow=` hold (F13)? **F17:** is the cgroups mode recorded at create (podman 3.4, 4 and 5), so that after a v1 → v2 or v2 → v1 reboot an existing container keeps its old mode? Does a split container fail to start on v1 on every target? The plugin is waiting on these answers (EA4-352 comment 1801665) | Anchor unit; parent slice values; plugin limits; F17 recreate rule |
 | P0-5 | Journald routing of `User=` unit output; where `podman logs` goes; whether `events_logger="journald"` works from a system unit with `User=` on every target | Messages/docs; events logger |
-| P0-6 | **Gate, not an open item.** Is the unit's process inside `lve<uid>`, with and without `PAMName=ea-podman`? Same question for the `systemd-run --uid` transients (the migration runner and the plugin's builds), with `-p PAMName=ea-podman`. Do slice totals (`MemoryMax`/`CPUQuota`) double-limit against LVE? Which OOM fires first, and what does each report? Can LVE Manager's limits and the slice's be told apart in the logs? 2.0 does not ship unless every process ea-podman starts as the account is inside its LVE, as under 1.x (a prototype showed they are not without help) | F3; who owns account totals on CloudLinux |
+| P0-6 | **Gate: decide F18 on CloudLinux.** Answered so far on v2: without help, nothing ea-podman starts is in the LVE (F3, CL8/9/10); with `PAMName=` or `lve_wrapper` the process leaves the unit's cgroup for the LVE's, so the slice and per-container limits stop applying, and `lve_wrapper` loses track of the process on `systemctl stop` (F18, CL8.10/9.8/10). Still to probe: the same on **cgroup v1**, where LVE and systemd use separate hierarchies (is a `PAMName=` unit's process in `lve<uid>` *and* in its unit's cgroup, and does `systemctl stop` still reach it?); the `systemd-run --uid` transients (the migration runner and the plugin's builds) with `-p PAMName=ea-podman`; with a `PAMName=` unit on v2, does systemd keep tracking conmon and the container through stop, restart and reboot? 2.0 does not ship on CloudLinux until F18 is decided with Chris (plugin limits) and CloudLinux | F3, F18; who owns account totals on CloudLinux |
 | P0-7 | A caged account's container running from a system unit; does the CLI admin fallback still work? | CageFS parity |
-| P0-8 | `CONTAINERS_CONF` semantics on podman 3.4 vs 4+; is user config fully ignored? | Pinned conf shape |
+| P0-8 | `CONTAINERS_CONF` semantics on podman 3.4 vs 4+; is user config fully ignored? With `XDG_CONFIG_HOME` set to the per-account root-owned dir that holds only the `cni` symlink (F16): do podman 3.4 (CNI), 4.x (CNI and netavark) and 5.x work, and is nothing else under it created or read? | Pinned conf shape; F16 |
 | P0-9 | Can a non-root user run `systemctl show` on a system unit on CloudLinux? | STATUS always goes through admin (expected) |
 | P0-10 | The CLOS-7971 canary (`test.sh`) after migration and after reboot: it must never run, and no `user@<uid>` may exist | Acceptance |
 | P0-11 | The bounded as-user runner (4.2a): `systemd-run --uid --gid --pipe --wait --collect -p RuntimeMaxSec=` running `podman` against old **and** new storage. On a timeout, does systemd reap a SIGSTOPped child, a ptrace-stopped child, and a grandchild that called `setsid`/double-forked? How does `systemd-run --wait` report `Result=timeout` vs a non-zero exit (systemd 239, 249, 252, 255)? On v1, can the account move a runner process into its own delegated cgroup, and does `--wait` still return? | Runner mechanism; timeout detection |
@@ -117,36 +221,47 @@ Run each probe on EL8 (cgroup v1), EL9, CL9 with CageFS 7.6.39+ masked, EL10, an
 
 **New module: `SOURCES/lib/ea_podman/units.pm`.**
 - Add it to the spec Source/install/`%files` and to `debify/debian/ea-podman.install`.
-- Load it with the guarded sibling-require used for `subids.pm` (`util.pm:73-81`).
+- Load it with the guarded sibling-require used for `subids.pm` (`util.pm:92-100`).
 
 **Pinned config, root:root 0644 under `/opt/cpanel/ea-podman/etc/`:**
-- `containers.conf`: `cgroup_manager="cgroupfs"`, `cgroups="split"` (F12), `events_logger="journald"` (the 1.x default; per P0-5), explicit `runtime` and `conmon_path`, `hooks_dir=[]`, and `default_mounts_file` pointed at an empty root-owned file, so the account's `~/.config/containers/mounts.conf` can't add mounts. If P0-5 forces `events_logger="file"`, also set `events_logfile_max_size` wherever the podman version supports it. The events file then lives in the capped runtime tmpfs (F8), so it can't grow past that cap even on podman 3.4, which doesn't rotate it.
+- `containers.conf`: `cgroup_manager="cgroupfs"`, `cgroups="split"` **on cgroup v2 only** (F12, F17), `events_logger="journald"` (the 1.x default; per P0-5), explicit `runtime` and `conmon_path`, `hooks_dir=[]`, and `default_mounts_file` pointed at an empty root-owned file, so the account's `~/.config/containers/mounts.conf` can't add mounts. If P0-5 forces `events_logger="file"`, also set `events_logfile_max_size` wherever the podman version supports it. The events file then lives in the capped runtime tmpfs (F8), so it can't grow past that cap even on podman 3.4, which doesn't rotate it.
+- **`containers.conf` follows the host's cgroup version (F17).**
+  - **How it is rendered:** root renders it from fixed text in code. The `cgroups = "split"` line is present only when `/sys/fs/cgroup/cgroup.controllers` exists, and a marker line records the version it was rendered for.
+  - **Atomic rewrite:** a tmp file, fsync, then rename, so a podman reading it mid-change sees the old or the new file, never half of one.
+  - **When it is checked:** the package scriptlets, `ensure_runtime`, and the anchor's root helper (below) each re-render it when the marker doesn't match the host. A cgroup switch needs a reboot, and every container unit `Requires=` its anchor, so after a switch the first container start re-renders the file first.
+  - **Old containers keep their mode:** the mode is fixed at create, so containers created under the other version keep it until they are recreated (F17). The registry records `cgroup_v` (below), and root's cgroup check names them.
 - `storage.conf`: `rootless_storage_path` = `~/.local/share/ea-podman/storage`.
 - `old-storage.conf` and `old-containers.conf`, for the migration only (4.2a): the 1.x graphroot (`~/.local/share/containers/storage`) with the same pinned runtime, conmon, hooks and mounts settings. The migration never runs podman under the account's own `containers.conf`.
 - A registries reference.
-- Every podman invocation gets `CONTAINERS_CONF` / `CONTAINERS_STORAGE_CONF` / `CONTAINERS_REGISTRIES_CONF` pointing at these files, through a new `podman_env($uid)`. That covers the units, the CLI, the admin module and the plugin. `podman_env` also clears `CONTAINERS_CONF_OVERRIDE` and sets `XDG_CONFIG_HOME` to a root-owned empty directory, so neither `containers.conf.d` drop-ins nor the account's `policy.json` or `registries.d` are read (P0-8 confirms this per podman version).
+- Every podman invocation gets `CONTAINERS_CONF` / `CONTAINERS_STORAGE_CONF` / `CONTAINERS_REGISTRIES_CONF` pointing at these files, through a new `podman_env($uid)`. That covers the units, the CLI, the admin module and the plugin. `podman_env` also clears `CONTAINERS_CONF_OVERRIDE`, and sets `XDG_CONFIG_HOME` to the root-owned per-account directory `/run/ea-podman/xdg/<uid>` (root:root 0755).
+  - **Nothing account-controlled is read from it.** It holds nothing but a root-owned symlink `cni` → `/run/ea-podman/user/<uid>/cni`, so neither `containers.conf.d` drop-ins nor the account's `policy.json` or `registries.d` are read.
+  - **Why the symlink:** rootless CNI (podman 3.4, and EL8's 4.x default) must be able to create `$XDG_CONFIG_HOME/cni`. The symlink lets it, and its writes land in the capped runtime tmpfs (F16, F8).
+  - P0-8 confirms this per podman version.
 
 **Anchor unit: `/usr/lib/systemd/system/ea-podman-runtime@.service`.** This is a static template shipped in the package, with the instance being the uid:
 - `User=%i`
 - `ExecStartPre=+/opt/cpanel/ea-podman/bin/runtime-mount %i`. This is a root-owned helper and the only privileged Exec line in any ea-podman unit. It is allowed because the anchor is fixed packaged text, never rendered. The helper:
   - accepts only a numeric `%i` that `getpwuid` resolves, and is not 0;
   - creates `/run/ea-podman/user/<uid>` (root parents, 0755) unless it exists, refusing a symlink or a non-directory;
-  - mounts a tmpfs on it unless one is already mounted there: `size=` and `nr_inodes=` from root-owned `/opt/cpanel/ea-podman/etc/runtime.conf` (defaults matching logind's `RuntimeDirectorySize=10%` and `RuntimeDirectoryInodesMax`), `mode=0700`, `uid=`, `gid=`, `nosuid`, `nodev`.
-  
-  This replaces `RuntimeDirectory=`. Its pages are charged to the writer's memory cgroup, as `/run/user/<uid>` is in 1.x. `release_runtime` and the account-removal hooks unmount it, then remove the directory (F8).
+  - mounts a tmpfs on it unless one is already mounted there: `size=` and `nr_inodes=` from root-owned `/opt/cpanel/ea-podman/etc/runtime.conf` (defaults matching logind's `RuntimeDirectorySize=10%` and `RuntimeDirectoryInodesMax`), `mode=0700`, `uid=`, `gid=`, `nosuid`, `nodev`;
+  - creates `/run/ea-podman/xdg/<uid>` (root:root 0755) and its root-owned `cni` symlink into the tmpfs (F16), replacing anything else found there;
+  - re-renders the pinned `containers.conf` if its cgroup-version marker doesn't match the host (F17). This is fixed text with no input from the account.
+
+  This replaces `RuntimeDirectory=`. Its pages are charged to the writer's memory cgroup, as `/run/user/<uid>` is in 1.x. `release_runtime` and the account-removal hooks unmount it, then remove the directory and `/run/ea-podman/xdg/<uid>` (F8).
 - `Delegate=yes`
 - the pinned environment
 - `ExecStart`: `podman unshare /bin/true`, so it holds the pause process (per P0-4)
 - `Type=oneshot`, `RemainAfterExit=yes`
 - explicit `TimeoutStartSec=` and `TimeoutStopSec=`. A oneshot's start timeout defaults to infinity, and its `ExecStart` runs as the account, so without them a root `systemctl start` of the anchor could be held open by the account (4.2a).
 - `Slice=eapodman-%i.slice` (see below)
-- `PAMName=ea-podman`, if P0-6 requires it (the same applies to the container units and the `systemd-run --uid` transients)
+- `PAMName=ea-podman`, only if F18 is decided for the LVE. The same applies to the container units and the `systemd-run --uid` transients. On cgroup v2 it takes the process out of the unit's cgroup, which costs the slice and per-container limits.
 
 **Container unit: `/etc/systemd/system/ea-podman-<name>.service`.**
 - Rendered from a **fixed template in code**. The only substituted values are `{NAME}`, `{USER}`, `{GROUP}`, `{UID}`, `{NPROC}`, `{MEMLOW}` and `{CPUWEIGHT}`.
 - A marker line records `owner`, `uid` and `container`.
 - `Requires=`/`After=` the anchor unit.
 - `Type=forking`. `ExecStart`/`ExecStop` are `podman --cgroup-manager=cgroupfs start {NAME}` / `stop -t 10 {NAME}`. As in 1.x's generated units, there is also `ExecStopPost=` (the same `stop`) and `Environment=PODMAN_SYSTEMD_UNIT=%n`.
+  - **No `SuccessExitStatus=143`.** The main process is conmon, not a foreground podman, so a podman exit of 143 on SIGTERM never decides the unit's result. If P0-3 moves the template to a foreground `start --attach`, it must add `SuccessExitStatus=143`; otherwise whether a stop ends `failed` comes down to timing (EA4-358 comment 1806496).
 - **The unit names the container, never its CID.** A recreate (upgrade, migration) then needs no unit rewrite, and the unit reads like 1.x's.
 - `PIDFile=/run/ea-podman/user/{UID}/{NAME}.conmon.pid`. Root chooses this path, and the as-user create sets it with `podman create --conmon-pidfile` (`units::conmon_pidfile($uid, $name)`, Phase 3). Root never takes the path from `podman inspect`, which reads the account's libpod DB (F4).
   - The account can still change where conmon writes, through its DB or by recreating the container with raw podman. The unit then finds no PID file and fails to start; that only harms the account. A PID it writes there that is outside the unit's cgroup is refused (invariant 19).
@@ -159,7 +274,7 @@ Run each probe on EL8 (cgroup v1), EL9, CL9 with CageFS 7.6.39+ masked, EL10, an
   - `{CPUWEIGHT}` is `shares * 100 / 1024`, rounded and clamped to 1..10000 (systemd's own shares-to-weight mapping); with no `--cpu-shares` it is `100`, systemd's default.
   - No `MemoryMax=` or `CPUQuota=` on the unit. The container's own caps are in its cgroup, and a smaller unit value would silently override them.
 - `Slice=eapodman-{UID}.slice`.
-- Restart values come from `%container_unit_directives` (`util.pm:700`). Keep it as the single source so that `container_unit_settle_ceiling_sec` (`util.pm:1112`) still works.
+- Restart values come from `%container_unit_directives` (`util.pm:704`). Keep it as the single source so that `container_unit_settle_ceiling_sec` (`util.pm:1116`) still works.
 - Explicit `TimeoutStartSec=` and `TimeoutStopSec=`, added to `%container_unit_directives`. `ExecStart`/`ExecStop` run as the account, and root runs `systemctl start`/`stop` on these units while holding the account lock (4.2 rule 2, 4.3 step 8). These timeouts are what bound those calls (4.2a).
 - `WantedBy=multi-user.target`.
 - There are **no** `+`/`!` Exec prefixes, `PermissionsStartOnly`, or root `ExecStartPre`/`Post`.
@@ -187,16 +302,16 @@ Run each probe on EL8 (cgroup v1), EL9, CL9 with CageFS 7.6.39+ masked, EL10, an
   - whitelist: `MemoryLow`, `MemoryMax`, `CPUQuota`, `TasksMax`;
   - values must be numeric, unit-suffixed, or `infinity`;
   - the slice name is always derived from `getpwnam`, never from caller input.
-  
+
   These persist as drop-ins under `/etc/systemd/system.control/eapodman-<uid>.slice.d/`.
-- **No delegation on the slice itself.** The services inside it keep `Delegate=`. On v2, systemd enables the needed controllers on the slice. On v1 the limits stay unenforced, as today.
+- **No delegation on the slice itself.** The services inside it keep `Delegate=`. On v2, systemd enables the needed controllers on the slice. On v1 the limits stay unenforced, as today, and split isn't pinned there (F17).
 - **Lifecycle.** `ensure_runtime` brings the slice into use. `release_runtime` and account removal remove its `system.control` drop-ins, so a new account that reuses the uid can't inherit old limits.
 
 **Validation, on every render:**
 
 | Value | Rule |
 |---|---|
-| name | `validate_user_container_name` (`util.pm:1938`) plus `container_name_belongs_to_user` (`util.pm:690`). It is also a path component of `PIDFile=`, which the name regex keeps free of `/` |
+| name | `validate_user_container_name` (`util.pm:1939`) plus `container_name_belongs_to_user` (`util.pm:694`). It is also a path component of `PIDFile=`, which the name regex keeps free of `/` |
 | user | `getpwnam` succeeds, matches a strict regex, and equals the registry user |
 | uid/gid | Taken from `getpwnam` only |
 | CID | `^[0-9a-f]{64}$`. Units no longer carry a CID; this rule is for the migration state and argv (4.2a) |
@@ -225,9 +340,9 @@ After rendering, check the output against the template skeleton:
 - `container_nproc_cap`
 - Not root-only: `conmon_pidfile($uid, $name)`, a pure path function. The as-user create and root's render both call it, so the two always agree.
 
-Move `_systemctl_quiet` / `_systemctl_show` / `_systemctl_value` (`util.pm:1007,1027,610`) here as plain `systemctl`, keeping them as mockable subs.
+Move `_systemctl_quiet` / `_systemctl_show` / `_systemctl_value` (`util.pm:1011,1031,614`) here as plain `systemctl`, keeping them as mockable subs.
 
-**Registry:** add `uid` and `unit` to entries in `register_container_as_root` (`util.pm:2418`), under `_mutate_known_containers_as_root` (`util.pm:2376`). The migration back-fills them.
+**Registry:** add `uid`, `unit` and `cgroup_v` (the host's cgroup version when the container was created, F17) to entries in `register_container_as_root` (`util.pm:2420`), under `_mutate_known_containers_as_root` (`util.pm:2378`). The migration back-fills `uid` and `unit`, and sets `cgroup_v` when it recreates (step 6).
 
 ## Phase 2: admin module actions and routing
 
@@ -243,56 +358,63 @@ All in `SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm`.
 **START/STOP/RESTART/STATUS:**
 - Use `_own_container_arg(..., registered => 1)`, and require the unit's marker uid to match the caller.
 - Root runs `unit_ctl` itself, with no `_as_cpuser`.
-- START and RESTART run reset-failed, then the verb, then the `wait_for_container_unit_verdict` poll (`util.pm:1133`, moved to root).
+- START and RESTART run reset-failed, then the verb, then the `wait_for_container_unit_verdict` poll (`util.pm:1137`, moved to root).
 - **Locking.** These actions, together with `UNIT_INSTALL`, `UNIT_REMOVE` and `RESET_FAILED`, take the per-account lock only around their own root-side work, with a bounded wait. INSTALL/UPGRADE never hold it across their `_as_cpuser` child, because that child calls these same actions. The rules are in 4.2.
 
 **ENSURE_USER / RELEASE_USER:**
 - `ENSURE_USER` keeps subid allocation (`subids::ensure_user_root` minus the session). It calls `ensure_runtime` when the account has containers or is creating one, and returns `{has_runtime, nproc}`.
+- **It keeps EA4-360's root-side user namespace check and its `($creating, $userns_optional)` signature** (`Cpanel-Admin-Modules-Cpanel-ea_podman.pm:201`). `$userns_optional` only warns, for the verbs that don't need podman ("Stays").
+- **The other root-side actions classify the same way.**
+  - **Refuse without user namespaces:** START, RESTART and UNIT_INSTALL, because the unit's `ExecStart` runs podman.
+  - **Only warn:** STOP, UNIT_SHOW, UNIT_REMOVE and RESET_FAILED.
+  - The refusal is the EA4-360 message, passed through as is.
 - `RELEASE_USER` stops the anchor unit when the account has no units left.
 - **An account that hasn't been migrated yet:** lifecycle actions refuse with "this account's containers have not been migrated to ea-podman 2.0 yet; root can run `ea-podman migrate_units`". They do not migrate the account themselves.
 
 **Routing:**
-- Every non-root lifecycle call goes through admin, following the `register_container` pattern (`util.pm:2688`): root calls `ea_podman::units` directly, everyone else uses `Cpanel::AdminBin::Call`.
+- Every non-root lifecycle call goes through admin, following the `register_container` pattern (`util.pm:2690`): root calls `ea_podman::units` directly, everyone else uses `Cpanel::AdminBin::Call`.
 - Update the POD's AUTHORIZATION and HOSTILE ARGUMENTS sections.
 
 ## Phase 3: rewire util.pm and the CLI
 
-- **`sysctl()` (`util.pm:413`) is deleted,** with no compatibility shim. The Web Apps plugin ships in lockstep (Phase 6) and uses the new exports. Internal callers use `api_lifecycle` / `install_container_unit` / `UNIT_SHOW`.
+- **`sysctl()` (`util.pm:423`) is deleted,** with no compatibility shim. The Web Apps plugin ships in lockstep (Phase 6) and uses the new exports. Internal callers use `api_lifecycle` / `install_container_unit` / `UNIT_SHOW`.
 - **Unit install path:**
-  - Delete `_podman_generate_systemd` (`util.pm:976`) and `_add_container_unit_directives` (`util.pm:714`). User-produced unit text must never reach root.
-  - `generate_container_service` (`util.pm:986`) becomes `install_container_unit($name)`, which goes through admin/root.
-- **`_ensure_latest_container` tail (`util.pm:1642-1667`) and rollback (`util.pm:1700-1733`):** call `install_container_unit`, then admin START unless `--no-start`.
-- **`uninstall_container` (`util.pm:2318`):** UNIT_REMOVE, then `podman rm` as the user. It no longer writes anything under `~/.config`.
+  - Delete `_podman_generate_systemd` (`util.pm:980`) and `_add_container_unit_directives` (`util.pm:718`). User-produced unit text must never reach root.
+  - `generate_container_service` (`util.pm:990`) becomes `install_container_unit($name)`, which goes through admin/root.
+- **`_ensure_latest_container` tail (`util.pm:1643-1668`) and rollback (`util.pm:1701-1734`):** call `install_container_unit`, then admin START unless `--no-start`.
+- **`uninstall_container` (`util.pm:2320`):** UNIT_REMOVE, then `podman rm` as the user. It no longer writes anything under `~/.config`. Its result says whether podman's copy was removed, and why not. Without user namespaces, the root-side cleanup still succeeds but `podman rm` can't run; today the caller is told only "success" (EA4-367 item 1, which survives this plan).
 - **Status and errors:**
-  - `verify_container_started` (`util.pm:1182`) uses UNIT_SHOW.
-  - Rewrite the messages at `util.pm:1201-1210, 1477, 1765, 3484`: no `systemctl --user`. Point to `ea-podman status`, `podman logs`, and root `journalctl -u ea-podman-<name>`.
-- **`api_lifecycle` / `api_status` (`util.pm:3449,3498`):** non-root callers go to admin.
+  - `verify_container_started` (`util.pm:1186`) uses UNIT_SHOW.
+  - Rewrite the messages at `util.pm:1205-1214, 1479, 1766, 3499`: no `systemctl --user`. Point to `ea-podman status`, `podman logs`, and root `journalctl -u ea-podman-<name>`.
+- **`api_lifecycle` / `api_status` (`util.pm:3464,3517`):** non-root callers go to admin.
 - **Environment:**
-  - `ensure_su_login` (`util.pm:99`), `run_in_user_session` (`util.pm:3339`) and `resolve_container_init_pid` (`util.pm:300`) apply `podman_env`. When root calls them, they run through the slice runner (F11), never a direct setuid fork.
-  - Keep the "rootless runtime directory … does not exist" wording, because `ea-podman.pl:108` matches on it.
-  - `get_containers` (`util.pm:642`) and `util.pm:2102` check the new runtime dir.
-- **nproc:** the unit's `LimitNPROC` and the `--ulimit nproc` passed at create (`util.pm:475-487`) come from the same `container_nproc_cap`.
+  - `ensure_su_login` (`util.pm:118`), `run_in_user_session` (`util.pm:3353`) and `resolve_container_init_pid` (`util.pm:300`) apply `podman_env`. When root calls them, they run through the slice runner (F11), never a direct setuid fork.
+  - Keep the "rootless runtime directory … does not exist" wording, because `ea-podman.pl:103` matches on it.
+  - `get_containers` (`util.pm:646`) and `util.pm:2103` check the new runtime dir.
+- **nproc:** the unit's `LimitNPROC` and the `--ulimit nproc` passed at create (`util.pm:479-491`) come from the same `container_nproc_cap`.
 - **conmon PID file:** every create (install, upgrade, rollback, `op => 'migrate'`) also passes `--conmon-pidfile` from `conmon_pidfile($uid, $name)`, so the unit's `PIDFile=` (Phase 1) is where conmon writes.
-- **`_backup_name_is_free` (`util.pm:2151`)** checks the `/etc` unit path.
+- **`_backup_name_is_free` (`util.pm:2153`)** checks the `/etc` unit path.
+  - **The session gap closes.** Its podman check no longer depends on the account having a session.
+  - **The other gap stays (EA4-367 item 2).** `_podman_container_exists` (`util.pm:2108`) must report "couldn't check" separately from "no such container", so `clean` keeps a `.bak` when podman can't be asked.
 - **CLI (`SOURCES/ea-podman.pl`):**
-  - `start/stop/restart/status` (`:447-510`) go through `api_lifecycle` / `api_status` for every caller.
-  - Remove the `ensure_user_sessions` verb (`:1047-1089`).
+  - `start/stop/restart/status` (`:441-504`) go through `api_lifecycle` / `api_status` for every caller.
+  - Remove the `ensure_user_sessions` verb (`:1042-1084`).
   - Add the root verbs `reconcile_units` and `migrate_units`.
 
 ## Phase 3b: one execution path through the admin module (all non-root verbs except `bash`); remove the EAPodman UAPI
 
-**Why.** The UAPI existed only to get podman out of the CageFS/jailshell view. Since 1.0-32 (EA4-315) the CLI reaches the admin module directly. Once every non-root verb goes through admin, podman runs as the user in exactly one place: the admin module's `_as_cpuser` (`Cpanel-Admin-Modules-Cpanel-ea_podman.pm:567-593`).
+**Why.** The UAPI existed only to get podman out of the CageFS/jailshell view. Since 1.0-32 (EA4-315) the CLI reaches the admin module directly. Once every non-root verb goes through admin, podman runs as the user in exactly one place: the admin module's `_as_cpuser` (`Cpanel-Admin-Modules-Cpanel-ea_podman.pm:581-607`).
 
 **CLI (`SOURCES/ea-podman.pl`):**
-- For `$> != 0`, every verb except `bash`, `avail`, `testbin` and `help` goes through `delegate_to_admin` (`:162-205`), whatever the shell or cage:
+- For `$> != 0`, every verb except `bash`, `avail`, `testbin` and `help` goes through `delegate_to_admin` (`:156-199`), whatever the shell or cage:
   - `avail` only reads `/opt/cpanel`;
   - `testbin` only prints the perl version.
 - `bash` stays direct for unrestricted shells only. Restricted shells keep today's refusal. Before it execs, `bash` calls `ENSURE_USER` through admin, so the anchor and its pause process are up. `podman exec` then only `setns`-joins existing namespaces and creates none outside the slice (F11). Note this in the help text.
 - **Remove:**
   - the `_has_unrestricted_shell` gate (`:58-66`);
-  - the CageFS runtime-dir fallback (`:91-116`) and the regex it matches;
+  - the CageFS runtime-dir fallback (`:85-110`) and the regex it matches;
   - the "restricted shell" wording in `delegate_to_admin`'s help and errors;
-  - `%bridge_verb`/`%bridge_alias` as a *restriction*. They become the general verb-to-action map (`_admin_action_for_verb`, `:287-303`).
+  - `%bridge_verb`/`%bridge_alias` as a *restriction*. They become the general verb-to-action map (`_admin_action_for_verb`, `:281-297`).
 - **Audit:** the cPanel Terminal refusal (`:69-82`). Drop it if its only reason was running podman locally.
 - **Root** keeps the direct path.
 
@@ -303,21 +425,24 @@ All in `SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm`.
 | `SUBIDS` (new) | Report, plus `--ensure` via `ENSURE_USER` |
 | `BACKUP` / `RESTORE` (new) | The user's own `ea-podman backup`/`restore` |
 | `CLEAN` (new) | List, or `--run` |
-| `INSTALL` / `UPGRADE` (extended) | Accept the **full CLI argument set** the direct path allowed: arbitrary start args including `-v`/`--mount`, `--cpuser-port`, `--webapp-dir`, `--no-start`. These are safe because they run in the `_as_cpuser` child and are validated by `validate_start_args` (`util.pm:1966`) as the user, exactly as today. The "not expressible through the UAPI" limit in `DESIGN.md` goes away. |
+| `INSTALL` / `UPGRADE` (extended) | Accept the **full CLI argument set** the direct path allowed: arbitrary start args including `-v`/`--mount`, `--cpuser-port`, `--webapp-dir`, `--no-start`. These are safe because they run in the `_as_cpuser` child and are validated by `validate_start_args` (`util.pm:1967`) as the user, exactly as today. The "not expressible through the UAPI" limit in `DESIGN.md` goes away. |
 
-- **Paths resolve in the host view, not the cage's.** The `_as_cpuser` child runs outside CageFS. So for a caged or jailshell account, any path argument names a file in the real filesystem: the real `/tmp`, or files that CageFS hides but the uid can read. Today's admin `INSTALL` takes only name, image, ports and env (`Cpanel-Admin-Modules-Cpanel-ea_podman.pm:366-380`), so this is new for those accounts. `-v`/`--mount` are handled by EA4-343 and out of scope here. The other path-taking arguments get the same rule as EA4-343: resolved as the user (`realpath`) and refused unless they are inside the account's home. That covers:
+- **Paths resolve in the host view, not the cage's.** The `_as_cpuser` child runs outside CageFS. So for a caged or jailshell account, any path argument names a file in the real filesystem: the real `/tmp`, or files that CageFS hides but the uid can read. Today's admin `INSTALL` takes only name, image, ports and env (`Cpanel-Admin-Modules-Cpanel-ea_podman.pm:380-394`), so this is new for those accounts. `-v`/`--mount` are handled by EA4-343 and out of scope here. The other path-taking arguments get the same rule as EA4-343: resolved as the user (`realpath`) and refused unless they are inside the account's home. That covers:
   - start args `--env-file`, `--label-file`, `--authfile`, `--cidfile`, `--pidfile`, `--log-opt path=`, `--seccomp-policy`, `--security-opt seccomp=`;
   - `--webapp-dir`;
   - the BACKUP output path and the RESTORE input path.
-  
+
   `--network=host` is not a path, so this rule doesn't cover it. It is listed with `-v` as a decision for EA4-343, and the release notes name it.
-- **Cgroup start args are refused (F12).** `validate_start_args` refuses `--cgroups`, `--cgroup-parent` and `--cgroup-conf`. Otherwise the account could move a container out of its unit's cgroup and escape both the slice limits and the namespace rule (F11).
+- **Cgroup start args are refused (F12, F17).**
+  - **What is refused:** `validate_start_args` refuses `--cgroups`, `--cgroup-parent`, `--cgroup-conf` and the global `--cgroup-manager`, which podman also accepts after the subcommand. CMD refuses the same flags.
+  - **Why:** the account could otherwise move a container out of its unit's cgroup and escape both the slice limits and the namespace rule (F11). It could also switch per-container limits off: a command-line `--cgroups=enabled` overrides the pinned split and enforces nothing (F17).
+  - **ea-podman's own create paths never pass `--cgroups` or `--cgroup-manager`.** CPANEL-57893 (PR #44, on `CPANEL-57513`) passes `--cgroups=enabled` for capped containers until this pin lands. 2.0 drops it, and keeps that branch's start-arg denylist in line with this list.
 - **`--conmon-pidfile` is refused.** ea-podman sets it itself (Phase 1, Phase 3). A different path would leave the unit with no PID file, so it would never start.
 - **CMD and code in the slice.** `podman unshare`/`run`/`exec` through CMD run account-chosen code inside the slice. That is the same as what the account's container workloads already do, so it is not new exposure under F11. Still, refuse `unshare` unless it is already a supported verb.
 - **`exec` runs outside the container's limits (F14).** An exec'd process is bound by the account slice, not by the container's limits, and ends with the runner. Refuse `exec -d`/`--detach` with a message that says so, rather than letting the process be killed silently when the call returns.
 - Every action: `registered => 1` ownership where a container is named, the feature gate where the UAPI had one (`Cpanel-API-EAPodman.pm:63-77` moves into the actions), and existing timeouts (install/upgrade 1800s).
-- `run_in_user_session` (`util.pm:3339`) stays only as the admin child's wrapper. Rename it (e.g. `run_as_cpuser_captured`). It applies `podman_env`, captures output, and `chdir`s to home. Its cpsrvd comments go.
-- **`_as_cpuser` runs in the slice (F11).** The admin module's `_as_cpuser` (`Cpanel-Admin-Modules-Cpanel-ea_podman.pm:567-593`) runs its child through `units::run_as_user_in_slice`, with the action's existing timeout (350 s or 1800 s) as `RuntimeMaxSec`, instead of forking under cpsrvd. The 1 MB cap below and the per-account semaphore still apply.
+- `run_in_user_session` (`util.pm:3353`) stays only as the admin child's wrapper. Rename it (e.g. `run_as_cpuser_captured`). It applies `podman_env`, captures output, and `chdir`s to home. Its cpsrvd comments go.
+- **`_as_cpuser` runs in the slice (F11).** The admin module's `_as_cpuser` (`Cpanel-Admin-Modules-Cpanel-ea_podman.pm:581-607`) runs its child through `units::run_as_user_in_slice`, with the action's existing timeout (350 s or 1800 s) as `RuntimeMaxSec`, instead of forking under cpsrvd. The 1 MB cap below and the per-account semaphore still apply.
 - Output is buffered, not streamed. That's acceptable; note it in the help text for install/upgrade.
 - **Root-side limits, because every non-root verb now runs in cpsrvd:**
   - the captured output and the Storable return of `_as_cpuser` are capped at 1 MB per stream, like the migration runner (the rest is drained and discarded, and the reply says it was truncated);
@@ -331,9 +456,11 @@ All in `SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm`.
   - spec Source12-Source2x, install and `%files` entries;
   - debify `ea-podman.install` and `override_dh_auto_install.sh` lines.
 - **Docs and tests:**
-  - `docs/uapi.md`. Replace it with a short `docs/admin-routing.md` describing the single admin path;
+  - `docs/uapi.md`. Replace it with a short `docs/admin-routing.md` describing the single admin path.
+    - **Move its host requirements first** (EA4-360): the cgroup v2 recommendation, user namespaces and https://go.cpanel.net/userns, and CloudLinux 10's `user.max_user_namespaces=0`. Put them in README or `docs/admin-routing.md`.
+    - **Update them for 2.0:** CloudLinux 8 is recommended on v2 too, through `tuned-adm profile cloudlinux-default-cgv2` as on 9/10, with `grubby` elsewhere. Add the per-platform limits on memory floors (F13) and the CloudLinux LVE decision (F18);
   - `t/SOURCES-Cpanel-API-EAPodman.t`;
-  - UAPI assertions in the live tests (jailshell, cagefs, memcached16-cagefs, ea4-315).
+  - UAPI assertions in the live tests (jailshell, cagefs, memcached16-cagefs, ea4-315, ea4-360-userns-cgroup).
   - Keep `DESIGN.md`, README and help-text references in sync.
 - **Changelog:** "Remove the EAPodman UAPI module; ea-podman's CLI routes through its admin module for all accounts". This is a breaking change for anyone calling `uapi EAPodman` directly. No consumers exist in the cPanel or cpanel-plugins checkouts.
 - **Ships with:** the 2.0 release, so routing changes once.
@@ -341,7 +468,8 @@ All in `SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm`.
 **Tests:**
 - Extend `t/SOURCES-Cpanel-Admin-Modules-Cpanel-ea_podman.t` for the new and extended actions: ownership, feature gate, full install args, `-v` validated as the user.
 - Add a CLI routing test: non-root with any shell goes to admin; `bash` stays direct only for unrestricted shells; root stays direct.
-- `--cgroups=…`, `--cgroup-parent`, `--cgroup-conf` and `--conmon-pidfile` in start args are refused.
+- `--cgroups=…`, `--cgroup-parent`, `--cgroup-conf`, `--cgroup-manager` and `--conmon-pidfile` in start args are refused, and the cgroup flags through CMD too.
+- Errors from admin actions reach the user as the message alone, with no stack trace or exception id. Use `Cpanel::Exception::get_string_no_id`, as `ensure_user` has done since EA4-360 (`util.pm:2718`). Surfacing them in the plugin's API and UI is EA4-364.
 - `_as_cpuser` routing: the child runs through `run_as_user_in_slice` (a seam records the call), and a timeout fails the action without hanging cpsrvd.
 - Path confinement: each path-taking argument, given `/tmp/x`, `/etc/passwd`, a symlink in home pointing outside it, and `../` escapes, is refused; the same argument under home is accepted.
 - Output over the cap is truncated in the reply; a third concurrent long-running action from one account fails at once, and another account's action is unaffected.
@@ -357,6 +485,9 @@ All migration logic lives in `SOURCES/lib/ea_podman/migrate.pm`, the only 2.0 co
 - `--auto` marks an unattended run (the package and boot triggers). It applies the volume size limit (4.3 step 2).
 - `--stop-unmanaged` is only accepted with `--user U`. See 4.3 step 1.
 - When everything is done, a run is a quick no-op apart from the leftover sweep.
+- **User namespaces (EA4-360).** Every run starts with root's `assert_has_user_namespaces`.
+  - **Without them, nothing is migrated.** Every as-user step needs podman. The run marks no account `failed`, changes no state, and prints the EA4-360 message with https://go.cpanel.net/userns. The next trigger tries again.
+  - **On masked hosts it still applies step 12 to every account.** That step is root-only and needs no podman. The carveout, not user namespaces, is what keeps the CLOS-7971 exposure open, so it must still be released.
 
 ### 4.1 Triggers
 
@@ -387,9 +518,9 @@ Logging goes to `/var/log/ea-podman/migrate-units.log` and the journal.
   5. **Hooks** (`_delete_user`, `remove_containers_for_a_deleted_user`) take it only around their root-side `remove_unit` / `release_runtime` steps. They release it before the as-user removal, whose own `UNIT_REMOVE` then finds nothing to do and takes the lock only briefly. Hooks may wait with no time limit, because nothing that holds the lock ever calls a hook, and every holder is bounded:
      - the migration by the account's budget (4.2a);
      - admin actions by the unit timeouts and the outer `systemctl` alarm (rule 2), and also by the action's own cpsrvd alarm (`_alarm`, 350 s or 1800 s). If that alarm kills the process, the kernel releases its flock.
-     
+
      No admin action runs anything as the account while it holds the lock. That includes `UNIT_INSTALL`'s inspect, which runs before the lock is taken, so these bounds hold.
-     
+
      **Removal during a migration.** The migration budget can be hours for an account with large volumes, and account removal should not block for that long. Before waiting, the hook writes `migration/<user>.abort` (root 0600). The migration checks for it before each step, and also on each runner poll, stopping the current transient unit when it appears. It then marks the account `failed` (reason: account is being removed) and releases the lock. The hook's wait is then bounded by one step's outer alarm.
   6. **Order.** `run.lock` is always taken before an account lock, never after. Nothing that holds an account lock takes `run.lock` or another account's lock.
 - **Install vs. migration.** INSTALL/UPGRADE don't hold the lock across their child, so they rely on the migration state instead. On an account that isn't `done` they refuse up front, as the lifecycle actions do. An account with no 1.x containers counts as `done`. Until an account is `done`, the migration is the only writer of its units. Once it is `done`, the migration only cleans up (legacy files, old copies, carveouts) and never touches its units or containers, so it can't race an install. If the probe (step 1) finds a container that already has a 2.0 unit marker, it treats that container as migrated.
@@ -446,7 +577,7 @@ systemd-run --uid=<uid> --gid=<gid> --unit=eapodman-migrate-<uid>-<step>-<seq> \
 - A timeout is handled like a SIGKILL mid-step, and the steps are already ordered to survive that (4.3, and the kill case in 4.7). For example, a killed import leaves a partial new volume, which step 5 removes on the next run, and a killed `podman stop` is caught by step 4's verify.
 - **Repeat timeouts.** After 3 consecutive timeouts, `--auto` runs skip the account (reason: `timed out 3 times in step S; run ea-podman migrate_units --user U`), so package updates and boots don't pay its budget every time. An admin run without `--auto` still tries it and resets the counter on success. Like any `failed` account, its 1.x session was already released at the end of its first failed turn (4.3 step 12), and it appears in the 4.8 warning.
 
-### 4.3 Per account (`users_with_containers_as_root`, `util.pm:2768`)
+### 4.3 Per account (`users_with_containers_as_root`, `util.pm:2782`)
 
 Registry users with no passwd entry go through the deleted-user cleanup instead.
 
@@ -486,7 +617,7 @@ Every "as the user" step below runs through the bounded runner (4.2a). None of t
    - Check the result of each command (create, export, import). If any fails, mark the account `failed` with the step and the command's error, and leave `copied` unset. The next run then finds the partial volume, removes it (first bullet) and copies again.
    - Set `volumes.<name>.copied` only after the create and the import have both succeeded.
    - A volume with `copied` set is never exported, imported or removed again by any later run.
-6. **Recreate, as the user:** `_ensure_latest_container` with a new `op => 'migrate'`. That is the upgrade path with no pull, the image pinned by ID (as in `_rollback_failed_upgrade`, `util.pm:1700`), ports from `_get_current_ports`, the registry untouched, and the `webapp` flag kept. The new containers are **created but not started**. Their named volumes already exist from step 5, so podman doesn't create empty ones or copy image content into them. Anonymous volumes are **not** carried over: podman creates new, empty ones (seeded from the image), the same as on every 1.x upgrade.
+6. **Recreate, as the user:** `_ensure_latest_container` with a new `op => 'migrate'`. That is the upgrade path with no pull, the image pinned by ID (as in `_rollback_failed_upgrade`, `util.pm:1701`), ports from `_get_current_ports`, the registry untouched, and the `webapp` flag kept. The new containers are **created but not started**. Their named volumes already exist from step 5, so podman doesn't create empty ones or copy image content into them. Anonymous volumes are **not** carried over: podman creates new, empty ones (seeded from the image), the same as on every 1.x upgrade.
 7. **Write units, as root.** `write_unit` for each container, **not enabled and not started**.
 8. **Switch, as root.** Only for containers whose `run_state_applied` is not set:
    - `enable` if `was_enabled`.
@@ -521,7 +652,7 @@ Every "as the user" step below runs through the bounded runner (4.2a). None of t
 
 - **Root's own containers: an in-place branch, not the same steps.** The pinned `storage.conf` only changes `rootless_storage_path`, so root's old and new storage are the same `/var/lib/containers/storage` (runroot under `/run/containers`). Steps 3, 5, 6 and 11 assume two stores and must not run as written: there is nothing to stage, a volume export/import would copy onto itself, a recreate would collide with the retained old container's name, and step 11 could remove the container the new unit now runs. Root's account gets `in_place: true` and these steps instead:
   1. **Probe** as in step 1, against `user@0` and `/root/.config/systemd/user`. No writer check, quota check or size limit: no volume moves, so sharing with root's own unmanaged containers keeps working.
-  2. **Stop** as in step 4. Then, still in this step, **retire the legacy unit before any system unit exists.** 1.x units come from `podman generate systemd --name` (`util.pm:976`), so they address the container by name, in the same storage the new unit uses. If both existed, two managers could control one container, or a later `systemctl --user start` would start the new one. Copy the legacy file into `migration/root-legacy/` (root 0600) for manual rollback, set `legacy_unit_saved`, remove the file and its wants link, and `daemon-reload` root's user manager. (This is root's own home; the "root never writes into home" rule is about account homes.)
+  2. **Stop** as in step 4. Then, still in this step, **retire the legacy unit before any system unit exists.** 1.x units come from `podman generate systemd --name` (`util.pm:980`), so they address the container by name, in the same storage the new unit uses. If both existed, two managers could control one container, or a later `systemctl --user start` would start the new one. Copy the legacy file into `migration/root-legacy/` (root 0600) for manual rollback, set `legacy_unit_saved`, remove the file and its wants link, and `daemon-reload` root's user manager. (This is root's own home; the "root never writes into home" rule is about account homes.)
   3. **Volumes:** none are copied. Named volumes stay where they are and are reattached by name. Set nothing under `volumes`.
   4. **Always recreate.** A 1.x container was created without `--conmon-pidfile`, so conmon would never write the unit's `PIDFile=` (Phase 1). podman can't change that on an existing container, so there is no "no recreate" branch.
      - `podman rename <name> <name>.ea-podman-1x` (set `old_renamed_to`; the CID and volume mounts are unchanged, per P0-2), then `_ensure_latest_container` with `op => 'migrate'` creates the new container under the original name, created but not started, with the same named volumes. Record `new_cid`. Anonymous volumes behave as on any 1.x upgrade.
@@ -534,7 +665,7 @@ Every "as the user" step below runs through the bounded runner (4.2a). None of t
 - **Raw (non-ea-podman) podman data.** The user's own containers, images and volumes in `~/.local/share/containers` are kept. Only the old copies of the registered ea-podman containers are removed. The release notes say:
   - the user's own `~/.config/systemd/user` units keep running only if *they* linger;
   - on CageFS-masked hosts those units never ran anyway.
-- **Anonymous volumes are not migrated.** They come from an image `VOLUME` that the start args don't mount, or from a `-v` with no source. ea-podman treats them as disposable: any recreate replaces them with new, empty ones. A container whose anonymous volume holds data worth keeping is an oversight in how it is mounted, and gets fixed separately, not by the migration. ea-podman 1.x never preserved them either: `podman rm` without `-v` (`util.pm:445`) strands the old one, and the recreated container gets a new, empty one.
+- **Anonymous volumes are not migrated.** They come from an image `VOLUME` that the start args don't mount, or from a `-v` with no source. ea-podman treats them as disposable: any recreate replaces them with new, empty ones. A container whose anonymous volume holds data worth keeping is an oversight in how it is mounted, and gets fixed separately, not by the migration. ea-podman 1.x never preserved them either: `podman rm` without `-v` (`util.pm:449`) strands the old one, and the recreated container gets a new, empty one.
   - The old volumes stay in old storage (step 11 never prunes volumes), and each one is listed (step 11) so it can be recovered by hand.
   - Known packaged oversight: `ea-redis62` doesn't mount the image's `VOLUME /data`, so its `dump.rdb` lives in an anonymous volume. The fix is a separate packaging change that mounts every path a packaged image declares as `VOLUME` (a named or bind mount, or `--tmpfs` when the data is disposable). It should ship before or with 2.0, so packaged containers have no anonymous volumes holding data.
   - Arbitrary images that need their data kept must mount those paths explicitly; the release notes say so.
@@ -650,7 +781,7 @@ Cases:
 - the spec and debify `ea-podman.install` stay in sync.
 
 **Live test: `t/LiveTests/system-units-migration-live.t`.**
-- **Upgrades:** from 1.0-32, 1.0-34 and 1.0-37 (from the internal archive) to 2.0, on EL9, CL9 with CageFS masked, EL8 (cgroup v1) and Ubuntu 24.04.
+- **Upgrades:** from 1.0-32, 1.0-34, 1.0-37 and 1.0-38 (the last 1.x, with EA4-360's user namespace gate; from the internal archive) to 2.0, on EL9, CL9 with CageFS masked, EL8 (cgroup v1) and Ubuntu 24.04.
 - **Fixtures:**
   - one container running, with a marker file in `~/ea-podman.d`;
   - one stopped;
@@ -740,10 +871,10 @@ It is printed by all three triggers, so it reaches the package log, the journal,
 ## Phase 5: account hooks (2.0)
 
 - **`_delete_user`** (`PodmanHooks.pm:122`): root runs `remove_unit` for every registry entry and orphan marker belonging to the user. Then the existing as-user removal, then another orphan sweep, then `release_runtime`, which removes the slice's `system.control` drop-ins (and the slice file, if one exists), recomputes `eapodman.slice`'s `MemoryLow`, and unmounts and removes the runtime tmpfs. Before waiting on the account lock, it writes the migration abort file (4.2 rule 5).
-- **`remove_containers_for_a_deleted_user`** (`util.pm:2590`) does the same unit removal, using the marker uid, and also unmounts and removes `/run/ea-podman/user/<uid>` and removes `/etc/systemd/system.control/eapodman-<uid>.slice.d/`. The unmount comes first, and the directory is removed only after every process of the uid is gone, so root never walks a tree the account is still changing.
+- **`remove_containers_for_a_deleted_user`** (`util.pm:2592`) does the same unit removal, using the marker uid, and also unmounts and removes `/run/ea-podman/user/<uid>` and removes `/etc/systemd/system.control/eapodman-<uid>.slice.d/`. The unmount comes first, and the directory is removed only after every process of the uid is gone, so root never walks a tree the account is still changing.
 - The hooks' as-user removal and the restore tail run through the slice runner (F11).
 - **`_pre_username_change`** (`PodmanHooks.pm:84`) keeps refusing.
-- **Restore** (`util.pm:3159`): drop the `remove_tree` of `~/.config/systemd/user` (`:3185`). Units are recreated by the tail.
+- **Restore** (`util.pm:3173`): drop the `remove_tree` of `~/.config/systemd/user` (`:3199`). Units are recreated by the tail.
 - **Uninstall:** in `pkg.prerm`, `remove_containers --all` deletes every unit, then sweeps orphans: files matching `ea-podman-*.service` that carry an ea-podman marker. Files without a marker are left alone.
 
 ## Phase 6: Web Apps plugin (`cpanel-plugins` repo; released together with 2.0, `Requires: ea-podman >= 2.0`)
@@ -762,10 +893,11 @@ On the plugin side:
 - `set_lifecycle` calls `api_lifecycle` (admin) instead of `ea_podman::util::sysctl`.
 - The account `MemoryLow` floor moves from `user-<uid>.slice` to `eapodman-<uid>.slice`. The plugin's root side sets it by calling `ea_podman::units::set_slice_properties` directly; there is no admin action for it (Phase 2). The "takes effect at next recreate" rule and the pending-release bookkeeping no longer apply to account totals.
 - **Account limits (agreed with the plugin's DESIGN.md Limits section, EA4-352 comment 1801665):**
-  - the plugin sets `MemoryLow` (floor) and `MemoryMax` (hard memory total, enforced live) on `eapodman-<uid>.slice`;
+  - the plugin sets `MemoryLow` (floor) and `MemoryMax` (hard memory total, enforced live) on `eapodman-<uid>.slice`. The floor is best effort by platform (F13): it holds on newer kernels, is unreliable on EL8, and may protect nothing on CloudLinux, where page cache isn't charged to the writer's cgroup;
   - **no `CPUQuota`.** CPU stays on weights. The whitelist allows `CPUQuota`, but nothing requires it to be set;
   - `TasksMax` defaults come from ea-podman (Phase 1); the plugin doesn't set them;
-  - **on CloudLinux,** whether the plugin sets `MemoryMax` at all, or leaves account totals to LVE, is decided after P0-6 measures double-limiting (open item).
+  - **on CloudLinux,** whether the plugin sets `MemoryMax` at all, or leaves account totals to LVE, follows the F18 decision. On cgroup v2 a process can't be in both the LVE and the account slice, so this is a choice, not double-limiting (open item);
+  - **on cgroup v1,** split isn't pinned and per-container caps aren't enforced, as today (F17). This matches the Limits design's LIM-ENF-4a.
 - **OOM policy.** A `MemoryMax` OOM can kill any process in the account slice, including a container within its own allocation, a container's conmon, and a build. A killed conmon leaves its container down until it is recreated (F15, open). The rest is accepted, with one preference: build transients get `OOMScoreAdjust=500`, so the kernel kills a build before a serving container. The account can raise its own score but not lower it.
 - `Session.pm` `ensure` / `ENSURE_SESSION` are replaced by ENSURE_USER. Drop the `user@.service.d` delegate drop-in (`Session.pm:175-198`).
 - Builds (`systemd-run --user`, `Podman.pm:1167,1817`) move to the plugin's adminbin, which calls `ea_podman::units::run_as_user_in_slice` (Phase 1) with fixed properties (`RuntimeMaxSec`, `PAMName=ea-podman` per P0-6, `oom_score_adjust => 500`) and validated inputs. It never hand-builds a `systemd-run` line, and callers must never pass `-p`. stdin is `/dev/null`, stdout/stderr are fresh pipes, and captured output is capped.
@@ -774,21 +906,21 @@ On the plugin side:
 ## Phase 7: remove dead code and update docs (in 2.0)
 
 - **Delete:**
-  - `subids.pm`: the linger, grant, carveout, mask and session code (about `:34-56`, `:175-1349`). Keep `ensure_user_root` (without the session), `_ensure_subids`, the range helpers, `assert_has_user_namespaces`, `get_sub*ids` and `_ensure_storage_conf`. The pieces the migration still needs are copied into `migrate.pm`.
+  - `subids.pm`: the linger, grant, carveout, mask and session code (about `:37-59`, `:178-1352`). Keep `ensure_user_root` (without the session), `_ensure_subids`, the range helpers, `get_sub*ids`, `_ensure_storage_conf`, and EA4-360's user namespace check: `assert_has_user_namespaces`, `warn_if_no_user_namespaces`, `_sysctl_num`, `_podman_path`, `_apparmor_userns_profile_for` and their package variables (`subids.pm:1359-1522`). The pieces the migration still needs are copied into `migrate.pm`.
   - In `util.pm`:
     - the session half of `ensure_user` and of `init_user`;
     - `release_user_session*`, `_release_deleted_user_session` and `ensure_container_session`;
     - `sysctl()`, `_masked_user_manager_note` and `EA_PODMAN_KEEP_USER_SESSION`;
     - the `/run/user/<uid>` and `DBUS_SESSION_BUS_ADDRESS` handling in `ensure_su_login` and `run_in_user_session`. Only `podman_env()` and its `XDG_RUNTIME_DIR=/run/ea-podman/user/<uid>` remain;
-    - the LVE + cgroup v2 "kills systemd --user" advisory (`util.pm:366-411` and its callers), unless P0-6 says otherwise.
-  - **Admin module:** the session, linger and grant parts of `ENSURE_USER`, which keeps only subids and `ensure_runtime`.
-  - **CLI:** the `ensure_user_sessions` verb (`ea-podman.pl:1047-1089`).
+    - the CloudLinux 8 carve-out in `warn_if_not_cgroup_v2` (`util.pm:404-421`; EA4-365). EA4-360 already removed the old LVE + cgroup v2 "kills systemd --user" advisory. The v2 recommendation stays, with `tuned-adm profile cloudlinux-default-cgv2` on every CloudLinux and `grubby` elsewhere. The CL8 v2 checks in P0-3 and P0-4 must pass first.
+  - **Admin module:** the session, linger and grant parts of `ENSURE_USER`, which keeps only subids, the user namespace check and `ensure_runtime`.
+  - **CLI:** the `ensure_user_sessions` verb (`ea-podman.pl:1042-1084`).
   - **`ea-podman-user-managers.service` and its pieces:**
     - spec Source23, install and `%files`;
     - the `%ghost` mask files (spec `:137-141`);
     - the debify lines;
     - scriptlets `pkg.postinst:33-40`, `pkg.prerm:11-18`, `pkg.preinst:9-12`.
-  - **Tests that only cover removed code:** carveout-lifecycle, linger, the session parts of `SOURCES-subids.t`, and the live `ea4-319-*` and `ea4-321-*` tests.
+  - **Tests that only cover removed code:** carveout-lifecycle, linger, the session parts of `SOURCES-subids.t` (its user namespace tests stay), and the live `ea4-319-*` and `ea4-321-*` tests.
 - **Kept on purpose:**
   - the single admin execution path (`delegate_to_admin`, `_as_cpuser`), now used by every non-root caller;
   - subuid/subgid allocation;
@@ -797,7 +929,11 @@ On the plugin side:
   - `DESIGN.md`: "Ensuring it is up", "Lingering", and the "users can still run `systemctl`" promise.
   - README FAQ.
   - `docs/container-shell-access.md`.
-  - `docs/backup-restore.md`, including dropping the `.config/systemd` exclusion (`util.pm:2954-2993`).
+  - The host requirements moved out of `docs/uapi.md` (Phase 3b).
+  - **`t/LiveTests/README.md` and `t/LiveTests/setup-remote-live.pl:319-320`** (EA4-358 comment 1805194):
+    - run the CloudLinux live tests on cgroup v2 with the system units: bring-up, stop, restart, and the unit keeping track of its processes;
+    - then resolve the note "CloudLinux on cgroup v2 + LVE is not verified yet (EA4-352)" and the "do not switch CloudLinux 8 to v2" warnings to match F18 and the dropped carve-out. `git grep EA4-352` finds them.
+  - `docs/backup-restore.md`, including dropping the `.config/systemd` exclusion (`util.pm:2968-3007`).
   - The 2.0 changelog and release notes:
     - behaviour change;
     - UAPI removal;
@@ -811,6 +947,10 @@ On the plugin side:
     - path arguments to ea-podman (other than `-v`/`--mount`, EA4-343) must be inside the account's home;
     - per-account limits on concurrent ea-podman operations and on the number of containers;
     - per-container `--memory`/`--memory-swap`/`--cpus`/`--pids-limit` are now enforced on cgroup v2 (`--cgroups=split`); `--memory-swap` needs kernel swap accounting; `--memory-reservation` and `--cpu-shares` now take effect between containers through the unit's `MemoryLow=`/`CPUWeight=` (F13), and changing them needs a recreate; `--cgroups`, `--cgroup-parent` and `--cgroup-conf` start args are refused;
+    - cgroup v2 is recommended on every OS, CloudLinux 8 included (`tuned-adm profile cloudlinux-default-cgv2` on CloudLinux, `grubby` elsewhere). Split, and so per-container limits, is pinned only on v2. A container created before a cgroup switch must be recreated (`ea-podman upgrade`): after v1 → v2 to get its limits, after v2 → v1 to start at all (F17). `--cgroup-manager` start args are refused, like `--cgroups*`;
+    - memory floors (`--memory-reservation`, the plugin's account floor) are best effort: reliable on newer kernels, not on EL8, and possibly ineffective on CloudLinux (F13);
+    - on CloudLinux, how containers relate to the account's LVE, as decided under F18;
+    - user namespaces are required, as since 1.0-38 (EA4-360). CloudLinux 10 ships them disabled;
     - per-container limits cover the container's own processes, not `podman exec` sessions: exec'd work (including `ea-podman bash`) is bound by the account slice and LVE, isn't counted in `podman stats`, and ends when the call does; `exec -d` is refused (F14);
     - once `migration/complete` exists, every user namespace ea-podman creates comes from `eapodman.slice`, so hosts can deny namespace creation elsewhere with a BPF-LSM rule; list the kernels where that works (P0-12);
     - raw-podman notes;
@@ -824,7 +964,7 @@ On the plugin side:
 4. **Admin only acts on the caller's own registered containers.** It refuses unregistered names, other users' containers, and units whose marker uid doesn't match. Live test: user B gets "No such container" for A's containers on every action.
 5. **No user path writes under `/etc`, and root never writes into home.** Migration test with a planted `~/.config/systemd/user` symlink pointing at `/etc`.
 6. **After migration, no `user@<uid>` runs for container accounts, and no ea-podman linger or carveout remains.** The canary unit never runs, including after a reboot (P0-10).
-7. **Every podman invocation uses the pinned `CONTAINERS_*`, including the migration's runs against old storage.** A hostile `~/.config/containers/containers.conf` (`runtime=~/evil`, `hooks_dir`), `containers.conf.d/` drop-in, `mounts.conf` or `CONTAINERS_CONF_OVERRIDE` never takes effect.
+7. **Every podman invocation uses the pinned `CONTAINERS_*`, including the migration's runs against old storage.** A hostile `~/.config/containers/containers.conf` (`runtime=~/evil`, `hooks_dir`), `containers.conf.d/` drop-in, `mounts.conf` or `CONTAINERS_CONF_OVERRIDE` never takes effect. Neither does a `policy.json` or `registries.d` the account writes anywhere it can: `XDG_CONFIG_HOME` is root-owned and holds only the `cni` symlink (F16).
 8. **Account removal leaves no unit and no runtime dir.** A new account that reuses the uid starts nothing.
 9. **`ea-podman.json` `start_args` only reach `podman create` run as the user.** `units.pm` never reads that file.
 10. **Slice properties are only ever set by root, from the whitelist, on a slice name derived from `getpwnam`.** No admin action sets them. Test: invalid property names or values and a caller-supplied slice name are refused, and the admin module exposes no action that reaches `set_slice_properties`.
@@ -838,19 +978,21 @@ On the plugin side:
 18. **On a masked host, no account keeps ea-podman's 1.x session past the first run that visits it, whatever its migration outcome.** Tests: the session-release cases in 4.7 and the hostile-account live test.
 19. **`PIDFile=` can't make PID 1 act on a process outside the unit.** Test (P0-3): a PID outside the unit's cgroup written to `conmon.pid` is refused, and `systemctl stop` kills nothing outside the unit. Passes on EL8 (systemd 239: "New main PID 1 is the manager, refusing" and "… PID file is not owned by root. Refusing"; `eapodman-test-kit/lifecycle.sh` tests 3 and 4).
 20. **Every process root starts as an account runs inside `eapodman-<uid>.slice`, and no ea-podman path creates a user namespace outside `eapodman.slice` (F11).** Tests: a lint showing that `run_as_user_in_slice` is the only as-user path in `SOURCES/` and the plugin; unit tests showing that the admin `_as_cpuser` child, hooks, restore and builds go through it; the P0-12 live test, with the BPF-LSM program loaded across the full live suite.
-21. **Start args can't move a container out of its unit's cgroup (F12).** Tests: the `--cgroups*` refusal cases; live, a container's `--memory` shows up as `memory.max` in its cgroup under the unit's cgroup, and is enforced. **Relative limits reach the unit (F13).** Tests: render cases for `{MEMLOW}`/`{CPUWEIGHT}` (defaults, conversion, clamping, refusal of non-numeric values); live, `--memory-swap`, `--cpus`, `--memory-reservation` and `--cpu-shares` show up as `memory.swap.max`, `cpu.max`, `memory.low` and `cpu.weight` in the container cgroup, the unit's `memory.low`/`cpu.weight` match, and each slice's `memory.low` is at least the sum below it.
+21. **Start args and CMD can't move a container out of its unit's cgroup, or change its cgroups mode or cgroup manager (F12, F17).** Tests: the `--cgroups*` and `--cgroup-manager` refusal cases, in start args and through CMD; the pinned `containers.conf` has `cgroups = "split"` on v2 and not on v1, and is re-rendered when its marker doesn't match the host; live, a container's `--memory` shows up as `memory.max` in its cgroup under the unit's cgroup, and is enforced. **Relative limits reach the unit (F13).** Tests: render cases for `{MEMLOW}`/`{CPUWEIGHT}` (defaults, conversion, clamping, refusal of non-numeric values); live, `--memory-swap`, `--cpus`, `--memory-reservation` and `--cpu-shares` show up as `memory.swap.max`, `cpu.max`, `memory.low` and `cpu.weight` in the container cgroup, the unit's `memory.low`/`cpu.weight` match, and each slice's `memory.low` is at least the sum below it.
 
 ## Tests
 
 - **Delete:**
   - `t/SOURCES-subids-carveout-lifecycle.t`
   - `t/SOURCES-util-linger.t`
-  - the session/mask parts of `t/SOURCES-subids.t`
+  - the session/mask parts of `t/SOURCES-subids.t` (its EA4-360 user namespace tests stay)
   - `t/LiveTests/ea4-319-*.sh`
   - `t/LiveTests/ea4-321-*.t`
 - **Rewrite:**
   - `t/SOURCES-util-container-unit.t`, which becomes `t/SOURCES-units.t`
-  - start-verdict, nproc-cap, cgroup
+  - start-verdict, nproc-cap
+  - `t/SOURCES-util-cgroup.t`: EA4-360's v2 advice, without the CloudLinux 8 carve-out
+  - `t/SOURCES-util-init-user-userns.t` and `t/SOURCES-util-ensure-user-error.t` (EA4-360): the 2.0 `init_user`, the admin actions' refuse/warn split ("Stays"), and refusals without a stack trace
   - upgrade-rollback, upgrade-gate
   - the admin-module tests (the UAPI test is deleted in Phase 3b)
   - PodmanHooks-backup, pkg-scriptlets-hooks, the restore tests
@@ -859,17 +1001,24 @@ On the plugin side:
   - `t/SOURCES-migrate-units.t` (see 4.7)
   - a PodmanHooks removal test
   - the slice runner: lint, injection and label cases (in `t/SOURCES-units.t`), and `_as_cpuser` routing
-- **Live, rework:** cagefs, normal, jailshell, memcached16 (both), ea4-315, ea4-325, ea4-338, cpanel-57396, cpanel-57608.
+  - the pinned-config renderer (F17): split only on v2, the marker, the atomic rewrite from each of its three callers, and root's check naming containers whose `cgroup_v` differs from the host's
+  - the per-account `XDG_CONFIG_HOME` (F16): root-owned, holding only the `cni` symlink, and replaced if the account has planted anything there
+- **Live, rework:** cagefs, normal, jailshell, memcached16 (both), ea4-315, ea4-325, ea4-338, cpanel-57396, cpanel-57608, and `ea4-360-userns-cgroup-live.t`.
+  - In `ea4-360-userns-cgroup-live.t`, the UAPI cases move to the admin path (Phase 3b).
+  - Its "no cgroup advice on CloudLinux 8" case flips once the carve-out goes.
+  - Its uninstall TODO is EA4-367.
 - **Live, new:**
   - `system-units-migration-live.t` (see 4.7)
   - `clos7971-canary-live.t`
   - `bpf-lsm-userns-live.t` (P0-12; runs only on kernels with the hook)
   - a `--memory` enforcement case in the normal live test, plus `--memory-swap`, `--cpus`, `--memory-reservation` and `--cpu-shares` cases that check the container cgroup, the unit and both slices (F13).
+  - a cgroup v1 case (F17): a container starts without split, and is named by root's check after the host moves to v2 and reboots.
+  - CloudLinux on cgroup v2 (EA4-358 comment 1805194): bring-up, stop, restart, and the unit keeping track of conmon and the container, in the configuration F18 settles on.
   - an exec placement case (F14): a `podman exec` through the admin path runs under `eapodman-<uid>.slice` in the runner's transient, not in the container's cgroup, and `exec -d`/`--detach` is refused. If a podman or OCI runtime update starts placing exec'd processes in the container, this case fails, so the docs get revisited.
 
 ## Sequence
 
-1. **Spikes P0-1 … P0-12.** P0-6 (LVE) is a ship gate. If one invalidates an assumption, the design changes before code is written.
+1. **Spikes P0-1 … P0-13.** If a spike invalidates an assumption, the design changes before code is written. P0-6 is a ship gate on CloudLinux, and now a decision point: F18 (the LVE or the limits, on cgroup v2) is settled with Chris and CloudLinux before the CloudLinux-specific parts are written.
 2. **Implement everything:** Phases 1-7 in ea-podman and Phase 6 in the plugin.
 3. **Pre-release testing:**
    - the unit suite, including the injection and migration tests;
@@ -879,23 +1028,33 @@ On the plugin side:
 5. **Remove 1.x from the mirrors** (RPM and Ubuntu). Keep an internal archive copy for tests.
 6. **Release + 6 months at the earliest** (the date is in the release notes and the verb's warning; check adoption telemetry first): a 2.x removes `migrate_units` / `migrate.pm`, `ea-podman-migrate.timer` and `ea-podman-migrate.service` (its scriptlet disables the timer first), and ships the post-removal detector (4.8). This is not a deprecation period; the warning text carries the date.
 7. **Follow-up:** a root-owned graphroot (F4).
-8. **Follow-up:** once P0-12 passes, ship or document a BPF-LSM namespace policy (with CloudLinux / hardening). It is not part of 2.0; 2.0 only makes it possible (F11).
+8. **Follow-up:** once P0-12 passes, ship or document a BPF-LSM namespace policy (with CloudLinux / hardening). It is not part of 2.0; 2.0 only makes it possible (F11). Raise it with CloudLinux together with CloudLinux 10's default `user.max_user_namespaces=0` (CLOS-2616) and F18.
 
 ## Open items (resolved by the spikes or a quick call)
 
-- **LVE:** do we need `/etc/pam.d/ea-podman` (P0-6)? P0-6 is a release gate: every process ea-podman starts as the account, transients included, must be inside its LVE.
+- **The LVE or the limits on CloudLinux (F18).** On cgroup v2 a process is in its LVE or in the unit's cgroups, not both. The candidates:
+  - **limits win:** containers run outside the LVE, and the slice owns account totals;
+  - **LVE wins:** `PAMName=ea-podman` with `/etc/pam.d/ea-podman`, and no slice or per-container limits on CloudLinux v2;
+  - **a per-host choice;**
+  - **a CloudLinux-side change.**
+
+  P0-6 adds the cgroup v1 probe. This also decides who owns account totals on CloudLinux: the slice's `MemoryMax` (set by the plugin), or LVE (Chris, EA4-352 comment 1801665 and EA4-358 comment 1806575). 2.0 doesn't ship on CloudLinux until it is decided.
 - **`LimitNPROC`:** use the system `DefaultLimitNPROC`, or a fixed cap?
 - **Parent slice values:** `eapodman.slice` `CPUWeight`/`IOWeight`/`TasksMax`, and the per-account default `TasksMax` (P0-4). Nesting itself is decided (F9).
 - **`runtime.conf` defaults:** tmpfs `size`/`nr_inodes`, `max_units_per_account`, `max_concurrent_admin_actions`.
-- **Who owns account totals on CloudLinux:** the slice's `MemoryMax` (set by the plugin), or LVE? This is decided after P0-6 measures double-limiting (Chris, EA4-352 comment 1801665).
 - **Swap accounting and the runtime's shares conversion:** which targets lack `memory.swap.max`, and what `cpu.weight` each target's OCI runtime (crun or runc) writes for `--cpu-shares` (P0-4).
 - **A killed conmon (F15):** keep the container recoverable after conmon is SIGKILLed, by the account or by an account-slice OOM. Candidates:
-  - a podman version that clears the stale running/stopping state;
+  - a podman version that clears the stale running/stopping state. 4.9.4-rhel and 5.8.2 already recover, so on EL and CloudLinux this may only need a minimum podman version. Ubuntu 24.04's 4.9.3 does not recover;
   - an `ExecStartPre=` that clears that state as the account. It must be shown not to lose data; `podman rm -f` plus a recreate loses anonymous volumes;
   - a unit shape where conmon's death doesn't take the container down.
-  
+
   Compare with 1.x first (P0-3). Where swap accounting is missing, does INSTALL refuse `--memory-swap` or only warn?
 - **BPF-LSM support matrix:** which platforms can enable the F11 rule (P0-12).
+- **CloudLinux 10 ships `user.max_user_namespaces=0`** (CLOS-2616). That blocks 1.x and 2.0 alike. The EA4-360 gate reports it with https://go.cpanel.net/userns. Raise it with CloudLinux, together with F11 and F18.
+- **Containers created before a cgroup switch (F17).** Once P0-4 confirms the mode is fixed at create: is naming them in root's check enough, or should root recreate them? A recreate means `ea-podman upgrade`, which pulls.
+- **CPANEL-57893 (PR #44, on `CPANEL-57513`).** When it reaches main, reconcile its start-arg denylist, and its dropping of recorded cap flags on upgrade and restore, with Phase 3b and with F13's install args (`--memory-reservation` and `--cpu-shares`, recorded as `memory_low` and `cpu_weight`). Also drop its `--cgroups=enabled` (F17).
+- **`hidepid=2` and `podman stop` (EA4-366).** On CL8, a rootless stop times out and the unit ends `failed`; 1.x does the same. P0-3 measures the effect on STOP and UNIT_REMOVE. EA4-366 decides whether ea-podman keeps recommending `hidepid=2`.
+- **Uninstall without user namespaces (EA4-367).** Both of its gaps survive this plan, and Phase 3 covers them: the uninstall result, and "couldn't check" in `_podman_container_exists`.
 - **Follow-up:** a root-owned graphroot to close F4.
 - **Follow-up: exec'd processes under the container's limits (F14 option 2).** Root forks a child that drops to the account and waits on a pipe, writes the child's PID into a sub-cgroup of the container unit (its delegated subtree), then lets it run `podman exec`; the runtime's own move into `libpod-payload-*` then succeeds because the common ancestor is the delegated unit. Gains: Docker-like accounting, `exec -d` lives as long as the container. Costs: root writes into a tree the account controls (it can remove or retype the target, or set `pids.max=0`, a tiny `memory.max` or `cgroup.freeze`; all self-DoS, but paths must be checked and failures must refuse, never fall back); the process leaves the runner's cgroup, so `RuntimeMaxSec`/`KillMode=control-group` no longer bound it and root must enforce the timeout and reaping itself (4.2a); exec'd work competes with the serving container and can get it OOM-killed. Do it only if the plugin needs exec'd work held to a container's budget.
 - **Follow-up:** a shipped or documented BPF-LSM namespace policy (F11).
@@ -904,8 +1063,10 @@ On the plugin side:
 
 - `prove -lr t/` passes, including the new injection and migration tests.
 - An upgrade from 1.x returns promptly. `ea-podman migrate_units --status` shows every account `done`, and `migration/complete` exists.
-- Run the Phase 0 matrix, then the live suite on EL8, CL9 with CageFS, EL10 and Ubuntu 24.04.
-- On a migrated CL9 + CageFS host:
+- Run the Phase 0 matrix, then the live suite on EL8 (cgroup v1 and v2), CL8 (v2, `hidepid=2`), CL9 and CL10 with CageFS, EL10, and Ubuntu 24.04.
+- On a cgroup v1 host, the pinned `containers.conf` has no `cgroups` line and containers start. After a switch to v2 and a reboot, it has `cgroups = "split"`, and root's cgroup check names the containers created on v1.
+- `ea-podman install` as an account without user namespaces (`user.max_user_namespaces=0`) is refused with the EA4-360 message and no stack trace. `stop`, `status`, `uninstall` and account removal still work.
+- On a migrated CL9 + CageFS host (the slice, cgroup and limit checks below assume F18 is decided for the limits; if it goes to the LVE, check `lveps` instead):
   - `systemctl list-units 'user@*'` shows none for container accounts;
   - `ls /run/systemd/system/user@*` is empty;
   - `ls /etc/systemd/system/ea-podman-*` shows root:root 0644 units;
