@@ -1458,7 +1458,7 @@ sub warn_if_no_user_namespaces {
     local $@;
     return 1 if eval { assert_has_user_namespaces(); 1 };
 
-    warn $@ . "    • Carrying on, as this command does not need podman for its own work. Anything it does ask of podman fails; a removal still cleans up the ports, registration, systemd unit and container directory, but podman’s copy of the container and its image stay until user namespaces are available again.\n";
+    warn $@ . "    • Carrying on, as this command does not need podman for its own work. Anything it does ask of podman fails; a removal still cleans up the ports, registration, systemd unit and container directory, but podman’s copy of the container stays until user namespaces are available again. (Its image stays either way: removals never delete images.)\n";
     return 0;
 }
 

@@ -427,7 +427,7 @@ subtest 'verbs that need no podman still work' => sub {
 
     {
         # Known gap (Kōan #l on PR #45): the user is told it succeeded, though
-        # podman's copy of the container and image stay behind. Only error_log
+        # podman's copy of the container stays behind. Only error_log
         # gets the "carrying on" warning.
         local $TODO = "uninstall without user namespaces does not tell the user podman's copy was left";
         ok( @{ $res->{warnings} || [] }, "uapi uninstall carries a warning" );

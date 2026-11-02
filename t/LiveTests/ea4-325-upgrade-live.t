@@ -1053,9 +1053,10 @@ subtest 'C: a brand new backup with an ancient mtime is still too recent' => sub
     return;
 };
 
-# C5. get_next_available_container_name() checks only the container directory --
-# not podman, not the ports, not the unit -- so freeing a name still claimed
-# elsewhere hands it to the next install with stale state attached.
+# C5. get_next_available_container_name() checks the registry, the container
+# directory and its `.bak` -- not podman, not the ports, not the unit -- so
+# freeing a name still claimed elsewhere hands it to the next install with
+# stale state attached.
 subtest 'C: a backup whose name is still claimed is kept, and says by what' => sub {
     my ( $irc, $iout ) = run_as_user( $USER, _sh($CLI) . " install stillheld --i-understand-the-risks-do-it-anyway --cpuser-port=$PORT " . _sh($IMAGE) );
     my ($cn) = $iout =~ m/Done, installed:\s*(\S+)/;

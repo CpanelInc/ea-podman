@@ -2136,10 +2136,11 @@ sub _dir_size {
 # one that still half-exists?
 #
 # Freeing the name early is the hazard. get_next_available_container_name()
-# checks only the container directory -- not podman, not the ports, not the unit
-# -- so removing a `.bak` whose name is still claimed elsewhere hands that name
-# to the next install with stale state attached to it. Anything still holding on
-# is an EA4-320 reconciliation matter, not something `clean` should bulldoze.
+# checks the registry, the container directory and its `.bak` -- not podman, not
+# the ports, not the unit -- so removing a `.bak` whose name is still claimed
+# elsewhere hands that name to the next install with stale state attached to
+# it. Anything still holding on is an EA4-320 reconciliation matter, not
+# something `clean` should bulldoze.
 # (EA4-325 C5)
 sub _backup_name_is_free {
     my ( $container_name, $user, $can_ask_podman ) = @_;
