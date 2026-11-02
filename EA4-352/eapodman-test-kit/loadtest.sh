@@ -27,12 +27,17 @@ done
 svc()     { echo "$A/ea-podman-$1.service"; }
 # The container's own cgroup. It only exists when --cgroups=split is in effect (F12); without it a
 # glob would come back unexpanded and every measurement would silently read nothing.
+# More than one is a stale payload cgroup (e.g. left after a killed conmon); don't guess.
 payload() {
-    local d
+    local d found=()
     for d in "$(svc "$1")"/libpod-payload-*; do
-        [ -d "$d" ] && { echo "$d"; return 0; }
+        [ -d "$d" ] && found+=("$d")
     done
-    echo "no libpod-payload-* cgroup under $(svc "$1"); is --cgroups=split in effect?" >&2
+    case ${#found[@]} in
+    1) echo "${found[0]}"; return 0 ;;
+    0) echo "no libpod-payload-* cgroup under $(svc "$1"); is --cgroups=split in effect?" >&2 ;;
+    *) echo "${#found[@]} libpod-payload-* cgroups under $(svc "$1"); restart the unit first" >&2 ;;
+    esac
     return 1
 }
 stat_of() { awk -v k="$2" '$1 == k { print $2 }' "$1"; }
@@ -72,6 +77,10 @@ for n in "${NAMES[@]}"; do payload "$n" >/dev/null || exit 1; done
 ORIG_SLICE_CPU=$(cat "$A/cpu.max"); ORIG_SLICE_MEM=$(cat "$A/memory.max")
 declare -A ORIG_W ORIG_L
 for n in "${NAMES[@]}"; do ORIG_W[$n]=$(cat "$(svc "$n")/cpu.weight"); ORIG_L[$n]=$(cat "$(svc "$n")/memory.low"); done
+# Cleanup puts these back, so an empty one would leave a limit changed after the run.
+for v in "$ORIG_SLICE_CPU" "$ORIG_SLICE_MEM" "${ORIG_W[@]}" "${ORIG_L[@]}"; do
+    [ -n "$v" ] || { echo "could not read an original cgroup value under $A; nothing was changed" >&2; exit 1; }
+done
 # Write a cgroup value and read it back; a write the kernel rejects is reported, not ignored.
 set_cg() {    # file, value
     echo "$2" >"$1" 2>/dev/null && [ "$(cat "$1")" = "$2" ] \

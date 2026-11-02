@@ -20,6 +20,8 @@ To run anything again after `lifecycle.sh`, recreate the containers with `./tear
 
 `setup.sh` copies the units it writes into `systemd/`, for reference. `teardown.sh` removes those copies. Don't commit them.
 
+Run the kit once at a time per account. Two runs against the same account share its containers, slice limits and test unit name.
+
 ## Guards
 
 - No script signals a PID it hasn't checked: it must be an integer above 1, with the expected comm, inside the expected cgroup (`safe_target` in `lib.sh`).

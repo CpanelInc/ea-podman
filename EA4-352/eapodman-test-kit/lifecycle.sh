@@ -171,10 +171,17 @@ UNIT
         check "$label: root process $DECOY survives the stop" alive "$DECOY"
     else
         check "$label: start succeeds" test "$rc" = 0
-        check "$label: the PID file holds a PID" bash -c 'case $1 in ""|0|*[!0-9]*) exit 1;; esac' _ "$written"
+        # The account wrote this file, so its content is never put into a shell string, and
+        # nothing below uses it unless it is a PID.
+        case $written in
+        ''|0|1|*[!0-9]*)
+            check "$label: the PID file holds a PID (got '$written'; rest of case not run)" false
+            systemctl stop "$TEST_UNIT" 2>/dev/null
+            return ;;
+        esac
         check "$label: MainPID is the PID from the file" test "$main" = "$written"
         systemctl stop "$TEST_UNIT"
-        check "$label: stopping the unit kills it" bash -c "! kill -0 $written 2>/dev/null"
+        check "$label: stopping the unit kills it" bash -c '! kill -0 "$1" 2>/dev/null' _ "$written"
     fi
 }
 pid_case "PID 1" 1 refuse

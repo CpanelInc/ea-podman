@@ -35,6 +35,8 @@ done
 
 echo; echo "== account slice"
 slice="eapodman-$UID_.slice"
+check "$slice is loaded" test "$(systemctl show -p LoadState --value "$slice")" = loaded
+check "$slice is active" test "$(systemctl show -p ActiveState --value "$slice")" = active
 check "$slice has no unit file (implicit, as in the plan)" \
     test -z "$(systemctl show -p FragmentPath --value "$slice")"
 check "$slice limits are drop-ins under /etc/systemd/system.control" \
@@ -47,7 +49,9 @@ echo "  runtime $rt, conmon $conmon, cgroup manager $mgr"
 echo "  graphroot $graph"
 echo "  runroot $run"
 pinned_rt=$(sed -n 's/^\(crun\|runc\) = \["\(.*\)"\]$/\2/p' $ETC/containers.conf)
-check "OCI runtime is the one pinned in $ETC/containers.conf" test "$rt" = "$pinned_rt"
+check "podman info answered as the account" test -n "$info"
+check "$ETC/containers.conf pins an OCI runtime" test -n "$pinned_rt"
+check "OCI runtime is the one pinned in $ETC/containers.conf" test -n "$rt" -a "$rt" = "$pinned_rt"
 check "conmon is the one pinned in $ETC/containers.conf" grep -qF "conmon_path = [\"$conmon\"]" $ETC/containers.conf
 check "cgroup manager is cgroupfs" test "$mgr" = cgroupfs
 check "graphroot is the fresh ea-podman storage" test "$graph" = "$HOME_/.local/share/ea-podman/storage"

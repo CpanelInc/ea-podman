@@ -15,8 +15,10 @@ if systemctl is-active -q "user@$UID_.service"; then
     echo "WARNING: user@$UID_.service is running; stop the account's 1.x units first" >&2
 fi
 
+command -v ss >/dev/null || { echo "ss not found; can't check the test ports are free" >&2; exit 1; }
 for port in 8081 8082 8083; do
-    if ss -Hltn "sport = :$port" | grep -q .; then
+    listeners=$(ss -Hltn "sport = :$port") || { echo "ss failed probing port $port" >&2; exit 1; }
+    if [ -n "$listeners" ]; then
         ss -Hltnp "sport = :$port" | grep -q 'conmon\|rootlessport\|slirp' \
             || { echo "port $port is already in use" >&2; exit 1; }
     fi
