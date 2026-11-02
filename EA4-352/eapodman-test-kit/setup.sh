@@ -35,7 +35,7 @@ command -v crun >/dev/null || RUNTIME=runc
 RUNTIME_PATH=$(command -v "$RUNTIME") || { echo "neither crun nor runc found" >&2; exit 1; }
 CONMON_PATH=$(command -v conmon) || { echo "conmon not found" >&2; exit 1; }
 
-install -d -m 0755 $ETC $ETC/empty
+install -d -m 0755 $ETC
 sed -e "s|@RUNTIME@|$RUNTIME|g" -e "s|@RUNTIME_PATH@|$RUNTIME_PATH|g" -e "s|@CONMON_PATH@|$CONMON_PATH|g" \
     conf/containers.conf >$ETC/containers.conf
 chmod 0644 $ETC/containers.conf
@@ -55,12 +55,14 @@ systemctl start "ea-podman-runtime@$UID_.service"
 for c in "${CONTAINERS[@]}"; do
     IFS='|' read -r name flags memlow cpuweight <<<"$c"
     pidfile=$(conmon_pidfile "$name")
-    # shellcheck disable=SC2086
-    if as_user /usr/bin/podman container exists "$name"; then
-        echo "$name already exists; keeping it"
-    else
-        as_user /usr/bin/podman create --name "$name" --conmon-pidfile "$pidfile" $flags "$IMAGE" >/dev/null
-    fi
+    # podman container exists: 0 = exists, 1 = no such container, anything else = couldn't check.
+    rc=0; as_user /usr/bin/podman container exists "$name" || rc=$?
+    case $rc in
+        0) echo "$name already exists; keeping it" ;;
+        # shellcheck disable=SC2086
+        1) as_user /usr/bin/podman create --name "$name" --conmon-pidfile "$pidfile" $flags "$IMAGE" >/dev/null ;;
+        *) echo "$name: couldn't check whether it exists (exit $rc); see above" >&2; exit 1 ;;
+    esac
     # Cross-check only: the inspect value is never written into the unit.
     reported=$(as_user /usr/bin/podman container inspect --format '{{.ConmonPidFile}}' "$name")
     [ "$reported" = "$pidfile" ] || {
@@ -92,7 +94,7 @@ Environment=XDG_RUNTIME_DIR=$RUNDIR
 Environment=CONTAINERS_CONF=$ETC/containers.conf
 Environment=CONTAINERS_STORAGE_CONF=$ETC/storage.conf
 Environment=CONTAINERS_REGISTRIES_CONF=$ETC/registries.conf
-Environment=XDG_CONFIG_HOME=$ETC/empty
+Environment=XDG_CONFIG_HOME=$XDGDIR
 Environment=PODMAN_SYSTEMD_UNIT=%n
 PIDFile=$pidfile
 ExecStart=/usr/bin/podman --cgroup-manager=cgroupfs start $name
@@ -103,7 +105,7 @@ ExecStop=/usr/bin/podman --cgroup-manager=cgroupfs stop -t 10 $name
 ExecStopPost=/usr/bin/podman --cgroup-manager=cgroupfs stop -t 10 $name
 Restart=on-failure
 RestartSec=5
-SuccessExitStatus=143
+# No SuccessExitStatus=143: the main process is conmon, not a foreground podman (PLAN.md Phase 1).
 TimeoutStartSec=90
 TimeoutStopSec=30
 

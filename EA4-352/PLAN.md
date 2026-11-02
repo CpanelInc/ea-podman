@@ -199,6 +199,7 @@ Run each probe on these hosts:
 - CPU test A assumes 4 CPUs;
 - CPU test B's tolerance is loose on some hosts;
 - the floor test must skip when its before-values are 0, as they are on CloudLinux (F13; EA4-357 comment 1803523).
+- done in the kit (PR #43 bot review 6587031689): guarded signals, F15 counted as known only by its journal signature, the hostile-PID write and systemd's refusal asserted, the F16 `XDG_CONFIG_HOME` layout, no `SuccessExitStatus=143`, the payload-cgroup and load-liveness checks, the floor skip, and checked cleanup and teardown. The live tests keep these rules.
 
 | # | Probe | Decides |
 |---|---|---|

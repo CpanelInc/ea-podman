@@ -14,8 +14,16 @@ A hand-built version of the layout in `../PLAN.md` for one account. It sets up `
 
 `verify.sh` and `lifecycle.sh` exit non-zero if a check fails.
 
-**Run `lifecycle.sh` last, just before teardown.** Its tests 1 and 3 kill conmon. That leaves web and worker failed until they are recreated (F15). `loadtest.sh` needs all three units running, so it can't run after `lifecycle.sh`. Until F15 is fixed, expect `lifecycle.sh` to exit 1 with those 2 checks failed. They are marked `(known: F15, see PLAN.md)`, and the last line says `2 check(s) failed, all known (F15)`. Any other failure is new. If a known check starts passing, the script says to update `PLAN.md`.
+**Run `lifecycle.sh` last, just before teardown.** Its tests 1 and 3 kill conmon. That leaves web and worker failed until they are recreated (F15). `loadtest.sh` needs all three units running, so it can't run after `lifecycle.sh`. Until F15 is fixed, expect `lifecycle.sh` to exit 1 with those 2 checks failed. A recovery failure is marked `(known: F15, see PLAN.md)` only when the unit's journal carries F15's signature (`Failed with result 'signal'`, `container state improper`, the start limit). Otherwise it's marked `NEW` and the journal is printed. With both known, the last line says `2 check(s) failed, all known (F15)`. If a known check starts passing, the script says to update `PLAN.md`.
 
 To run anything again after `lifecycle.sh`, recreate the containers with `./teardown.sh <cpuser>` and then `./setup.sh <cpuser>`.
 
 `setup.sh` copies the units it writes into `systemd/`, for reference. `teardown.sh` removes those copies. Don't commit them.
+
+## Guards
+
+- No script signals a PID it hasn't checked: it must be an integer above 1, with the expected comm, inside the expected cgroup (`safe_target` in `lib.sh`).
+- A test whose setup didn't happen fails instead of passing vacuously. For example, the hostile PID must be in `conmon.pid` before conmon is killed, systemd must log its refusal, and the background loads must still be running when measured.
+- `loadtest.sh` stops if a container has no `libpod-payload-*` cgroup (`--cgroups=split` not in effect). It skips the floor test where page cache isn't charged to the containers (F13). Its cleanup reads every restored value back.
+- `teardown.sh` runs every step, lists the ones that failed, and exits 1 if any did.
+- `XDG_CONFIG_HOME` is `/run/ea-podman/xdg/<uid>`: root-owned, holding only a `cni` symlink into the runtime tmpfs (F16). `conf/runtime-mount` rebuilds it on every anchor start.
