@@ -142,7 +142,7 @@ That gives those accounts back exactly what CLOS-4517 removed.
     - **On CloudLinux 8.10** (runc), `--cgroups=enabled` failed to start. That is unexplained; it may be the exit-143 race of a foreground `podman run` (Dan, EA4-352 comment 1806527 and EA4-358 comment 1806496).
   - **Fix:**
     - **v2 only:** the split pin is conditional on the host's cgroup version, and the pinned file follows the host when the version changes (Phase 1).
-    - **One source:** the pinned config is the only source of the cgroups mode and the cgroup manager. `validate_start_args` and CMD refuse `--cgroups*`, `--cgroup-parent`, `--cgroup-conf` and the global `--cgroup-manager` (Phase 3b; EA4-358 comment 1806496). ea-podman's own creates never pass `--cgroups`. CPANEL-57893 (ea-podman PR #44, merged into `CPANEL-57513`, not yet on main) passes `--cgroups=enabled` for capped containers; it drops that flag when this pin lands.
+    - **One source:** the pinned config is the only source of the cgroups mode and the cgroup manager. `validate_start_args` and CMD refuse `--cgroups*`, `--cgroup-parent`, `--cgroup-conf` and the global `--cgroup-manager` (Phase 3b; EA4-358 comment 1806496). ea-podman's own creates never pass `--cgroups`. CPANEL-57893 passes `--cgroups=enabled` for capped containers (`SOURCES/util.pm:511` on `CPANEL-57893-full`; not on `CPANEL-57513` or main). 2.0 drops that flag in T1-A, next to this pin.
     - **The mode is fixed when a container is created** (P0-4 confirms). A container created before a cgroup switch keeps its old mode until it is recreated (`ea-podman upgrade`):
       - after v1 → v2, it runs without limits;
       - after v2 → v1, it won't start.
@@ -399,6 +399,7 @@ All in `SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm`.
   - `start/stop/restart/status` (`:441-504`) go through `api_lifecycle` / `api_status` for every caller.
   - Remove the `ensure_user_sessions` verb (`:1042-1084`).
   - Add the root verbs `reconcile_units` and `migrate_units`.
+  - **`reconcile_units [--user U] [--dry-run]`** is the repair tool for after a restore, a hand edit, or a failed upgrade tail. Per account, under its account lock: for every registered container on a migrated account, render its unit and rewrite it if it is missing or differs (`write_unit`, so validation and the atomic write apply), and enable it if the registry says it should run; remove `ea-podman-*.service` files whose `User=` uid has no matching registry entry (stopping them first); then one coalesced `daemon-reload`. It never starts or stops a container that is in the registry, never touches an account `migrate_units` hasn't finished, and prints each change. `--dry-run` prints without writing.
 
 ## Phase 3b: one execution path through the admin module (all non-root verbs except `bash`); remove the EAPodman UAPI
 
@@ -435,7 +436,7 @@ All in `SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm`.
 - **Cgroup start args are refused (F12, F17).**
   - **What is refused:** `validate_start_args` refuses `--cgroups`, `--cgroup-parent`, `--cgroup-conf` and the global `--cgroup-manager`, which podman also accepts after the subcommand. CMD refuses the same flags.
   - **Why:** the account could otherwise move a container out of its unit's cgroup and escape both the slice limits and the namespace rule (F11). It could also switch per-container limits off: a command-line `--cgroups=enabled` overrides the pinned split and enforces nothing (F17).
-  - **ea-podman's own create paths never pass `--cgroups` or `--cgroup-manager`.** CPANEL-57893 (PR #44, on `CPANEL-57513`) passes `--cgroups=enabled` for capped containers until this pin lands. 2.0 drops it, and keeps that branch's start-arg denylist in line with this list.
+  - **ea-podman's own create paths never pass `--cgroups` or `--cgroup-manager`.** CPANEL-57893 passes `--cgroups=enabled` for capped containers (`util.pm:511` on `CPANEL-57893-full`, not on `CPANEL-57513`). 2.0 drops it with the pin, and keeps CPANEL-57513's start-arg denylist in line with this list.
 - **`--conmon-pidfile` is refused.** ea-podman sets it itself (Phase 1, Phase 3). A different path would leave the unit with no PID file, so it would never start.
 - **CMD and code in the slice.** `podman unshare`/`run`/`exec` through CMD run account-chosen code inside the slice. That is the same as what the account's container workloads already do, so it is not new exposure under F11. Still, refuse `unshare` unless it is already a supported verb.
 - **`exec` runs outside the container's limits (F14).** An exec'd process is bound by the account slice, not by the container's limits, and ends with the runner. Refuse `exec -d`/`--detach` with a message that says so, rather than letting the process be killed silently when the call returns.
@@ -1050,7 +1051,7 @@ On the plugin side:
 - **BPF-LSM support matrix:** which platforms can enable the F11 rule (P0-12).
 - **CloudLinux 10 ships `user.max_user_namespaces=0`** (CLOS-2616). That blocks 1.x and 2.0 alike. The EA4-360 gate reports it with https://go.cpanel.net/userns. Raise it with CloudLinux, together with F11 and F18.
 - **Containers created before a cgroup switch (F17).** Once P0-4 confirms the mode is fixed at create: is naming them in root's check enough, or should root recreate them? A recreate means `ea-podman upgrade`, which pulls.
-- **CPANEL-57893 (PR #44, on `CPANEL-57513`).** When it reaches main, reconcile its start-arg denylist, and its dropping of recorded cap flags on upgrade and restore, with Phase 3b and with F13's install args (`--memory-reservation` and `--cpu-shares`, recorded as `memory_low` and `cpu_weight`). Also drop its `--cgroups=enabled` (F17).
+- **CPANEL-57893 (`CPANEL-57893-full`; PR #44 and the denylist are on `CPANEL-57513`).** When it reaches main, reconcile its start-arg denylist, and its dropping of recorded cap flags on upgrade and restore, with Phase 3b and with F13's install args (`--memory-reservation` and `--cpu-shares`, recorded as `memory_low` and `cpu_weight`). Also drop its `--cgroups=enabled` (F17).
 - **`hidepid=2` and `podman stop` (EA4-366).** On CL8, a rootless stop times out and the unit ends `failed`; 1.x does the same. P0-3 measures the effect on STOP and UNIT_REMOVE. EA4-366 decides whether ea-podman keeps recommending `hidepid=2`.
 - **Uninstall without user namespaces (EA4-367).** Both of its gaps survive this plan, and Phase 3 covers them: the uninstall result, and "couldn't check" in `_podman_container_exists`.
 - **Follow-up:** a root-owned graphroot to close F4.
