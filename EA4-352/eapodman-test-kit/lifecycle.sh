@@ -7,6 +7,9 @@
 #   4. P0-3 / invariant 19, with a unit of the same shape whose ExecStart writes a chosen PID
 #      into an account-owned PID file: PID 1 and a root process are refused, and stopping the
 #      unit kills neither; a PID inside the unit's cgroup is accepted (control case).
+#   5. a temporary container whose PID 1 exits 143 on SIGTERM is stopped: with the unit's
+#      SuccessExitStatus=143 the stop ends Result=success. The same stop without it is reported
+#      (INFO), to show per podman version whether conmon passes the container's 143 on.
 # Run it last, after ./loadtest.sh: tests 1 and 3 leave web and worker down until recreated (F15).
 # Exits non-zero if a check fails. Usage: ./lifecycle.sh <cpuser>
 set -uo pipefail
@@ -70,7 +73,16 @@ setsid sleep 900 </dev/null >/dev/null 2>&1 &
 DECOY=$!
 disown "$DECOY"    # so killing it in cleanup prints no "Terminated" job notice
 TEST_UNIT=eapodman-test-pidfile-$UID_.service
+TERM_CT=term.$U.04
+TERM_UNIT=/etc/systemd/system/ea-podman-$TERM_CT.service
 cleanup() {
+    if [ -e "$TERM_UNIT" ]; then
+        systemctl stop "ea-podman-$TERM_CT.service" 2>/dev/null
+        rm -f "$TERM_UNIT"
+        systemctl daemon-reload
+        systemctl reset-failed "ea-podman-$TERM_CT.service" 2>/dev/null
+    fi
+    as_user /usr/bin/podman rm -f "$TERM_CT" >/dev/null 2>&1
     systemctl stop "$TEST_UNIT" 2>/dev/null
     rm -f "/run/systemd/system/$TEST_UNIT" "$ETC/pidfile-writer" "$RUNDIR/test.pid"
     systemctl daemon-reload
@@ -187,6 +199,37 @@ UNIT
 pid_case "PID 1" 1 refuse
 pid_case "root process" "$DECOY" refuse
 pid_case "control, own child" self accept
+
+echo; echo "== 5. stop a container whose PID 1 exits 143 on SIGTERM"
+img=$(as_user /usr/bin/podman container inspect --format '{{.ImageName}}' "web.$U.01")
+as_user /usr/bin/podman rm -f "$TERM_CT" >/dev/null 2>&1
+# PID 1 with a TERM handler that exits 143, like a JVM (or catatonit forwarding SIGTERM).
+if ! as_user /usr/bin/podman create --name "$TERM_CT" --conmon-pidfile "$(conmon_pidfile "$TERM_CT")" \
+        --memory=64m "$img" sh -c 'trap "exit 143" TERM; while :; do sleep 1; done' >/dev/null; then
+    check "created $TERM_CT from $img (test 5 not run)" false
+else
+    term_stop() {    # SuccessExitStatus value, "" for none; echoes "<container exit code> <unit Result>"
+        container_unit "$TERM_CT" 0 100 "$1" >"$TERM_UNIT"
+        systemctl daemon-reload
+        systemctl reset-failed "ea-podman-$TERM_CT.service" 2>/dev/null
+        systemctl start "ea-podman-$TERM_CT.service" || { echo "start-failed start-failed"; return; }
+        sleep 3    # let sh install the trap
+        systemctl stop "ea-podman-$TERM_CT.service"
+        echo "$(as_user /usr/bin/podman container inspect --format '{{.State.ExitCode}}' "$TERM_CT")" \
+             "$(systemctl show -p Result --value "ea-podman-$TERM_CT.service")"
+    }
+    read -r code res <<<"$(term_stop "")"
+    if [ "$code" = 143 ]; then
+        echo "  INFO  without SuccessExitStatus=143 the stop ends Result=$res" \
+             "($( [ "$res" = success ] && echo "conmon did not pass 143 on" || echo "conmon passed 143 on; the directive is needed"))"
+    else
+        echo "  INFO  without SuccessExitStatus: container exit $code, Result=$res (expected exit 143)"
+    fi
+    read -r code res <<<"$(term_stop 143)"
+    check "the container's PID 1 exited 143 (got $code), so the case means something" test "$code" = 143
+    check "with SuccessExitStatus=143 the stop ends Result=success (got $res)" test "$res" = success
+    check "and the unit is not failed" bash -c '! systemctl is-failed -q "$1"' _ "ea-podman-$TERM_CT.service"
+fi
 
 echo
 if [ "$FAILS" = 0 ]; then echo "all checks passed"

@@ -29,6 +29,59 @@ as_user() {
 # --conmon-pidfile`; it never takes it from podman inspect.
 conmon_pidfile() { echo "$RUNDIR/$1.conmon.pid"; }
 
+# The container unit, as setup.sh writes it. Args: name, MemoryLow, CPUWeight, and the
+# SuccessExitStatus value ("" for none; lifecycle.sh test 5 compares the two).
+# 143 is there because conmon, the main process, exits with the container's status: a PID 1 that
+# exits 143 on SIGTERM would otherwise make a deliberate stop "failed" (1.x 0459147, PLAN.md Phase 1).
+# 137 stays out: it is also an OOM kill.
+container_unit() {
+    local name=$1 memlow=$2 cpuweight=$3 success_exit= pidfile
+    pidfile=$(conmon_pidfile "$name")
+    [ -z "${4:-}" ] || success_exit="SuccessExitStatus=$4
+"
+    cat <<UNIT
+# ea-podman owner=$U uid=$UID_ container=$name
+[Unit]
+Description=ea-podman container $name
+Requires=ea-podman-runtime@$UID_.service
+After=ea-podman-runtime@$UID_.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=forking
+User=$U
+Group=$(id -gn "$U")
+Slice=eapodman-$UID_.slice
+Delegate=cpu io memory pids
+# F13: the unit carries the container's floor and weight, or they do nothing.
+MemoryLow=$memlow
+CPUWeight=$cpuweight
+# Plan's {NPROC}. RLIMIT_NPROC counts every process of the uid, so infinity for the test.
+LimitNPROC=infinity
+Environment=XDG_RUNTIME_DIR=$RUNDIR
+Environment=CONTAINERS_CONF=$ETC/containers.conf
+Environment=CONTAINERS_STORAGE_CONF=$ETC/storage.conf
+Environment=CONTAINERS_REGISTRIES_CONF=$ETC/registries.conf
+Environment=XDG_CONFIG_HOME=$XDGDIR
+Environment=PODMAN_SYSTEMD_UNIT=%n
+PIDFile=$pidfile
+ExecStart=/usr/bin/podman --cgroup-manager=cgroupfs start $name
+ExecStop=/usr/bin/podman --cgroup-manager=cgroupfs stop -t 10 $name
+# As in 1.x's generated units. It does not recover a container whose conmon was SIGKILLed:
+# podman 4.4 leaves it "running" (without this) or "stopping" (with it), every restart's
+# \`podman start\` fails, and only \`podman rm -f\` + recreate gets it back (./lifecycle.sh 1 and 3).
+ExecStopPost=/usr/bin/podman --cgroup-manager=cgroupfs stop -t 10 $name
+Restart=on-failure
+RestartSec=5
+${success_exit}TimeoutStartSec=90
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+
 # Before signalling a PID that came from systemd or podman: it must be an integer above 1 and
 # have the expected comm (`kill 0` would hit our own process group; a stale PID may be reused).
 # Optional third argument: a cgroup path fragment the PID must be in.

@@ -72,48 +72,7 @@ for c in "${CONTAINERS[@]}"; do
         exit 1
     }
     unit=/etc/systemd/system/ea-podman-$name.service
-    cat > "$unit" <<UNIT
-# ea-podman owner=$U uid=$UID_ container=$name
-[Unit]
-Description=ea-podman container $name
-Requires=ea-podman-runtime@$UID_.service
-After=ea-podman-runtime@$UID_.service
-StartLimitIntervalSec=300
-StartLimitBurst=3
-
-[Service]
-Type=forking
-User=$U
-Group=$(id -gn "$U")
-Slice=eapodman-$UID_.slice
-Delegate=cpu io memory pids
-# F13: the unit carries the container's floor and weight, or they do nothing.
-MemoryLow=$memlow
-CPUWeight=$cpuweight
-# Plan's {NPROC}. RLIMIT_NPROC counts every process of the uid, so infinity for the test.
-LimitNPROC=infinity
-Environment=XDG_RUNTIME_DIR=$RUNDIR
-Environment=CONTAINERS_CONF=$ETC/containers.conf
-Environment=CONTAINERS_STORAGE_CONF=$ETC/storage.conf
-Environment=CONTAINERS_REGISTRIES_CONF=$ETC/registries.conf
-Environment=XDG_CONFIG_HOME=$XDGDIR
-Environment=PODMAN_SYSTEMD_UNIT=%n
-PIDFile=$pidfile
-ExecStart=/usr/bin/podman --cgroup-manager=cgroupfs start $name
-ExecStop=/usr/bin/podman --cgroup-manager=cgroupfs stop -t 10 $name
-# As in 1.x's generated units. It does not recover a container whose conmon was SIGKILLed:
-# podman 4.4 leaves it "running" (without this) or "stopping" (with it), every restart's
-# \`podman start\` fails, and only \`podman rm -f\` + recreate gets it back (./lifecycle.sh 1 and 3).
-ExecStopPost=/usr/bin/podman --cgroup-manager=cgroupfs stop -t 10 $name
-Restart=on-failure
-RestartSec=5
-# No SuccessExitStatus=143: the main process is conmon, not a foreground podman (PLAN.md Phase 1).
-TimeoutStartSec=90
-TimeoutStopSec=30
-
-[Install]
-WantedBy=multi-user.target
-UNIT
+    container_unit "$name" "$memlow" "$cpuweight" 143 >"$unit"
     cp "$unit" systemd/
 done
 
