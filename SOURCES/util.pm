@@ -15,9 +15,27 @@ package ea_podman::util;
 # All consumers of this module must ensure ea_podman::util::init_user()
 #    is called prior to calling other functions (there are some exceptions in POD)
 sub init_user {
-    my (%opts) = @_;    # creating => 1 when about to make a container
+    my (%opts) = @_;    # creating => 1 when about to make a container, userns_optional => 1 when the verb's own work needs no podman
+
+    # Every command that needs podman comes through here (the CLI's and the
+    # UAPI/adminbin verbs' alike), and none of them can work without user
+    # namespaces, so stop before doing anything. The check is only conclusive
+    # as root: a user's run gets it from the ENSURE_USER admin action that
+    # ensure_user() below always calls, before anything else is done.
+    #
+    # A verb whose own work needs no podman (userns_optional) only warns: the
+    # removals, since dying would leave the registry, ports and units of a
+    # server that lost user namespaces with no way to clean them up (the
+    # package's own prerm and the account-deletion hook are removals),
+    # `containers`, which only reads the registry, and `stop` and `status`,
+    # which are systemd only, so what is running can still be stopped. (EA4-360)
+    if ( $> == 0 ) {
+        if   ( $opts{userns_optional} ) { ea_podman::subids::warn_if_no_user_namespaces() }
+        else                            { ea_podman::subids::assert_has_user_namespaces() }
+    }
 
     check_proc();
+    warn_if_not_cgroup_v2();
 
     # Order matters (CPANEL-54037): ensure_user() bootstraps the rootless
     # session *as root* (subuid/subgid + `loginctl enable-linger`, which
@@ -34,7 +52,7 @@ sub init_user {
     #
     # Nothing for a caller to pass about the grant: whether this is the call that
     # turns the linger on is decided root-side, from what is on disk.
-    my $has_session = ensure_user( $opts{creating} );
+    my $has_session = ensure_user( $opts{creating}, $opts{userns_optional} );
     ensure_su_login($has_session);
 
     return $has_session;
@@ -62,6 +80,7 @@ sub check_proc {
 
 use Cpanel::JSON           ();
 use Cpanel::AdminBin::Call ();
+use Cpanel::OS             ();
 use Cpanel::Time           ();
 use File::Path::Tiny       ();
 use Errno                  ();    # for %!, loaded explicitly: the CLI is a compiled binary
@@ -363,60 +382,45 @@ sub _cap_output {
     return ( substr( $text, 0, $EXEC_OUTPUT_CAP ), 1 );
 }
 
-# ea-podman manages containers through each user's systemd manager, and either
-# cgroup hierarchy works for bring-up and serving — the shipped units are plain
-# Type=forking (`podman generate systemd --name`, never `--new`/`--sdnotify`),
-# so they reach "active" and the container runs on cgroup v1 or v2. We therefore
-# never *block* on the cgroup version. The one genuinely problematic combination
-# is **CloudLinux + cgroup v2**: the LVE kernel relocates every non-root user's
-# processes into its own cgroup (`/lvub/lve<uid>`), and under cgroup v2's single
-# unified hierarchy a process can live in only one node, so LVE's placement and
-# systemd's per-user `user.slice` are mutually exclusive — `systemd --user` dies
-# and the restricted/CageFS path that depends on it fails. On CloudLinux the
-# supported configuration is cgroup v1; we advise (warn only, never die) when we
-# detect CloudLinux running on v2.
+# cgroup v2 is what we want: it is what lets resource limits be enforced on
+# rootless containers (v1 delegates no controllers to users). Both work, so like
+# the hidepid advice in check_proc() this is a root-only heads-up, given once
+# per process. We do not switch it for them: it takes a reboot and can affect
+# other things on the server. (EA4-360)
+#
+# Except on CloudLinux 8: its systemd 239 cannot start a user manager under
+# CloudLinux's default hidepid=2 on cgroup v2, so every `user@` started after
+# boot fails and takes the account's containers with it. Stay quiet there until
+# that works (EA4-365).
+our $cgroup_v2_warned = 0;
+
+sub _is_root { return $> == 0 ? 1 : 0; }
+
 sub _is_cgroup_v2 { return -e '/sys/fs/cgroup/cgroup.controllers' ? 1 : 0; }
 
-# True only on CloudLinux, whose LVE kernel is the source of the v2 conflict.
-sub _is_cloudlinux {
-    return 1 if -e '/etc/cloudlinux-release';
-    for my $f ( '/etc/redhat-release', '/etc/os-release' ) {
-        next if !-r $f;
-        open my $fh, '<', $f or next;
-        local $/;
-        my $c = <$fh> // '';
-        close $fh;
-        return 1 if $c =~ /cloudlinux/i;
-    }
-    return 0;
-}
+# The CloudLinux major version, or undef when this is not CloudLinux.
+sub _cloudlinux_major { return Cpanel::OS::is_cloudlinux() ? Cpanel::OS::major() : undef; }
 
-# Direct CLI (root / unrestricted-shell) sets this to 0 in ea-podman.pl::run()
-# to stay silent. The UAPI/restricted path loads this module directly and leaves
-# it at 1, so it keeps the advisory (non-fatal).
-our $EMIT_CGROUP_ADVISORY = 1;
+sub warn_if_not_cgroup_v2 {
+    return 1 if !_is_root() || _is_cgroup_v2();
 
-# Returns true when the host's cgroup configuration is fine for ea-podman (or
-# the advisory is suppressed). Returns false after a non-fatal warning on the
-# one problematic combination — CloudLinux + cgroup v2 — which breaks the
-# per-user systemd manager under LVE.
-sub warn_if_problematic_cgroup {
-    return 1 unless _is_cloudlinux() && _is_cgroup_v2();
-    return 1 unless $EMIT_CGROUP_ADVISORY;                 # direct CLI path: stay silent
-    warn "ea-podman: this CloudLinux host is using cgroup v2.\n"
-      . "CloudLinux's LVE kernel and cgroup v2 are mutually exclusive with the per-user systemd manager ea-podman relies on, so the user session can fail to start and containers may not come up.\n"
-      . "Switch back to cgroup v1 and reboot:  tuned-adm profile cloudlinux-default-cgv1 && reboot\n"
-      . "(verify afterward: `stat -fc %T /sys/fs/cgroup` reports tmpfs, not cgroup2fs).\n";
+    my $cl_major = _cloudlinux_major();
+    return 1 if defined $cl_major && $cl_major == 8;
+
+    return 0 if $cgroup_v2_warned++;
+
+    # On CloudLinux the tuned profile sets the cgroup version, and its
+    # systemd.unified_cgroup_hierarchy=0 wins over one added with grubby.
+    my $how =
+      defined $cl_major
+      ? "On CloudLinux, switch to the cgroup v2 tuned profile:\n\ttuned-adm profile cloudlinux-default-cgv2 && reboot\n"
+      : "For example, on AlmaLinux 8:\n\tgrubby --update-kernel=ALL --args=\"systemd.unified_cgroup_hierarchy=1\" && reboot\n";
+
+    warn "ea-podman: this server is using cgroup v1. We recommend cgroup v2 so that container resource limits can be enforced.\n" . $how . "(verify afterward: `podman info --format '{{.Host.CgroupsVersion}}'` reports v2).\n";
     return 0;
 }
 
 sub sysctl {
-
-    # Advise about a problematic cgroup config only for bring-up actions;
-    # stop/disable/etc. never warn so an existing container can be torn down
-    # quietly on a CloudLinux + cgroup v2 host.
-    warn_if_problematic_cgroup() if grep { $_ eq 'start' || $_ eq 'restart' || $_ eq 'enable' } @_;
-
     system( systemctl => "--user", @_ );    # ¿ if $> == 0 do --root => "~/.config/systemd/user" instead of `--user` ?
     my $rv = $? == 0 ? 1 : 0;
     return $rv;
@@ -866,14 +870,14 @@ sub _podman_output_tail {
 
     return '' if !defined $out;
 
-    $out =~ s/\r\n?/\n/g;                          # a progress bar redraws with \r
-    $out =~ s/\e\[[0-9;?]*[ -\/]*[@-~]//g;          # ANSI escape sequences
-    $out =~ tr/\x00-\x08\x0b-\x1f\x7f//d;           # other control characters, keeping \n and \t
+    $out =~ s/\r\n?/\n/g;                     # a progress bar redraws with \r
+    $out =~ s/\e\[[0-9;?]*[ -\/]*[@-~]//g;    # ANSI escape sequences
+    $out =~ tr/\x00-\x08\x0b-\x1f\x7f//d;     # other control characters, keeping \n and \t
     $out =~ s/\s+\z//;
 
     if ( length($out) > $CREATE_OUTPUT_CAP ) {
         $out = substr( $out, -$CREATE_OUTPUT_CAP );
-        $out =~ s/\A[\x80-\xBF]+//;                   # do not start on half a UTF-8 character
+        $out =~ s/\A[\x80-\xBF]+//;           # do not start on half a UTF-8 character
     }
 
     $out =~ s/\A\s+//;
@@ -1219,8 +1223,6 @@ sub _ensure_latest_container {
 
     $opts ||= {};
 
-    warn_if_problematic_cgroup();    # advise (non-fatal) on CloudLinux + cgroup v2
-
     validate_user_container_name($container_name);
 
     # Every path that brings a container into existence comes through here
@@ -1494,8 +1496,7 @@ To see a list of the available EasyApache 4 container-based packages, run the `/
             # is worse than naming none -- the point of this branch is to stop
             # guessing at causes, not to guess differently.
             my $why =
-              $rate_limited
-              ? "the registry is rate limiting this server"
+                $rate_limited                ? "the registry is rate limiting this server"
               : $pull_reason eq "disk_quota" ? "the account has run out of disk space or reached its disk quota"
               :                                "the pull failed";
 
@@ -2135,10 +2136,11 @@ sub _dir_size {
 # one that still half-exists?
 #
 # Freeing the name early is the hazard. get_next_available_container_name()
-# checks only the container directory -- not podman, not the ports, not the unit
-# -- so removing a `.bak` whose name is still claimed elsewhere hands that name
-# to the next install with stale state attached to it. Anything still holding on
-# is an EA4-320 reconciliation matter, not something `clean` should bulldoze.
+# checks the registry, the container directory and its `.bak` -- not podman, not
+# the ports, not the unit -- so removing a `.bak` whose name is still claimed
+# elsewhere hands that name to the next install with stale state attached to
+# it. Anything still holding on is an EA4-320 reconciliation matter, not
+# something `clean` should bulldoze.
 # (EA4-325 C5)
 sub _backup_name_is_free {
     my ( $container_name, $user, $can_ask_podman ) = @_;
@@ -2714,7 +2716,7 @@ sub deregister_container {
 }
 
 sub ensure_user {
-    my ($creating) = @_;
+    my ( $creating, $userns_optional ) = @_;
 
     # The very first command has to be ensure_user which establishes this user
     # in the /etc/subuid and /etc/subgid files, critical to podman.
@@ -2744,8 +2746,20 @@ sub ensure_user {
     }
 
     # The adminbin decides the same thing root-side, from the container
-    # registry only it can read, and reports back what it did.
-    return Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER', $creating ? 1 : 0 ) ? 1 : 0;
+    # registry only it can read, and reports back what it did. Its refusals
+    # (no user namespaces, a subid conflict) are meant for the user, so give
+    # them the message, not the exception's stack trace. (EA4-360)
+    my $has_session;
+    local $@;
+    eval { $has_session = Cpanel::AdminBin::Call::call( 'Cpanel', 'ea_podman', 'ENSURE_USER', $creating ? 1 : 0, $userns_optional ? 1 : 0 ); 1 } or do {
+        require Cpanel::Exception;
+        my $msg = Cpanel::Exception::get_string_no_id($@);
+        $msg = "Unable to set up this account for ea-podman" if !length( $msg // '' );
+        chomp $msg;
+        die "$msg\n";
+    };
+
+    return $has_session ? 1 : 0;
 }
 
 sub user_has_containers_as_root {
@@ -3358,7 +3372,7 @@ sub run_in_user_session {
         sub {
             local $@;
             eval {
-                init_user( creating => $opts{creating} );
+                init_user( creating => $opts{creating}, userns_optional => $opts{userns_optional} );
                 @rv = $code->();
                 1;
             } or $err = $@ || "ea-podman: unknown error";
@@ -3439,7 +3453,8 @@ sub api_uninstall {
             verify_own_container($container_name);
             remove_container_by_name($container_name);
             return 1;
-        }
+        },
+        userns_optional => 1,
     );
 
     return 1;
@@ -3488,7 +3503,11 @@ sub api_lifecycle {
             }
 
             return $rv;
-        }
+        },
+
+        # Stopping is systemd only, so a server that lost user namespaces can
+        # still stop what is running. A bring-up needs podman. (EA4-360)
+        userns_optional => $action eq 'stop' ? 1 : 0,
     );
 }
 
@@ -3506,7 +3525,8 @@ sub api_status {
                 running => sysctl( 'is-active'  => $service ),
                 enabled => sysctl( 'is-enabled' => $service ),
             };
-        }
+        },
+        userns_optional => 1,    # systemd only
     );
 }
 
@@ -3549,6 +3569,23 @@ That is C<install> (CLI and UAPI) and C<perform_user_restore()>. Every other
 verb acts on a container that already exists, so the registry answers for it.
 Without C<creating>, an account with no containers gets its subuid/subgid
 ranges and no session, and C<init_user()> returns false to say so.
+
+=head2 Without user namespaces
+
+C<init_user()> dies when the server does not allow user namespaces, since no
+podman command can work without them. A caller whose own work does not need
+podman must say so instead:
+
+    ea_podman::util::init_user( userns_optional => 1 );
+
+That only warns. It is for the removals, so a server that lost user namespaces
+after its containers were made can still be cleaned up: the ports,
+registration, systemd unit and container directory go, and only podman's own
+steps fail. That is C<uninstall> (CLI and UAPI), C<remove_containers> (which
+the package's prerm runs) and the account-deletion hook. It is also for
+C<containers>, which only reads the registry, and for C<stop> and C<status>
+(CLI and UAPI), which are systemd only, so what is still running can be
+stopped. (EA4-360)
 
 =head2 Giving the linger back
 

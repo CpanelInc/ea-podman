@@ -162,14 +162,29 @@ sub with_mocks {
         },
         sub {
             my $got = ea_podman::util::api_install( name => 'redis', image => 'img:1', cpuser_port => [ 6379, '' ], env => [ 'A=1', '' ], accept_arbitrary_image_risk => 1 );
-            is_deeply( $got,   { container_name => "redis.$ME.01" }, 'api_install returns the container name' );
-            is_deeply( \@init, [ { creating => 1 } ],                'api_install asks for a session for a first container' );
+            is_deeply( $got,   { container_name => "redis.$ME.01" },            'api_install returns the container name' );
+            is_deeply( \@init, [ { creating => 1, userns_optional => undef } ], 'api_install asks for a session for a first container' );
             is_deeply(
                 $installed[0],
                 [ 'redis', '--cpuser-port=6379', '-e', 'A=1', '--i-understand-the-risks-do-it-anyway', 'img:1' ],
                 'api_install builds the start args as the UAPI did: empty repeats dropped, image last'
             );
             ok( !eval { ea_podman::util::api_install(); 1 }, 'api_install without a name dies' );
+        }
+    );
+}
+
+{
+    my @init;
+    with_mocks(
+        {
+            init_user                => sub { push @init, {@_}; return 1 },
+            verify_own_container     => sub { return 1 },
+            remove_container_by_name => sub { return },
+        },
+        sub {
+            ea_podman::util::api_uninstall("redis.$ME.01");
+            is_deeply( \@init, [ { creating => undef, userns_optional => 1 } ], 'api_uninstall says it is a removal, so it only warns without user namespaces (EA4-360)' );
         }
     );
 }

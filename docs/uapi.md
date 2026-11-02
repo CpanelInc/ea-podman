@@ -75,63 +75,71 @@ to call it. See `DESIGN.md` for the internals.
   does not gate them. They can only act on containers the account already
   has: with the feature off from the start, it cannot create any.
 
-> **Host recommendation — cgroups:** ea-podman manages containers through the
-> user's `systemd` manager and runs on either cgroup hierarchy; bring-up and
-> serving are verified on both (the shipped units are plain `Type=forking`).
-> **The right choice depends on whether the host runs CloudLinux's LVE kernel,
-> not on the cgroup version in the abstract:**
+> **Host recommendation — cgroups:** use **cgroup v2** on every OS except
+> **CloudLinux 8**. Its unified hierarchy gives the user systemd manager proper
+> cgroup-subtree delegation, so resource limits can be enforced. cgroup v1 still
+> works, and ea-podman warns root when a server is on it (EA4-360), except on
+> CloudLinux 8.
 >
-> - **CloudLinux (LVE): use cgroup v1 — this is the correct, fully-supported
->   configuration, not a fallback.** The LVE kernel relocates every non-root
->   user's processes into its own cgroup, outside systemd's `user.slice`. Under
->   the **cgroup v2** unified hierarchy a process can live in only one node, so
->   LVE's placement and the per-user `systemd --user` manager are mutually
->   exclusive — LVE wins and `systemd --user` dies, which breaks the
->   jailshell/CageFS path that depends on it (`loginctl enable-linger` →
->   `user@<uid>.service` → `/run/user/<uid>/bus`). Stay on cgroup v1. If a box is
->   on cgroup v2, switch it back and reboot:
->
->   ```sh
->   tuned-adm profile cloudlinux-default-cgv1   # (…-latency-performance-cgv1 if that's your base profile)
->   reboot
->   # verify after reboot — should print tmpfs (cgroup v1), not cgroup2fs:
->   stat -fc %T /sys/fs/cgroup
->   ```
->
->   **CloudLinux 10 also ships `user.max_user_namespaces=0`**, which silently
->   breaks rootless Podman's `newuidmap`/`newgidmap` step (install fails during
->   image unpack, e.g. "potentially insufficient UIDs or GIDs"). Check with
->   `sysctl user.max_user_namespaces`; if it's `0`:
+> - **CloudLinux 8: stay on cgroup v1.** On v2, its systemd 239 cannot start a
+>   user manager under CloudLinux's default `hidepid=2` on `/proc`. Managers
+>   started at boot come up, but every one started after that fails
+>   (`Failed to determine supported controllers: No such process`), including a
+>   restart of an existing account's manager and a new account's first. That
+>   account's containers go down. This was seen with caged, jailshell and normal
+>   accounts alike on CloudLinux 8.10 (EA4-360). Getting v2 working there is
+>   EA4-365.
+> - **CloudLinux 9 / 10:** verified on cgroup v2 (EA4-343). CloudLinux sets the
+>   cgroup version through its tuned profile, which appends
+>   `systemd.unified_cgroup_hierarchy=0` after the `grubby` arg below, so the
+>   `grubby` route leaves the server on v1. Switch the profile instead:
 >
 >   ```sh
->   echo 'user.max_user_namespaces=15000' > /etc/sysctl.d/90-userns.conf && sysctl --system
->   ```
->
-> - **Non-LVE hosts (AlmaLinux / RHEL / Ubuntu): cgroup v2 is preferred** — its
->   unified hierarchy gives the user systemd manager proper cgroup-subtree
->   delegation, so resource limits apply cleanly. cgroup v1 still works.
->   AlmaLinux / RHEL 9+ and Ubuntu already default to cgroup v2. **AlmaLinux /
->   RHEL 8** default to cgroup v1; to move to v2, add the kernel arg and reboot:
->
->   ```sh
->   grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=1"
+>   tuned-adm profile cloudlinux-default-cgv2
 >   reboot
 >   # verify after reboot — should print cgroup2fs:
 >   stat -fc %T /sys/fs/cgroup
 >   ```
 >
->   If `stat` still reports `tmpfs` after the reboot, the image is booting from a
->   **static `grub.cfg`** (no BLS), so `grubby` was silently ignored — common on
->   cloud images. Confirm with `grep unified_cgroup_hierarchy /proc/cmdline`
->   (empty = not applied). In that case set the arg in `/etc/default/grub` —
->   append `systemd.unified_cgroup_hierarchy=1` to `GRUB_CMDLINE_LINUX` — then
->   regenerate the config and reboot:
+> AlmaLinux / RHEL 9+ and Ubuntu already default to cgroup v2. **AlmaLinux /
+> RHEL 8** default to cgroup v1; to move to v2, add the kernel arg and reboot:
 >
->   ```sh
->   grub2-mkconfig -o "$(readlink -f /etc/grub2.cfg)"       # BIOS
->   grub2-mkconfig -o "$(readlink -f /etc/grub2-efi.cfg)"   # UEFI
->   reboot
->   ```
+> ```sh
+> grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=1"
+> reboot
+> # verify after reboot — should print cgroup2fs:
+> stat -fc %T /sys/fs/cgroup
+> ```
+>
+> If `stat` still reports `tmpfs` after the reboot, the image is booting from a
+> **static `grub.cfg`** (no BLS), so `grubby` was silently ignored — common on
+> cloud images. Confirm with `grep unified_cgroup_hierarchy /proc/cmdline`
+> (empty = not applied). In that case set the arg in `/etc/default/grub` —
+> append `systemd.unified_cgroup_hierarchy=1` to `GRUB_CMDLINE_LINUX` — then
+> regenerate the config and reboot:
+>
+> ```sh
+> grub2-mkconfig -o "$(readlink -f /etc/grub2.cfg)"       # BIOS
+> grub2-mkconfig -o "$(readlink -f /etc/grub2-efi.cfg)"   # UEFI
+> reboot
+> ```
+>
+> **User namespaces are required.** ea-podman refuses to run podman commands
+> without them and points to https://go.cpanel.net/userns (EA4-360). Removing
+> containers (`uninstall`, `remove_containers`, account deletion, removing the
+> package), `ea-podman containers`, and `stop` and `status` (CLI and UAPI) only
+> warn, so containers can still be stopped and cleaned up. Note that
+> **CloudLinux 10 ships `user.max_user_namespaces=0`**; check with
+> `sysctl user.max_user_namespaces`, and if it's `0`, put it back to the kernel
+> default, half of `kernel.threads-max`:
+>
+> ```sh
+> echo "user.max_user_namespaces=$(( $(sysctl -n kernel.threads-max) / 2 ))" > /etc/sysctl.d/90-userns.conf && sysctl --system
+> ```
+>
+> Anything under 500 makes root's commands warn that busy accounts may hit the
+> limit; `ea-podman subids` (as root) also notes when it is below the kernel
+> default.
 
 ## The verbs
 

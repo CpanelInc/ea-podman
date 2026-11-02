@@ -182,10 +182,10 @@ if ( $opt{'check-clean'} ) {
         my $json = $out // '';
         $json =~ s/\A.*?(?=^\{)//sm;    # drop everything before the first line starting with {
         my $registry = eval { require Cpanel::JSON; Cpanel::JSON::Load($json) };
-        my $count = ref $registry eq 'HASH' ? scalar keys %{$registry} : 0;
+        my $count    = ref $registry eq 'HASH' ? scalar keys %{$registry} : 0;
 
         if ( $rc == 0 && $count ) {
-            warn_( "$count registered container(s) still present" );
+            warn_("$count registered container(s) still present");
             note('A suite that reaches every account will destroy these.');
             note('Clear with: ea-podman remove_containers --all   (SERVER-WIDE)');
             $dirty++;
@@ -314,9 +314,10 @@ else {
     my $v2 = -e '/sys/fs/cgroup/cgroup.controllers' ? 1 : 0;
     ok( 'cgroup ' . ( $v2 ? 'v2' : 'v1' ) );
 
-    # Not a defect, but it changes what the memory-cap paths can do, and on
-    # CloudLinux the combination with LVE is known to break systemd --user.
-    note('On CloudLinux, cgroup v2 + LVE breaks the rootless user manager.') if $v2;
+    # Not a defect, but it changes what the memory-cap paths can do. CloudLinux
+    # is only verified on cgroup v1 so far; whether LVE's per-uid cgroups get
+    # along with systemd's on v2 is what EA4-352 tests.
+    note('CloudLinux on cgroup v2 + LVE is not verified yet (EA4-352).') if $v2 && -e '/etc/cloudlinux-release';
 }
 
 #---------------------------------------------------------------------

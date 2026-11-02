@@ -40,7 +40,6 @@ sub _run {
     local $ea_podman::util::known_containers_file   = "$tmp/registered-containers.json";
     local $ea_podman::util::webapp_dir_setup_script  = "/bin/true";
 
-    local *ea_podman::util::warn_if_problematic_cgroup         = sub { return 1 };
     local *ea_podman::util::ensure_container_session           = sub { return 1 };
     local *ea_podman::util::_ensure_backup_conf_excludes_files = sub { return 1 };
     local *ea_podman::util::_get_container_root                = sub { return $container_root };

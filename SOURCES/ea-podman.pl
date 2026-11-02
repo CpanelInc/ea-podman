@@ -81,12 +81,6 @@ sub run {
         exit 1;
     }
 
-    # We are on the direct CLI path: only root or an unrestricted-shell user
-    # reaches here (restricted shells were routed to delegate_to_admin above).
-    # Stay silent about the cgroup config for them; the UAPI/restricted path
-    # never runs through here and keeps the CloudLinux + cgroup v2 advisory.
-    $ea_podman::util::EMIT_CGROUP_ADVISORY = 0;
-
     # An account can also be unreachable directly for a reason the shell check
     # above can't see: CageFS. A CageFS-caged account can have an unrestricted
     # shell (so it isn't routed to delegate_to_admin above), but a real login
@@ -430,7 +424,7 @@ If the pull fails, this reports the failure and leaves the container untouched r
                     return;
                 }
 
-                ea_podman::util::init_user();
+                ea_podman::util::init_user( userns_optional => 1 );
                 ea_podman::util::remove_container_by_name($container_name);
             },
         },
@@ -469,7 +463,7 @@ If the pull fails, this reports the failure and leaves the container untouched r
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
 
-                ea_podman::util::init_user();
+                ea_podman::util::init_user( userns_optional => 1 );    # systemd only
 
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
                 ea_podman::util::sysctl( stop => $service_name );
@@ -502,7 +496,7 @@ If the pull fails, this reports the failure and leaves the container untouched r
                 my ( $app, $container_name ) = @_;
                 ea_podman::util::validate_user_container_name($container_name);
 
-                ea_podman::util::init_user();
+                ea_podman::util::init_user( userns_optional => 1 );    # systemd only
 
                 my $service_name = ea_podman::util::get_container_service_name($container_name);
                 ea_podman::util::sysctl( status => $service_name );
@@ -556,7 +550,8 @@ If the pull fails, this reports the failure and leaves the container untouched r
 
                 my $user = getpwuid($>);
 
-                ea_podman::util::init_user();
+                # Only reads the registry, so it works without user namespaces too (EA4-360)
+                ea_podman::util::init_user( userns_optional => 1 );
 
                 my $containers_hr = ea_podman::util::load_known_containers();
 
@@ -597,7 +592,7 @@ This is intended to make it easier for a user to purge their ea-podman based con
 
                 die "Please provide a package name or the flag `--all`\n" if ( !$pkg );
 
-                ea_podman::util::init_user();
+                ea_podman::util::init_user( userns_optional => 1 );
 
                 # TODO ZC-9746: have them verify they want to do this destructive thing
 
@@ -644,7 +639,7 @@ This is intended to make it easier for a user to purge their ea-podman based con
                                         local $ENV{USER} = $c_user;
 
                                         chdir($homedir);
-                                        ea_podman::util::init_user();
+                                        ea_podman::util::init_user( userns_optional => 1 );
                                         ea_podman::util::remove_containers_for_a_user( @{ $user_breakdown{$c_user} } );
                                     }
                                 );
@@ -667,7 +662,7 @@ This is intended to make it easier for a user to purge their ea-podman based con
                     }
                 }
                 else {
-                    ea_podman::util::init_user();
+                    ea_podman::util::init_user( userns_optional => 1 );
                     ea_podman::util::remove_containers_for_a_user(@containers);
                 }
             },
@@ -1133,7 +1128,9 @@ NOTE:
 sub subids {
     my ( $app, @other ) = @_;
 
-    ea_podman::subids::assert_has_user_namespaces(1);
+    # Only conclusive as root. A user's init_user() already had it checked
+    # root-side by the ENSURE_USER admin action. (EA4-360)
+    ea_podman::subids::assert_has_user_namespaces(1) if $> == 0;
 
     if ( @other == 1 && $other[0] eq "--ensure" ) {
         ea_podman::util::ensure_user();    # do not need init_user because we don’t care aboue the su login stuff here
