@@ -181,6 +181,9 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
             mkdir $ea_podman::subids::dir_granted_linger;
             Path::Tiny::path("$ea_podman::subids::dir_linger/cptest1")->touch if $opts{already_lingering};
 
+            local *ea_podman::subids::assert_has_user_namespaces = $opts{no_userns} ? sub { die "❌ ea-podman requires user namespaces …\n" } : sub { return 15000 };
+            local $SIG{__WARN__} = $opts{warns} ? sub { push @{ $opts{warns} }, $_[0] } : $SIG{__WARN__};
+
             $ensured = undef;
             local *ea_podman::subids::ensure_user_root = sub {
                 my ( $user, $num_uids, $session ) = @_;
@@ -208,6 +211,35 @@ describe "Cpanel::Admin::Modules::Cpanel::ea_podman" => sub {
             );
 
             is( $ensured->{user}, "cptest1" );
+        };
+
+        it "should die with the user namespace reason, before ensuring anything, when they are unavailable" => sub {
+            eval {
+                $with_registry->(
+                    [ { name => "redis.cptest1.01", user => "cptest1" } ],
+                    sub { $mi{mocks}->{object}->ENSURE_USER() },
+                    no_userns => 1,
+                );
+            };
+            like( "$@", qr/requires user namespaces/, "the reason reaches the user" );
+            is( $ensured, undef, "no subids or session were set up" );
+        };
+
+        it "should only warn when they are unavailable for a removal, and still ensure the user" => sub {
+            my @warns;
+            my $rv = eval {
+                $with_registry->(
+                    [ { name => "redis.cptest1.01", user => "cptest1" } ],
+                    sub { $mi{mocks}->{object}->ENSURE_USER( 0, 1 ) },
+                    no_userns => 1,
+                    warns     => \@warns,
+                );
+            };
+            is( $@, "", "does not die, so the account can still be cleaned up" );
+            like( $warns[0] // '', qr/requires user namespaces.*Carrying on/s, "says why, and that it carries on" );
+            is( $ensured->{user},    "cptest1", "the user is ensured" );
+            is( $ensured->{session}, 1,         "with the session its containers' removal needs" );
+            is( $rv,                 1 );
         };
 
         it "should give a session to an account that has containers" => sub {

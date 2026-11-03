@@ -56,7 +56,6 @@ sub _harness {
     my %log = ( pulled => [], uninstalled => 0, created => [], registered => [], started => 0 );
 
     no warnings 'redefine';
-    *ea_podman::util::warn_if_problematic_cgroup         = sub { 1 };
     *ea_podman::util::ensure_container_session           = sub { 1 };
     *ea_podman::util::_ensure_backup_conf_excludes_files = sub { 1 };
     *ea_podman::util::_arbitrary_image_warning           = sub { 1 };

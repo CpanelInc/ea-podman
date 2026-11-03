@@ -198,11 +198,25 @@ sub TAKE ( $self, $container_name = undef ) {
 # is exempt: init_user() calls it on every verb, uninstall included, and it only
 # ever grants a session to an account that already has containers. Ownership:
 # only ever the caller's own subids and session.
-sub ENSURE_USER ( $self, $creating = undef ) {
+sub ENSURE_USER ( $self, $creating = undef, $userns_optional = undef ) {
     my $cpuser = $self->_debug_and_user();
     $self->cpuser_has_feature_or_die(FEATURE) if $creating;
 
     _require_ea_podman_or_die();
+
+    # Every user's init_user() comes through here, so this is where their
+    # commands get the user namespace check, as root where it is conclusive.
+    # Its message is about the host, not other accounts, and tells them what
+    # to ask for, so pass it through. A verb whose own work needs no podman
+    # ($userns_optional: the removals, `containers`, `stop`, `status`) only
+    # warns, as init_user() does for root, so the account can still be cleaned
+    # up. (EA4-360)
+    if ($userns_optional) {
+        ea_podman::subids::warn_if_no_user_namespaces();
+    }
+    else {
+        eval { ea_podman::subids::assert_has_user_namespaces(); 1 } or _die_with_message("$@");
+    }
 
     # subuid/subgid ranges are for anybody who runs podman at all. A lingering
     # user session is not: it exists to keep an account’s containers running, so

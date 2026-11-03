@@ -19,19 +19,10 @@ my %conf = (
 
 require $conf{require};
 
-our $max_usernamespaces = 15000;
-our $os                 = "AlmaLinux8";
-
 our @qx_calls;
 
 our $current_qx = sub {
     push @qx_calls, [@_];
-    if ( $_[0] =~ m/user\.max_user_namespaces/ ) {
-        return $max_usernamespaces;
-    }
-    elsif ( $_[0] =~ m:source /etc/os-release: ) {
-        return $os;
-    }
     return "";
 };
 
@@ -133,25 +124,191 @@ cptest1:165537:65536
     };
 
     describe "assert_has_user_namespaces" => sub {
-        it "should work correctly if max_usernamespaces is supported" => sub {
+        around {
+            my $dir = File::Temp->newdir();
+
+            # Only what a stock RHEL-family host has. A key that isn't there
+            # throws like Cpanel::Sysctl does for a missing /proc/sys file.
+            my %sysctl = (
+                'user.max_user_namespaces' => 15000,
+                'kernel.threads-max'       => 63289,
+            );
+            local $conf{sysctl} = sub { $sysctl{ $_[0] } = $_[1] };
+            local $conf{unset}  = sub { delete $sysctl{ $_[0] } };
+
+            no warnings qw/redefine once/;
+            local *Cpanel::Sysctl::get = sub {
+                my ($key) = @_;
+                die bless( { key => $key }, 'Cpanel::Exception::IO::FileNotFound' ) if !exists $sysctl{$key};
+                die "${ $sysctl{$key} }\n"                                          if ref $sysctl{$key};       # any other read error
+                return "$sysctl{$key}\n";
+            };
+            use warnings qw/redefine once/;
+
+            Path::Tiny::path("$dir/ns-user")->touch;
+            Path::Tiny::path("$dir/apparmor.d")->mkpath;
+            Path::Tiny::path("$dir/podman")->spew("#!/bin/sh\n");
+            chmod 0755, "$dir/podman";
+
+            local $conf{dir} = $dir;
+
+            no warnings qw/once redefine/;
+            local *ea_podman::subids::_is_root     = sub { $conf{is_root} // 1 };
+            local $ea_podman::subids::file_ns_user = "$dir/ns-user";
+            local $ea_podman::subids::dir_apparmor = "$dir/apparmor.d";
+            local @ea_podman::subids::files_podman = ("$dir/podman");
+
+            yield;
+        };
+
+        it "should refuse to run as a user, whose answer is not conclusive" => sub {
+            local $conf{is_root} = 0;
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/must run as root/ );
+        };
+
+        it "should return max_user_namespaces when supported" => sub {
             my $val = ea_podman::subids::assert_has_user_namespaces();
             is( $val, 15000 );
         };
 
-        it "should output horrible things if not supported" => sub {
-            local $max_usernamespaces = 0;
+        it "should die pointing at the docs when the kernel has no user namespaces" => sub {
+            unlink "$conf{dir}/ns-user";
             eval { ea_podman::subids::assert_has_user_namespaces(); };
-
-            ok( $@ =~ m/User Namespaces not available/ );
+            like( $@, qr/requires user namespaces.*kernel was built without/s );
+            like( $@, qr{https://go\.cpanel\.net/userns} );
         };
 
-        it "should output more horrible things if on c7" => sub {
-            local $max_usernamespaces = 0;
-            local $os                 = "centos7";
-
+        it "should die when max_user_namespaces is 0" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => 0 );
             eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/user\.max_user_namespaces is 0/ );
+            like( $@, qr{https://go\.cpanel\.net/userns} );
+        };
 
-            ok( $@ =~ m/CentOS 7 running these command/ );
+        it "should warn root, not die, when max_user_namespaces is below the floor" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => 499 );
+            my @warns;
+            local $SIG{__WARN__} = sub { push @warns, $_[0] };
+            is( ea_podman::subids::assert_has_user_namespaces(), 499 );
+            is( scalar(@warns), 1 );
+            like( $warns[0], qr/=499 is below the recommended minimum of 500/ );
+        };
+
+        # 15000 is what docs/uapi.md has admins set, far below threads-max / 2 on most servers.
+        it "should not warn at or above the floor, however far below the kernel default" => sub {
+            my @warns;
+            local $SIG{__WARN__} = sub { push @warns, $_[0] };
+            is( ea_podman::subids::assert_has_user_namespaces(), 15000 );
+            is( scalar(@warns),                                  0 );
+        };
+
+        it "should mention, when verbose, that max_user_namespaces is below the kernel default" => sub {
+            my $out = _stdout_of( sub { ea_podman::subids::assert_has_user_namespaces(1) } );
+            like( $out, qr/user\.max_user_namespaces = '15000'/ );
+            like( $out, qr/FYI: that is below the kernel default of ~31644 \(half of kernel\.threads-max\)/ );
+        };
+
+        it "should not mention the kernel default when verbose and at it" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => 31644 );
+            unlike( _stdout_of( sub { ea_podman::subids::assert_has_user_namespaces(1) } ), qr/FYI/ );
+        };
+
+        it "should not let an unreadable threads-max fail the verbose check" => sub {
+            $conf{sysctl}->( 'kernel.threads-max' => \"Permission denied" );
+            my $out = _stdout_of( sub { is( ea_podman::subids::assert_has_user_namespaces(1), 15000 ) } );
+            unlike( $out, qr/FYI/ );
+        };
+
+        it "should die on any other read error" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => \"Permission denied" );
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/Cannot read user\.max_user_namespaces: Permission denied/ );
+        };
+
+        it "should refuse a key that is not allowlisted" => sub {
+            eval { ea_podman::subids::_sysctl_num("//.//.etc.shadow") };
+            like( $@, qr/Invalid sysctl key/ );
+        };
+
+        it "should die when max_user_namespaces is missing" => sub {
+            $conf{unset}->('user.max_user_namespaces');
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/user\.max_user_namespaces is missing/ );
+        };
+
+        it "should die when unprivileged_userns_clone is 0" => sub {
+            $conf{sysctl}->( 'kernel.unprivileged_userns_clone' => 0 );
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/unprivileged_userns_clone is 0/ );
+        };
+
+        it "should be fine when unprivileged_userns_clone is 1" => sub {
+            $conf{sysctl}->( 'kernel.unprivileged_userns_clone' => 1 );
+            is( ea_podman::subids::assert_has_user_namespaces(), 15000 );
+        };
+
+        it "should die when AppArmor restricts userns and no profile exempts podman" => sub {
+            $conf{sysctl}->( 'kernel.apparmor_restrict_unprivileged_userns' => 1 );
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/no enabled profile .* grants `userns`/ );
+        };
+
+        it "should be fine when AppArmor restricts userns but a profile exempts podman" => sub {
+            $conf{sysctl}->( 'kernel.apparmor_restrict_unprivileged_userns' => 1 );
+            my $podman = Cwd::abs_path("$conf{dir}/podman");
+            Path::Tiny::path("$conf{dir}/apparmor.d/podman")->spew(qq{abi <abi/4.0>,\n\nprofile podman $podman flags=(unconfined) {\n  userns,\n}\n});
+            is( ea_podman::subids::assert_has_user_namespaces(), 15000 );
+        };
+
+        it "should not take a bare file rule on podman for a profile attachment" => sub {
+            $conf{sysctl}->( 'kernel.apparmor_restrict_unprivileged_userns' => 1 );
+            my $podman = Cwd::abs_path("$conf{dir}/podman");
+            Path::Tiny::path("$conf{dir}/apparmor.d/other")->spew(qq{profile other /usr/bin/other {\n  $podman r,\n  userns,\n}\n});
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/no enabled profile/ );
+        };
+
+        it "should read a profile that is not valid UTF-8" => sub {
+            $conf{sysctl}->( 'kernel.apparmor_restrict_unprivileged_userns' => 1 );
+            my $podman = Cwd::abs_path("$conf{dir}/podman");
+            Path::Tiny::path("$conf{dir}/apparmor.d/podman")->spew_raw(qq{# caf\xe9\n$podman {\n  userns,\n}\n});
+            is( ea_podman::subids::assert_has_user_namespaces(), 15000 );
+        };
+
+        it "should ignore a disabled AppArmor profile" => sub {
+            $conf{sysctl}->( 'kernel.apparmor_restrict_unprivileged_userns' => 1 );
+            my $podman = Cwd::abs_path("$conf{dir}/podman");
+            Path::Tiny::path("$conf{dir}/apparmor.d/podman")->spew(qq{profile podman $podman {\n  userns,\n}\n});
+            Path::Tiny::path("$conf{dir}/apparmor.d/disable/podman")->touchpath;
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/no enabled profile/ );
+        };
+
+        it "should die on a non-numeric value" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => 'lots' );
+            eval { ea_podman::subids::assert_has_user_namespaces(); };
+            like( $@, qr/Unexpected value “lots” for user\.max_user_namespaces/ );
+        };
+
+        # The removal flavour: same check, never dies. (EA4-360)
+        it "should say nothing and return true from warn_if_no_user_namespaces() when supported" => sub {
+            my @warns;
+            local $SIG{__WARN__} = sub { push @warns, $_[0] };
+            is( ea_podman::subids::warn_if_no_user_namespaces(), 1 );
+            is( scalar(@warns),                                  0 );
+        };
+
+        it "should warn with the reason, and not die, from warn_if_no_user_namespaces() when unavailable" => sub {
+            $conf{sysctl}->( 'user.max_user_namespaces' => 0 );
+            my @warns;
+            local $SIG{__WARN__} = sub { push @warns, $_[0] };
+            my $rv = eval { ea_podman::subids::warn_if_no_user_namespaces() };
+            is( $@,             "", "does not die" );
+            is( $rv,            0,  "returns false" );
+            is( scalar(@warns), 1,  "warns once" );
+            like( $warns[0], qr/user\.max_user_namespaces is 0/, "with the reason" );
+            like( $warns[0], qr/Carrying on/,                    "and that the command goes on" );
         };
     };
 
@@ -380,12 +537,12 @@ cptest1:165537:65536
 
             no warnings qw/once/;
 
-            local $ea_podman::subids::file_mask_etc   = "$conf{mock_dir}/etc/user\@.service";
-            local $ea_podman::subids::file_mask_run   = "$conf{mock_dir}/run/user\@.service";
-            local $ea_podman::subids::file_mask_state = "$conf{mock_dir}/mask.state";
-            local $ea_podman::subids::dir_unit_carveout = "$conf{mock_dir}/units";
+            local $ea_podman::subids::file_mask_etc      = "$conf{mock_dir}/etc/user\@.service";
+            local $ea_podman::subids::file_mask_run      = "$conf{mock_dir}/run/user\@.service";
+            local $ea_podman::subids::file_mask_state    = "$conf{mock_dir}/mask.state";
+            local $ea_podman::subids::dir_unit_carveout  = "$conf{mock_dir}/units";
             local $ea_podman::subids::dir_carveout_state = "$conf{mock_dir}/state";
-            local @ea_podman::subids::files_vendor_unit = ( "$conf{mock_dir}/vendor/user\@.service" );
+            local @ea_podman::subids::files_vendor_unit  = ("$conf{mock_dir}/vendor/user\@.service");
 
             local $ea_podman::subids::daemon_reloader = sub { $mask{reloads}++; return 1 };
 
@@ -400,7 +557,7 @@ cptest1:165537:65536
         it "should give the account its unit even when the template is not masked" => sub {
             is( ea_podman::subids::ensure_user_manager_carveouts(1001), 1, "one unit written" );
 
-            ok( !-l $carveout->(1001) && -f _, "a real file" );
+            ok( !-l $carveout->(1001) && -f _,                "a real file" );
             ok( !ea_podman::subids::user_manager_mask_file(), "and the host is still not masked: nothing else changed" );
         };
 
@@ -416,7 +573,7 @@ cptest1:165537:65536
             symlink( "/dev/null", $ea_podman::subids::file_mask_etc );
 
             is( ea_podman::subids::ensure_user_manager_carveouts(), 0, "nothing to do" );
-            is( $mask{reloads}, 0, "and no reload" );
+            is( $mask{reloads},                                     0, "and no reload" );
         };
 
         it "should report which location the mask is in" => sub {
@@ -450,8 +607,8 @@ cptest1:165537:65536
                 is( ea_podman::subids::ensure_user_manager_carveouts(1001), 1, "one unit written" );
 
                 ok( !-l $carveout->(1001) && -f _, "as a real file, not a symlink: a symlink to the vendor unit is resolved as the masked template" );
-                is( ea_podman::subids::user_manager_mask_file(), $case->{where}->(), "the mask is still in the same place" );
-                is( ( -l $case->{where}->() ? readlink( $case->{where}->() ) : "file" ), $before, "and is byte for byte what it was" );
+                is( ea_podman::subids::user_manager_mask_file(),                         $case->{where}->(), "the mask is still in the same place" );
+                is( ( -l $case->{where}->() ? readlink( $case->{where}->() ) : "file" ), $before,            "and is byte for byte what it was" );
             };
         }
 
@@ -460,8 +617,8 @@ cptest1:165537:65536
 
             ea_podman::subids::ensure_user_manager_carveouts(1001);
 
-            is( Path::Tiny::path( $carveout->(1001) )->slurp_raw, Path::Tiny::path("$conf{mock_dir}/vendor/user\@.service")->slurp_raw, "same bytes as the vendor unit" );
-            is( sprintf( "%04o", ( stat $carveout->(1001) )[2] & 07777 ), "0644", "and world readable, as unit files are" );
+            is( Path::Tiny::path( $carveout->(1001) )->slurp_raw,         Path::Tiny::path("$conf{mock_dir}/vendor/user\@.service")->slurp_raw, "same bytes as the vendor unit" );
+            is( sprintf( "%04o", ( stat $carveout->(1001) )[2] & 07777 ), "0644",                                                               "and world readable, as unit files are" );
         };
 
         it "should name the file for the uid, so every other account stays refused" => sub {
@@ -489,7 +646,7 @@ cptest1:165537:65536
             $mask{reloads} = 0;
 
             is( ea_podman::subids::ensure_user_manager_carveouts(1001), 0, "nothing to write" );
-            is( $mask{reloads}, 0, "and so nothing to reload" );
+            is( $mask{reloads},                                         0, "and so nothing to reload" );
         };
 
         it "should replace a stale copy" => sub {
@@ -510,7 +667,7 @@ cptest1:165537:65536
             eval { ea_podman::subids::ensure_user_manager_carveouts(1001) };
 
             like( $@, qr/was not written by ea-podman/, "says why" );
-            ok( ea_podman::subids::is_user_session_error($@), "and is shown to the account like the other session errors" );
+            ok( ea_podman::subids::is_user_session_error($@),                         "and is shown to the account like the other session errors" );
             ok( -l $carveout->(1001) && readlink( $carveout->(1001) ) eq "/dev/null", "the mask is still there" );
             is( $mask{reloads}, 0, "with nothing reloaded" );
         };
@@ -522,8 +679,8 @@ cptest1:165537:65536
 
             eval { ea_podman::subids::ensure_user_manager_carveouts(1001) };
 
-            like( $@, qr/was not written by ea-podman/, "refused" );
-            like( Path::Tiny::path( $carveout->(1001) )->slurp_raw, qr/custom/, "and untouched" );
+            like( $@,                                               qr/was not written by ea-podman/, "refused" );
+            like( Path::Tiny::path( $carveout->(1001) )->slurp_raw, qr/custom/,                       "and untouched" );
         };
 
         it "should still write the other accounts' units when one is refused" => sub {
@@ -554,8 +711,8 @@ cptest1:165537:65536
 
                 like( $@, qr/was not written by ea-podman/, "refused" );
                 my $after = -l $carveout->(1001) ? readlink $carveout->(1001) : Path::Tiny::path( $carveout->(1001) )->slurp_raw;
-                is( $after, $before, "and left as the administrator made it" );
-                is( $mask{reloads}, 0, "with nothing reloaded" );
+                is( $after,         $before, "and left as the administrator made it" );
+                is( $mask{reloads}, 0,       "with nothing reloaded" );
             };
 
             it "should not remove $what an administrator put over a unit it wrote" => sub {
@@ -601,7 +758,7 @@ cptest1:165537:65536
         describe "removing the unit" => sub {
             around {
                 no warnings qw/once/;
-                local $ea_podman::subids::user_manager_is_active = sub { $conf{active} };
+                local $ea_podman::subids::user_manager_is_active         = sub { $conf{active} };
                 local $ea_podman::subids::user_manager_confirmed_stopped = sub { $conf{active} ? 0 : 1 };
 
                 yield;
@@ -613,7 +770,7 @@ cptest1:165537:65536
                 local $conf{active} = 0;
 
                 is( ea_podman::subids::remove_user_manager_carveout(1001), 1, "removed" );
-                ok( !-e $carveout->(1001), "and gone" );
+                ok( !-e $carveout->(1001),                       "and gone" );
                 ok( ea_podman::subids::user_manager_mask_file(), "the mask is untouched" );
             };
 
@@ -651,16 +808,16 @@ cptest1:165537:65536
 
             around {
                 no warnings qw/once redefine/;
-                local $conf{active}       = 0;
+                local $conf{active}      = 0;
                 local $conf{mock_linger} = "$conf{mock_dir}/linger";
                 mkdir $conf{mock_linger};
-                local $ea_podman::subids::dir_linger             = $conf{mock_linger};
-                local $ea_podman::subids::user_manager_is_active = sub { $conf{active} };
+                local $ea_podman::subids::dir_linger                     = $conf{mock_linger};
+                local $ea_podman::subids::user_manager_is_active         = sub { $conf{active} };
                 local $ea_podman::subids::user_manager_confirmed_stopped = sub { $conf{active} ? 0 : 1 };
-                local $ea_podman::subids::poll_iterations        = 1;
-                local $ea_podman::subids::settle_iterations      = 2;
-                local $ea_podman::subids::poll_sleeper           = sub { return };
-                local $ea_podman::subids::uid_to_user = sub { return $_[0] == 1001 ? "cptest1" : undef };
+                local $ea_podman::subids::poll_iterations                = 1;
+                local $ea_podman::subids::settle_iterations              = 2;
+                local $ea_podman::subids::poll_sleeper                   = sub { return };
+                local $ea_podman::subids::uid_to_user                    = sub { return $_[0] == 1001 ? "cptest1" : undef };
 
                 symlink( "/dev/null", $ea_podman::subids::file_mask_etc );
 
@@ -685,10 +842,10 @@ cptest1:165537:65536
                     $mask{reloads} = 0;
 
                     is( ea_podman::subids::ensure_user_manager_carveouts(1001), 0, "nothing to write this time" );
-                    is( $mask{reloads}, 1, "but systemd has still not been told, so it is" );
+                    is( $mask{reloads},                                         1, "but systemd has still not been told, so it is" );
 
                     is( ea_podman::subids::ensure_user_manager_carveouts(1001), 0, "nothing to write" );
-                    is( $mask{reloads}, 1, "and once it has been told, it is not told again" );
+                    is( $mask{reloads},                                         1, "and once it has been told, it is not told again" );
                 };
 
                 it "should reload on the next run after a process that died between the rename and the reload" => sub {
@@ -709,7 +866,7 @@ cptest1:165537:65536
                 my $release = sub {
                     Path::Tiny::path("$conf{mock_linger}/cptest1")->touch;
                     no warnings qw/once redefine/;
-                    local *CORE::GLOBAL::getpwnam = sub { return $_[0] eq "cptest1" ? ( "cptest1", "x", 1001, 1001 ) : () };
+                    local *CORE::GLOBAL::getpwnam             = sub { return $_[0] eq "cptest1" ? ( "cptest1", "x", 1001, 1001 ) : () };
                     local $ea_podman::subids::linger_disabler = sub { unlink "$ea_podman::subids::dir_linger/$_[0]"; return 1 };
                     return ea_podman::subids::remove_user_session("cptest1");
                 };
@@ -720,7 +877,7 @@ cptest1:165537:65536
                     local $conf{active} = 1;
                     local $ea_podman::subids::poll_sleeper = sub { $conf{active} = 0 if ++$polls == 1 };
 
-                    ok( $release->(), "released" );
+                    ok( $release->(),          "released" );
                     ok( !-e $carveout->(1001), "the unit is gone" );
                     ok( !-e $written->(1001),  "and so is the record of it" );
                 };
@@ -729,7 +886,7 @@ cptest1:165537:65536
                     ea_podman::subids::ensure_user_manager_carveouts(1001);
                     local $conf{active} = 1;
 
-                    ok( $release->(), "the release itself succeeds: the linger is gone" );
+                    ok( $release->(),         "the release itself succeeds: the linger is gone" );
                     ok( -e $carveout->(1001), "the unit is kept under the live manager" );
                     ok( -e $written->(1001),  "and the record that it is ours, which is what a later reconcile goes by" );
                 };
@@ -786,7 +943,7 @@ cptest1:165537:65536
 
                     is( ea_podman::subids::reconcile_carveouts(), 2, "both taken back: neither has an account that lingers" );
                     ok( !-e $carveout->(1001) && !-e $carveout->(1002), "the units are gone" );
-                    ok( !-e $written->(1001) && !-e $written->(1002),   "and the records" );
+                    ok( !-e $written->(1001)  && !-e $written->(1002),  "and the records" );
                 };
 
                 it "should drop a record for a unit that is no longer there" => sub {
@@ -835,14 +992,14 @@ cptest1:165537:65536
                     };
 
                     it "should count only inactive and failed as stopped" => sub {
-                        is( $stopped_for->('echo inactive; exit 3'),     1, "inactive" );
-                        is( $stopped_for->('echo failed; exit 3'),       1, "failed" );
-                        is( $stopped_for->('echo active; exit 0'),       0, "active" );
-                        is( $stopped_for->('echo activating; exit 3'),   0, "activating" );
-                        is( $stopped_for->('echo deactivating; exit 3'), 0, "deactivating" );
-                        is( $stopped_for->('echo reloading; exit 0'),    0, "reloading" );
-                        is( $stopped_for->('echo unknown; exit 4'),      0, "unknown" );
-                        is( $stopped_for->('exit 1'),                    0, "a query that failed and said nothing" );
+                        is( $stopped_for->('echo inactive; exit 3'),                       1, "inactive" );
+                        is( $stopped_for->('echo failed; exit 3'),                         1, "failed" );
+                        is( $stopped_for->('echo active; exit 0'),                         0, "active" );
+                        is( $stopped_for->('echo activating; exit 3'),                     0, "activating" );
+                        is( $stopped_for->('echo deactivating; exit 3'),                   0, "deactivating" );
+                        is( $stopped_for->('echo reloading; exit 0'),                      0, "reloading" );
+                        is( $stopped_for->('echo unknown; exit 4'),                        0, "unknown" );
+                        is( $stopped_for->('exit 1'),                                      0, "a query that failed and said nothing" );
                         is( $stopped_for->('echo "Failed to connect to bus" >&2; exit 1'), 0, "a bus error" );
                     };
 
@@ -897,9 +1054,9 @@ cptest1:165537:65536
                 ea_podman::subids::ensure_user_manager_carveouts(1001);
 
                 is_deeply( $seen[0], { units => [ 1002, 1003 ], masked => 0 }, "the first reload is for the lingering accounts' units, with the template still unmasked" );
-                is( $seen[1]{masked}, 1, "the mask goes back, and is reloaded, only after that" );
+                is( $seen[1]{masked},                            1,                                 "the mask goes back, and is reloaded, only after that" );
                 is( ea_podman::subids::user_manager_mask_file(), $ea_podman::subids::file_mask_etc, "and is back where it was" );
-                ok( -e $carveout->(1001), "the account being set up gets its unit too" );
+                ok( -e $carveout->(1001),                    "the account being set up gets its unit too" );
                 ok( !-e $ea_podman::subids::file_mask_state, "with the stale record cleared" );
             };
 
@@ -911,7 +1068,7 @@ cptest1:165537:65536
 
                 is( ea_podman::subids::user_manager_mask_file(), $ea_podman::subids::file_mask_etc, "back in place where it was" );
                 ok( !-e $ea_podman::subids::file_mask_state, "with the stale record cleared" );
-                ok( -e $carveout->(1001), "and the account still gets its unit, now that the host is masked again" );
+                ok( -e $carveout->(1001),                    "and the account still gets its unit, now that the host is masked again" );
             };
 
             it "should refuse a state file naming a path we do not manage" => sub {
@@ -919,7 +1076,7 @@ cptest1:165537:65536
 
                 ea_podman::subids::ensure_user_manager_carveouts(1001);
 
-                ok( !-e "$conf{mock_dir}/somewhere-else", "we never create a unit file outside the two mask paths" );
+                ok( !-e "$conf{mock_dir}/somewhere-else",    "we never create a unit file outside the two mask paths" );
                 ok( !-e $ea_podman::subids::file_mask_state, "and the useless record is dropped" );
             };
 
@@ -980,15 +1137,15 @@ cptest1:165537:65536
             local $ea_podman::subids::file_mask_state    = "$conf{mock_dir}/mask.state";
             local $ea_podman::subids::dir_unit_carveout  = "$conf{mock_dir}/units";
             local $ea_podman::subids::dir_carveout_state = "$conf{mock_dir}/state";
-            local @ea_podman::subids::files_vendor_unit  = ( "$conf{mock_dir}/vendor/user\@.service" );
+            local @ea_podman::subids::files_vendor_unit  = ("$conf{mock_dir}/vendor/user\@.service");
             local $ea_podman::subids::poll_iterations    = 1;
             local $ea_podman::subids::poll_sleeper       = sub { return };
 
-            local $ea_podman::subids::daemon_reloader = sub { $use{reloads}++; push @{ $use{order} }, "reload"; return 1 };
-            local $ea_podman::subids::linger_enabler  = sub { push @{ $use{order} }, "linger"; return 1 };
-            local $ea_podman::subids::user_manager_is_active = sub { $use{active} ? 1 : 0 };
+            local $ea_podman::subids::daemon_reloader                = sub { $use{reloads}++; push @{ $use{order} }, "reload"; return 1 };
+            local $ea_podman::subids::linger_enabler                 = sub { push @{ $use{order} }, "linger"; return 1 };
+            local $ea_podman::subids::user_manager_is_active         = sub { $use{active} ? 1 : 0 };
             local $ea_podman::subids::user_manager_confirmed_stopped = sub { $use{active} ? 0 : 1 };
-            local $ea_podman::subids::user_manager_starter   = sub {
+            local $ea_podman::subids::user_manager_starter           = sub {
                 my ($uid) = @_;
                 push @{ $use{order} }, "start";
                 $use{unit_at_start} = -e ea_podman::subids::user_manager_carveout_file($uid) ? 1 : 0;
@@ -1020,7 +1177,7 @@ cptest1:165537:65536
 
             ea_podman::subids::ensure_user_session("cptest1");
 
-            is( $use{reloads}, 0, "the hot path does no systemd work at all" );
+            is( $use{reloads},                                                                       0,       "the hot path does no systemd work at all" );
             is( Path::Tiny::path( ea_podman::subids::user_manager_carveout_file(11001) )->slurp_raw, $before, "and writes nothing" );
         };
 
@@ -1056,7 +1213,7 @@ cptest1:165537:65536
             local $ea_podman::subids::linger_disabler = sub { unlink "$ea_podman::subids::dir_linger/$_[0]"; return 1 };
             local $use{active} = 0;
 
-            ok( ea_podman::subids::remove_user_session("cptest1"), "released" );
+            ok( ea_podman::subids::remove_user_session("cptest1"),        "released" );
             ok( !-e ea_podman::subids::user_manager_carveout_file(11001), "and its unit went with it" );
         };
 
@@ -1203,9 +1360,9 @@ cptest1:165537:65536
 
             eval { ea_podman::subids::ensure_user_session("cptest1"); };
 
-            like( $@, qr/is running, but its session bus/,  "it names the actual condition" );
-            like( $@, qr/systemctl stop user\@11002\.service/, "and the recovery that always works, whether or not the account has containers" );
-            like( $@, qr/stops the account/,                 "and warns that the repair is not free" );
+            like( $@, qr/is running, but its session bus/,           "it names the actual condition" );
+            like( $@, qr/systemctl stop user\@11002\.service/,       "and the recovery that always works, whether or not the account has containers" );
+            like( $@, qr/stops the account/,                         "and warns that the repair is not free" );
             like( $@, qr/but not for an account with no containers/, "and says where ensure_user_sessions does NOT help" );
             unlike( $@, qr/did not appear/, "not the generic bus message, which points at the wrong bug" );
 
@@ -1235,7 +1392,7 @@ cptest1:165537:65536
 
         it "should not mark an unrelated error as showable" => sub {
             ok( !ea_podman::subids::is_user_session_error("subuid collision with “someone-else”\n"), "a subid refusal is not showable -- it names another account" );
-            ok( !ea_podman::subids::is_user_session_error(undef),                                     "and undef is not showable" );
+            ok( !ea_podman::subids::is_user_session_error(undef),                                    "and undef is not showable" );
             is( ea_podman::subids::strip_user_session_error("plain\n"), "plain\n", "stripping leaves an unmarked error alone" );
         };
 
@@ -1265,8 +1422,8 @@ cptest1:165537:65536
             eval { ea_podman::subids::ensure_user_session( "cptest1", may_restart => 1 ); };
 
             is( $@, "", "it does not die" );
-            is_deeply( \@stopped,          [11002], "the unusable manager is stopped" );
-            is_deeply( $sess{started},     [11002], "and started again, which is the only thing that recreates the socket" );
+            is_deeply( \@stopped,      [11002], "the unusable manager is stopped" );
+            is_deeply( $sess{started}, [11002], "and started again, which is the only thing that recreates the socket" );
             ok( -e "$ea_podman::subids::dir_run/11002/bus", "and the bus is back" );
         };
 
@@ -1358,6 +1515,7 @@ cptest1:165537:65536
             ok( ea_podman::subids::user_manager_mask_file(), "and the mask is restored even though the session failed" );
         };
     };
+
     # The boot sweep (EA4-319). What is worth pinning here is not that it starts
     # managers -- ensure_user_session already covers that -- but the two things
     # that are only true because the sweep is hand-split into phases: ONE window
@@ -1394,7 +1552,7 @@ cptest1:165537:65536
             local $ea_podman::subids::file_mask_run      = "$conf{mock_dir}/etc/never-masked-here";
             local $ea_podman::subids::file_mask_state    = "$conf{mock_dir}/mask.state";
             local $ea_podman::subids::dir_unit_carveout  = "$conf{mock_dir}/units";
-            local @ea_podman::subids::files_vendor_unit  = ( "$conf{mock_dir}/vendor/user\@.service" );
+            local @ea_podman::subids::files_vendor_unit  = ("$conf{mock_dir}/vendor/user\@.service");
 
             local $ea_podman::subids::daemon_reloader = sub { $sweep{reloads}++;                return 1 };
             local $ea_podman::subids::linger_enabler  = sub { push @{ $sweep{enabled} }, $_[0]; return 1 };
@@ -1533,6 +1691,7 @@ cptest1:165537:65536
         # an explicit admin invocation are the two contexts where taking the
         # account's containers down is expected. (EA4-319)
         it "should restart a manager that is running with no bus under it" => sub {
+
             # Masked, so "was the template lifted when this ran" is a real
             # question rather than vacuously true.
             symlink( "/dev/null", $ea_podman::subids::file_mask_etc );
@@ -1565,8 +1724,8 @@ cptest1:165537:65536
 
             my $result = ea_podman::subids::ensure_user_sessions("cptest1");
 
-            is_deeply( \@stopped,       [11001],                 "the useless manager is stopped first" );
-            is_deeply( $sweep{started}, [11001],                 "and only then started -- a start alone would be a no-op" );
+            is_deeply( \@stopped,       [11001],                  "the useless manager is stopped first" );
+            is_deeply( $sweep{started}, [11001],                  "and only then started -- a start alone would be a no-op" );
             is_deeply( $result,         { cptest1 => "started" }, "and the account comes back" );
 
             is_deeply( $sweep{stopped_in_window}, [0], "and the stop happened with the template still masked" );
@@ -1755,3 +1914,11 @@ cptest1:165537:65536
 
 runtests unless caller;
 
+sub _stdout_of {
+    my ($code) = @_;
+    open( my $fh, '>', \my $out ) or die "Cannot capture STDOUT: $!";
+    my $old = select($fh);
+    eval { $code->(); 1 } or do { select($old); die $@ };
+    select($old);
+    return $out // "";
+}

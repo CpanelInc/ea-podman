@@ -30,8 +30,8 @@ state behind. Use a throwaway VM you can discard afterward.
 
 ## The tests
 
-ea-podman no longer requires cgroup v2 (the direct CLI runs on cgroup v1; the
-UAPI path warns but proceeds). All three live tests run on **both** cgroup v1
+ea-podman does not require cgroup v2, though it recommends it (root is warned on
+cgroup v1). All three live tests run on **both** cgroup v1
 and v2 — none has a cgroup-version gate. Their bring-up + serving assertions are
 verified on cgroup v1 (AlmaLinux 8 and CloudLinux 8/9/10, which default to v1)
 as well as v2 (AlmaLinux 9/10 and Ubuntu 24.04, which default to v2).
@@ -51,6 +51,7 @@ as well as v2 (AlmaLinux 9/10 and Ubuntu 24.04, which default to v2).
 | `cpanel-57608-quota-redeploy-live.t` | **A Web App whose first deploy failed on a disk quota redeploys cleanly once the quota is lifted** (CPANEL-57608 / CPANEL-57512). Sets a fresh account's real cPanel quota just above its usage, then: the deploy fails at `podman create` with "disk quota exceeded" (asserted from the deploy log, so the port check below cannot pass vacuously) and the account holds no reserved port; with the quota lifted, the same application redeploys, the account holds exactly one port, it is the port podman published and the one the proxy is wired to, and Apache serves the app. With `E2E57608_EXPECT_OLD_EAPODMAN=1` it asserts the leak instead (1 port after the failure, 2 after the retry), so a before run against ea-podman 1.0-32 shows the test reproduces the bug. The Apache check alone cannot tell the versions apart on a plugin with CPANEL-57609; the port counts do. | A live cPanel VM on cgroup v2 (skips on v1, so not CloudLinux) with **disk quotas enabled** on the filesystem holding `/home` (`/scripts/fixquotas`, reboot if it says so); the test reads the limit back and skips if none applies. docker.io reachable, `quota`, `curl`, `zip`. |
 | `ea4-338-restore-proxy-repair-live.t` | **A user-run `ea-podman restore` re-points the account's Web App proxies** (EA4-338 / CPANEL-55949). Before anything is deployed, root holds blocks of the lowest free ports. Releasing one just before a restore moves every container down into it, so each phase gets a real port change without a hand-edited include, and BAILs if it did not. Two Web Apps and a plain `redis` container, then six restores. With the plugin present, both apps are reported `Re-pointed … to port N`, N is the port podman publishes and the port in both the std and ssl includes, Apache serves them, only the plain container is warned about, and the health sweep cron entry comes back. A second restore reports only what really moved. With the plugin's `Repair.pm` absent, or replaced by a stub without `repair_user()`, the restore behaves as it did before: no output, every container warned about, includes stale, Apache 503. A stub that dies gives one generic warning, exit 0, and the reason in cPanel's `error_log`. With the real module back, a restore fixes the stale includes. The repair adds exactly one Apache reload for both apps (P1 against P3). `E2E338_EXPECT_OLD_EAPODMAN=1` runs only the first restore and asserts the bug. The manifest-only restore path is not driven. | A live cPanel VM on cgroup v2 with the webapp plugin at a build whose `Repair.pm` has `repair_user()`. docker.io reachable, `curl`, `zip`. Holds ports as root, removes `/etc/cron.d/webapp_health_sweep`, and swaps `Repair.pm` for stubs; all put back at the end (`Repair.pm` checksummed), even with `E2E338_KEEP=1`. Must not overlap anything else that allocates ports. |
 | `ea4-344-port-failure-live.t` | **A port the port authority will not give is a fatal, named error** (EA4-344). Widens `net.ipv4.ip_local_port_range` to `1024 65535`, which leaves `cpuser_port_authority` one assignable port (CPANEL-57865), and takes it as root. Then: `_get_new_ports()` as root dies `Could not assign root ports: Not enough free ports`; as a fresh account, through the real admin module's `GIVE`, it dies `Could not assign user ports: …` (proving GIVE's exit status survives the admin call, which the unit test mocks); `ea-podman install` as that account (the path a Web App deploy takes) fails naming the cause, with nothing registered, no container and no port; and, as the control, the same install succeeds with exactly one port once the range is restored. Whether the failed install leaves its container directory behind, and so pushes the retry to `.02`, is reported as TODO. With `EA4344_EXPECT_OLD_EAPODMAN=1` it asserts the old silent behaviour instead. The original range is always restored. | A live cPanel VM, any OS, cgroup v1 or v2, without CageFS on for new accounts (the probe is in `/tmp`). docker.io reachable for the control only. Must not run alongside another live test (host-wide sysctl, filled port authority). |
+| `ea4-360-userns-cgroup-live.t` | **The EA4-360 host checks.** Root's cgroup advice fits the OS: none on cgroup v2 or CloudLinux 8, `tuned-adm profile cloudlinux-default-cgv2` on CloudLinux 9/10, `grubby` elsewhere. With `user.max_user_namespaces=0`, a user's `install`/`start` (UAPI) and `list`/`install` (CLI) are refused with the message and the go.cpanel.net/userns link and no stack trace or exception id, and root's CLI is refused too. `list`, `status`, `containers`, `stop` and `uninstall` still work, and a running container keeps serving until stopped. With the sysctl restored, a fresh install serves again. That the user is not told an uninstall left podman's copy behind is reported as TODO. | A live cPanel VM, any OS, cgroup v1 or v2, docker.io reachable. Run it a second time with `EAPODMAN_TEST_USER=<caged account>` to cover the CageFS bridge. Must not run alongside another live test (host-wide sysctl, always restored at the end). |
 
 The CLI-driving tests above also check `cpwrapd_log` for the delegated CLI going
 through the lifecycle actions without ever calling `MINT_API_TOKEN` (skipped on
@@ -364,6 +365,8 @@ EAPODMAN_LIVE=1 CP54868_PROVE_HAZARD=1 /usr/local/cpanel/3rdparty/bin/perl cpane
 EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/prove -v ea4-335-create-failure-live.t
 # same, but for a CageFS-enabled account (CloudLinux only):
 EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea-memcached16-cagefs-cli-live.t
+# EA4-360: cgroup advice, and refusals without user namespaces (sets the sysctl to 0, then restores it).
+EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl ea4-360-userns-cgroup-live.t
 ```
 
 Useful environment variables (see each test's header for the full list):
@@ -401,11 +404,11 @@ them. Run one, then
 
 The cagefs test only runs on **CloudLinux** with CageFS installed **and
 initialized**; otherwise it skips. It works on the stock **cgroup v1** that
-CloudLinux defaults to — do **not** switch CloudLinux to cgroup v2: its LVE
-kernel places user processes in `/lvub/lve<uid>`, which under cgroup v2's single
-hierarchy collides with systemd's `user.slice` and breaks the per-user systemd
-manager the feature relies on. On a fresh CloudLinux VM, as root, set it up in
-this order, then run the test:
+CloudLinux defaults to, and on cgroup v2 on CloudLinux 9/10. Do **not** switch
+CloudLinux 8 to cgroup v2: its systemd 239 cannot start a user manager under
+CloudLinux's default `hidepid=2` there, so every manager started after boot fails
+(EA4-360, EA4-365). On a fresh CloudLinux VM, as root, set it up in this order,
+then run the test:
 
 ```sh
 # 1. ea-podman (must be a CPANEL-54037-aware build, not the stock EA4 package)
@@ -424,8 +427,9 @@ yum install -y cagefs
 #    - user namespaces enabled (CL10 ships user.max_user_namespaces=0, which
 #      silently breaks rootless podman's newuidmap/newgidmap step — install
 #      fails during image unpack with something like "potentially insufficient
-#      UIDs or GIDs"; `sysctl user.max_user_namespaces` to check):
-#      echo 'user.max_user_namespaces=15000' > /etc/sysctl.d/90-userns.conf && sysctl --system
+#      UIDs or GIDs"; `sysctl user.max_user_namespaces` to check). Put it
+#      back to the kernel default, half of kernel.threads-max:
+#      echo "user.max_user_namespaces=$(( $(sysctl -n kernel.threads-max) / 2 ))" > /etc/sysctl.d/90-userns.conf && sysctl --system
 
 # 5. run the cagefs live test (copy the .t file to the VM first)
 EAPODMAN_LIVE=1 /usr/local/cpanel/3rdparty/bin/perl cagefs-podman-live.t
@@ -437,9 +441,8 @@ Notes:
 - The stock EA4 `ea-podman` predates CPANEL-54037; the test skips on it. Install
   the rebuilt RPM from the `CPANEL-54037` branch.
 - The tests run on whatever cgroup hierarchy the host defaults to — no cgroup
-  switch is needed. CloudLinux 8/9/10 stay on their default cgroup v1 (do **not**
-  switch CloudLinux to v2 — see the warning above); AlmaLinux 8 runs the tests on
-  its default cgroup v1; AlmaLinux 9/10 and Ubuntu 24.04 run on cgroup v2.
+  switch is needed. CloudLinux 8/9/10 and AlmaLinux 8 run the tests on their
+  default cgroup v1; AlmaLinux 9/10 and Ubuntu 24.04 run on cgroup v2.
 - **`cagefsctl --init`/`--reinit` may print a one-off mount error** on newer
   kernels (seen on CloudLinux 10 / AlmaLinux 10.2, kernel 6.12), e.g.:
   ```
