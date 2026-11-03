@@ -84,7 +84,7 @@ cleanup() {
     fi
     as_user /usr/bin/podman rm -f "$TERM_CT" >/dev/null 2>&1
     systemctl stop "$TEST_UNIT" 2>/dev/null
-    rm -f "/run/systemd/system/$TEST_UNIT" "$ETC/pidfile-writer" "$RUNDIR/test.pid"
+    rm -f "/run/systemd/system/$TEST_UNIT" "$ETC/pidfile-writer" "$RUNDIR/test.pid" "$RUNDIR/test.pid.sent"
     systemctl daemon-reload
     systemctl reset-failed "$TEST_UNIT" 2>/dev/null
     kill "$DECOY" 2>/dev/null
@@ -146,11 +146,13 @@ cat >"$ETC/pidfile-writer" <<'EOF'
 sleep 300 </dev/null >/dev/null 2>&1 &
 t=$1; [ "$t" = self ] && t=$!
 echo "$t" >"$2"
+# systemd deletes the PID file when a refused start is torn down; keep what was written.
+echo "$t" >"$2.sent"
 EOF
 chmod 0755 "$ETC/pidfile-writer"
 pid_case() {    # label, target (a PID or "self"), expect accept|refuse
     local label=$1 target=$2 expect=$3 rc main written t
-    rm -f "$RUNDIR/test.pid"
+    rm -f "$RUNDIR/test.pid" "$RUNDIR/test.pid.sent"
     cat >"/run/systemd/system/$TEST_UNIT" <<UNIT
 [Service]
 Type=forking
@@ -167,7 +169,7 @@ UNIT
     t=$(cursor) || exit 1
     systemctl start "$TEST_UNIT" 2>/dev/null; rc=$?
     main=$(systemctl show -p MainPID --value "$TEST_UNIT")
-    written=$(cat "$RUNDIR/test.pid" 2>/dev/null)
+    written=$(cat "$RUNDIR/test.pid.sent" 2>/dev/null)
     echo "  $label: start exit $rc, Result=$(systemctl show -p Result --value "$TEST_UNIT"), MainPID $main, PID file $written"
     journal_since "$t" "$TEST_UNIT"
     if [ "$expect" = refuse ]; then
@@ -204,8 +206,9 @@ echo; echo "== 5. stop a container whose PID 1 exits 143 on SIGTERM"
 img=$(as_user /usr/bin/podman container inspect --format '{{.ImageName}}' "web.$U.01")
 as_user /usr/bin/podman rm -f "$TERM_CT" >/dev/null 2>&1
 # PID 1 with a TERM handler that exits 143, like a JVM (or catatonit forwarding SIGTERM).
+# --stop-signal=TERM: the nginx image's STOPSIGNAL is SIGQUIT, which sh as PID 1 ignores.
 if ! as_user /usr/bin/podman create --name "$TERM_CT" --conmon-pidfile "$(conmon_pidfile "$TERM_CT")" \
-        --memory=64m "$img" sh -c 'trap "exit 143" TERM; while :; do sleep 1; done' >/dev/null; then
+        --stop-signal=TERM --memory=64m "$img" sh -c 'trap "exit 143" TERM; while :; do sleep 1; done' >/dev/null; then
     check "created $TERM_CT from $img (test 5 not run)" false
 else
     term_stop() {    # SuccessExitStatus value, "" for none; echoes "<container exit code> <unit Result>"
