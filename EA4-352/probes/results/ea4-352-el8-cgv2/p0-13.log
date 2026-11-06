@@ -1,0 +1,19 @@
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v2 systemd=239 podman=4.9.4-rhel
+RESULT p0-13.oci_runtime runc 1.2.9
+
+### exec from the slice runner
+RESULT p0-13.exec_from_runner works; runner transient (/eapodman.slice/eapodman-1000.slice/eapodman-run-1000-test-12958-1.service)
+
+### exec from the account's login shell (ea-podman bash)
+RESULT p0-13.exec_from_login_shell works; caller's login session scope (not moved) (/user.slice/user-0.slice/session-83.scope)
+
+### exec from inside the container unit's delegated subtree (F14 option 2)
+RESULT p0-13.exec_from_unit_subtree works; container's cgroup (/eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/libpod-payload-cc7c7f6d242438de48d64620a84ce4b47ce2882e5f6c959e312e10ae7498daa3)
+
+### exec killed at the runner's RuntimeMaxSec
+RESULT p0-13.exec_killed_at_runtimemaxsec yes (rc=1 after 5s)
+
+### 1.x parity: exec into a user@-managed container
+  run rc=0: 599226a70d249b36ffbd531911c021316e0b42fa86a8d456060c24fe599df1d7
+  container init: 0::/user.slice/user-1000.slice/user@1000.service/user.slice/libpod-599226a70d249b36ffbd531911c021316e0b42fa86a8d456060c24fe599df1d7.scope
+RESULT p0-13.parity_1x_exec_from_login_shell works; container's cgroup (1.x scope) (/user.slice/user-1000.slice/user@1000.service/user.slice/libpod-599226a70d249b36ffbd531911c021316e0b42fa86a8d456060c24fe599df1d7.scope)

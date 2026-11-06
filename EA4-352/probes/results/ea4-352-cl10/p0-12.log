@@ -1,0 +1,36 @@
+host ea4-352-cl10 os=cloudlinux-10 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+RESULT p0-12.userns_create_hook yes
+RESULT p0-12.bpf_in_lsm_list yes
+
+### build and load
+  eapodman.slice cgroup id 1363
+RESULT p0-12.load_and_attach works
+  counters: 
+
+### must work (inside eapodman.slice)
+RESULT p0-12.runner_podman_unshare works
+RESULT p0-12.units_restart 200 200 200 
+Job for ea-podman-web.eapodtest.01.service failed because start of the service was attempted too often.
+See "systemctl status ea-podman-web.eapodtest.01.service" and "journalctl -xeu ea-podman-web.eapodtest.01.service" for details.
+To force a start use "systemctl reset-failed ea-podman-web.eapodtest.01.service"
+followed by "systemctl start ea-podman-web.eapodtest.01.service" again.
+Job for ea-podman-api.eapodtest.02.service failed because start of the service was attempted too often.
+See "systemctl status ea-podman-api.eapodtest.02.service" and "journalctl -xeu ea-podman-api.eapodtest.02.service" for details.
+To force a start use "systemctl reset-failed ea-podman-api.eapodtest.02.service"
+followed by "systemctl start ea-podman-api.eapodtest.02.service" again.
+Job for ea-podman-worker.eapodtest.03.service failed because start of the service was attempted too often.
+See "systemctl status ea-podman-worker.eapodtest.03.service" and "journalctl -xeu ea-podman-worker.eapodtest.03.service" for details.
+To force a start use "systemctl reset-failed ea-podman-worker.eapodtest.03.service"
+followed by "systemctl start ea-podman-worker.eapodtest.03.service" again.
+RESULT p0-12.anchor_restart_after_pause_killed anchor rc=0; ports 000 000 000 
+RESULT p0-12.install_standin_create_and_start works
+RESULT p0-12.plugin_build_standin works
+RESULT p0-12.nested_userns_inside_container nested-ok
+
+### must be denied (outside eapodman.slice)
+RESULT p0-12.ssh_shell_unshare n/a: failed for another reason (-bash: line 1: unshare: command not found)
+RESULT p0-12.ssh_shell_raw_podman_run n/a: failed for another reason (-bash: line 1: podman: command not found)
+RESULT p0-12.cron_like_system_slice_unshare denied (unshare: unshare failed: Operation not permitted)
+RESULT p0-12.user_slice_unshare denied (unshare: unshare failed: Operation not permitted)
+RESULT p0-12.root_unshare works
+  counters: 

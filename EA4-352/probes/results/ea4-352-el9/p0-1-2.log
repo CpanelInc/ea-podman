@@ -1,0 +1,39 @@
+host ea4-352-el9 os=almalinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+
+### create a 1.x container in the account's own session (default storage, systemd manager)
+  rc=0 e46db2d140a4e9091dd9e1b1083eca13eae8146c51e58b7bd9fda7ccfbfa70d0
+  1.x info: systemd /home/eapodtest/.local/share/containers/storage /run/user/1000/containers db=sqlite
+  recorded: cgroupmgr=systemd cgroups=default parent=user.slice conmonpid=/run/user/1000/containers/overlay-containers/e46db2d140a4e9091dd9e1b1083eca13eae8146c51e58b7bd9fda7ccfbfa70d0/userdata/conmon.pid
+
+### A: 1.x session still up (/run/user/1000 there), new env
+RESULT p0-1.A_runroot_used /run/user/1000/containers
+RESULT p0-1.A_old_container_listed yes
+
+### P0-2 (A): start the 1.x container from a system unit with cgroupfs
+RESULT p0-2.A_rootless_1x_start_from_cgroupfs_unit FAILS: conmon e46db2d140a4e9091dd9 <error>: Failed to create container: exit status 1 Error: unable to start container "e46db2d140a4e9091dd9e1b1083eca13eae8146c51e58b7bd9fda7ccfbfa70d0": crun: sd-bus call: Interactive authentication required.: Permission denied: OCI permission denied 
+  session ended: /run/user/1000 gone
+
+### B: /run/user/1000 gone too (after the migration's step 12, or a logout)
+
+### P0-1: old DB, new XDG_RUNTIME_DIR, pinned env (old-storage.conf without runroot)
+  rc=125 time="2026-11-06T20:21:55Z" level=warning msg="RunRoot is pointing to a path (/run/user/1000/containers) which is not writable. Most likely podman will fail." Error: configure storage: mkdir /run/user/1000: permission denied 
+RESULT p0-1.runroot_used configure
+RESULT p0-1.outcome other: Error: configure storage: mkdir /run/user/1000: permission denied
+RESULT p0-1.message none
+  ps -a: time="2026-11-06T20:21:55Z" level=warning msg="RunRoot is pointing to a path (/run/user/1000/containers) which is not writable. Most likely podman will fail." Error: configure storage: mkdir /run/user/1000: permission denied 
+RESULT p0-1.old_container_listed no
+
+### P0-1: old-storage.conf with an explicit runroot in the new runtime dir
+  rc=125 time="2026-11-06T20:21:55Z" level=warning msg="RunRoot is pointing to a path (/run/user/1000/containers) which is not writable. Most likely podman will fail." Error: configure storage: mkdir /run/user/1000: permission denied 
+RESULT p0-1.explicit_runroot ERROR: Error: configure storage: mkdir /run/user/1000: permission denied
+
+### P0-2 (B): start the 1.x container from a system unit with cgroupfs
+RESULT p0-2.B_rootless_1x_start_from_cgroupfs_unit FAILS: Error: configure storage: mkdir /run/user/1000: permission denied 
+
+### P0-2 rootful: rename keeps ID and named-volume mounts?
+  before 8ac661cb60ba5171c36d259015793a6714af8d5d2cc00ec89874036e9b08116f [p02vol:/data ]  after 8ac661cb60ba5171c36d259015793a6714af8d5d2cc00ec89874036e9b08116f [p02vol:/data ]
+RESULT p0-2.rootful_rename keeps ID and mounts
+
+### P0-2 rootful: a 1.x-style rootful container (systemd manager) started from a cgroupfs unit
+  recorded: cgroupmgr=systemd parent=
+RESULT p0-2.rootful_1x_start_from_cgroupfs_unit starts; container in /machine.slice/libpod-8ac661cb60ba5171c36d259015793a6714af8d5d2cc00ec89874036e9b08116f.scope/container

@@ -52,11 +52,11 @@ in_container() {
 }
 # Same, in the background. sh execs into the command, so the PID in BG is the load itself.
 # Dies if the load isn't still running a second later (setpriv failure, unwritable cgroup.procs).
-BG=()
+BG=(); declare -A BGBY
 in_container_bg() {
     local c=$1 p pid; p=$(payload "$c") || exit 1; shift
     sh -c "$ENTER" _ "$p" "$@" </dev/null >/dev/null 2>&1 &
-    pid=$!; BG+=("$pid")
+    pid=$!; BG+=("$pid"); BGBY[$c]+=" $pid"
     sleep 1
     kill -0 "$pid" 2>/dev/null || { echo "background load '$*' in $c died at once" >&2; exit 1; }
 }
@@ -67,7 +67,9 @@ bg_alive() {
         kill -0 "$pid" 2>/dev/null || { echo "background load $pid died; measurements would be meaningless" >&2; exit 1; }
     done
 }
-stop_bg() { [ ${#BG[@]} -gt 0 ] && kill "${BG[@]}" 2>/dev/null; wait 2>/dev/null; BG=(); }
+stop_bg() { [ ${#BG[@]} -gt 0 ] && kill -CONT "${BG[@]}" 2>/dev/null; [ ${#BG[@]} -gt 0 ] && kill "${BG[@]}" 2>/dev/null; wait 2>/dev/null; BG=(); BGBY=(); }
+# Pause or resume one container's background loads (SIGSTOP/SIGCONT; they stay "alive").
+bg_signal() { local sig=$1 n; shift; for n in "$@"; do kill "-$sig" ${BGBY[$n]} 2>/dev/null; done; }
 export UID_ GID_
 
 # Every container must have its payload cgroup before anything is measured.
@@ -134,7 +136,16 @@ cpu_test() {
     for n in "${NAMES[@]}"; do
         for ((k = 0; k < ${loops[$n]}; k++)); do in_container_bg "$n" sh -c 'exec yes >/dev/null'; done
     done
-    cpu_measure "A. caps only (cpu.max from --cpus; 4 host CPUs, caps total 3.5)" 1.00 2.00 0.50
+    if [ "$(nproc)" -ge 4 ]; then
+        cpu_measure "A. caps only (cpu.max from --cpus; $(nproc) host CPUs, caps total 3.5)" 1.00 2.00 0.50
+    else
+        # Caps total 3.5 would overcommit this host, so measure them in two rounds that fit.
+        bg_signal STOP "api.$U.02"
+        cpu_measure "A1. caps only, api paused ($(nproc) host CPUs; web+worker caps total 1.5)" 1.00 0.00 0.50
+        bg_signal STOP "web.$U.01" "worker.$U.03"; bg_signal CONT "api.$U.02"
+        cpu_measure "A2. caps only, web and worker paused (api cap 2.0)" 0.00 2.00 0.00
+        bg_signal CONT "web.$U.01" "worker.$U.03"
+    fi
 
     set_cg "$A/cpu.max" "100000 100000" || exit 1
     cpu_measure "B. account slice squeezed to 1 CPU: unit CPUWeight 100/200/50 decides" 0.29 0.57 0.14

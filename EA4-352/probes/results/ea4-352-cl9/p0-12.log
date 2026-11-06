@@ -1,0 +1,4 @@
+host ea4-352-cl9 os=cloudlinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+RESULT p0-12.userns_create_hook no
+RESULT p0-12.bpf_in_lsm_list yes
+RESULT p0-12.supported no

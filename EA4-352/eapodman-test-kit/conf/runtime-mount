@@ -18,6 +18,14 @@ mountpoint -q "$d" || mount -t tmpfs -o "size=10%,mode=0700,uid=$uid,gid=$gid,no
 # only a real directory is kept (an existing one holds live CNI state, so it isn't wiped).
 if [ -L "$d/cni" ] || { [ -e "$d/cni" ] && [ ! -d "$d/cni" ]; }; then rm -f "$d/cni"; fi
 [ -d "$d/cni" ] || install -d -o "$uid" -g "$gid" -m 0700 "$d/cni"
+# SELinux (EL enforcing): a dir podman creates on this tmpfs gets container_runtime_tmpfs_t, which
+# pasta_t (podman 5's rootless network) may not search, so the container can't start. Root
+# pre-creates netns as user_tmp_t, as it is under logind's /run/user/<uid> (pasta_t may search and
+# watch that). The mount itself keeps tmpfs_t: PID 1 (init_t) can't read a conmon.pid labelled
+# user_tmp_t, but can read the container_runtime_tmpfs_t ones podman writes here. PLAN.md F19.
+if [ -L "$d/netns" ] || { [ -e "$d/netns" ] && [ ! -d "$d/netns" ]; }; then rm -f "$d/netns"; fi
+[ -d "$d/netns" ] || install -d -o "$uid" -g "$gid" -m 0700 "$d/netns"
+if command -v selinuxenabled >/dev/null && selinuxenabled; then chcon -t user_tmp_t "$d/netns"; fi
 mkdir -p -m 0755 /run/ea-podman/xdg
 x=/run/ea-podman/xdg/$uid
 rm -rf "$x"

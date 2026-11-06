@@ -1,0 +1,19 @@
+Removed /etc/systemd/system/multi-user.target.wants/ea-podman-api.eapodtest.02.service.
+Removed /etc/systemd/system/multi-user.target.wants/ea-podman-web.eapodtest.01.service.
+Removed /etc/systemd/system/multi-user.target.wants/ea-podman-worker.eapodtest.03.service.
+all checks passed
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v2 systemd=239 podman=4.9.4-rhel
+RESULT p0-3.hidepid none
+
+### systemctl stop
+RESULT p0-3.stop rc=0 after 1s; ActiveState=inactive Result=success
+RESULT p0-3.stop_exit_file_timeout no
+RESULT p0-3.killmode_reaped none needed
+RESULT p0-3.leftovers_in_unit_cgroup none
+RESULT p0-3.podman_state_after_stop exited
+
+### UNIT_REMOVE order: podman rm after the stop
+RESULT p0-3.rm_after_stop works
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v2 systemd=239 podman=4.9.4-rhel
+RESULT p0-10.linger no
+RESULT p0-10.planted /home/eapodtest/.config/systemd/user/clos7971-canary.service

@@ -1,0 +1,25 @@
+host ea4-352-cl8-cgv1 os=cloudlinux-8.10 kernel=4.18.0-553.177.1.lve.1.el8.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+
+### 1. placement
+RESULT p0-4.conmon_cgroup /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.container_cgroup /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/d6d6c0afe0ca74fcbab95279fb128865861e0c08f32f8f8667041d0865679086
+RESULT p0-4.pause_cgroup /eapodman.slice/eapodman-1001.slice/ea-podman-runtime@1001.service
+RESULT p0-4.v1_memory_conmon /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.v1_memory_container /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.v1_pids_conmon /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.v1_pids_container /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.v1_cpu_cpuacct_conmon /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.v1_cpu_cpuacct_container /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+
+### 2. stopping one unit
+RESULT p0-4.stop_one_unit_others_unaffected yes
+
+### 4./5. v1: swap accounting and shares
+RESULT p0-4.swap_on_host 0 swap devices
+RESULT p0-4.web_cpu_shares_cgroup 1024
+RESULT p0-4.web_memsw_file present
+RESULT p0-4.web_memory_limit 9223372036854771712
+
+### 6./7. split vs no split, and is the mode fixed at create (F17)
+RESULT p0-4.p04split_created_split_started_nosplit recorded=default FAILS: Error: unable to start container "3c3f79f84947d15cbcb0fc8a0bca3779e29761280f0e56f360f1ad43d0f1c1ff": mkdir /sys/fs/cgroup/blkio/eapodman.slice/runtime: permission denied
+RESULT p0-4.p04nosplit_created_nosplit_started_split recorded=default starts; in /eapodman.slice/eapodman-1001.slice/ea-podman-p04nosplit.eapodtest.81.service/ee231b42d9559b219c2ec06f60f6d47f61240f645aa781c2677bbae6b6fa1faf; memory.limit=9223372036854771712

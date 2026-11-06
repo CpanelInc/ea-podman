@@ -1,0 +1,54 @@
+#!/bin/bash
+# P0-10: the CLOS-7971 canary, plus the reboot checks for P0-3/P0-4.
+#   p0-10.sh pre   plant a user unit in ~/.config/systemd/user (enabled for default.target) that
+#                  leaves a marker if it ever runs; record the state; then reboot the host.
+#   p0-10.sh post  after the reboot: the canary never ran, no user@<uid>, and the 2.0 layout came
+#                  back by itself (anchor tmpfs, XDG dir, units, conmon placement, ports).
+# (A stand-in for PLAN.md's test.sh, which isn't in the repo.)
+set -uo pipefail
+cd "$(dirname "$0")"; PROBE=p0-10; . ./plib.sh
+MARK=/var/tmp/clos7971-canary-$UID_
+UD=$HOME_/.config/systemd/user
+case ${1:-} in
+pre)
+    install -d -o "$U" -g "$GID_" "$HOME_/.config" "$HOME_/.config/systemd" "$UD" "$UD/default.target.wants"
+    cat >"$UD/clos7971-canary.service" <<EOF
+[Unit]
+Description=CLOS-7971 canary (must never run)
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo "ran as \$(id) at \$(date) caps \$(grep CapEff /proc/self/status) mntns \$(readlink /proc/self/ns/mnt)" >>$MARK'
+[Install]
+WantedBy=default.target
+EOF
+    ln -sf ../clos7971-canary.service "$UD/default.target.wants/clos7971-canary.service"
+    chown -R "$U:$GID_" "$UD"
+    rm -f "$MARK"
+    result linger "$(ls /var/lib/systemd/linger/ 2>/dev/null | grep -qx "$U" && echo YES || echo no)"
+    result planted "$UD/clos7971-canary.service"
+    date +%s >/var/tmp/p0-10-reboot-at
+    ;;
+post)
+    result booted_after_pre "$([ "$(cut -d. -f1 /proc/uptime)" -lt $(( $(date +%s) - $(cat /var/tmp/p0-10-reboot-at) )) ] && echo yes || echo NO)"
+    sleep 20   # let enabled units settle
+    result canary_ran "$([ -e "$MARK" ] && echo "YES: $(cat "$MARK")" || echo no)"
+    result user_manager "$(systemctl is-active "user@$UID_.service")"
+    result user_manager_units "$(systemctl list-units --all --no-legend 'user@*' | wc -l)"
+    result runtime_carveouts "$(ls /run/systemd/system/user@* 2>/dev/null | wc -l)"
+    result anchor "$(systemctl is-active "ea-podman-runtime@$UID_.service")"
+    result runtime_tmpfs "$(findmnt -no FSTYPE,OPTIONS "$RUNDIR" | cut -c1-80)"
+    result xdg_dir "$(cd "$XDGDIR" 2>/dev/null && find . -mindepth 1 -printf '%p->%l ' || echo missing)"
+    for n in web.$U.01 api.$U.02 worker.$U.03; do
+        u=ea-podman-$n.service
+        m=$(systemctl show -p MainPID --value "$u")
+        result "unit_${n%%.*}" "$(systemctl is-active "$u") MainPID=$m($(ps -o comm= -p "$m" 2>/dev/null)) in $(grep -E '^0::|name=systemd' /proc/$m/cgroup 2>/dev/null | cut -d: -f3)"
+    done
+    for p in 8081 8082 8083; do result "port_$p" "$(curl -s -m3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$p/)"; done
+    if [ $CGV = 2 ]; then
+        result split_after_reboot "$(ls -d "$CG/eapodman.slice/eapodman-$UID_.slice/ea-podman-web.$U.01.service"/libpod-payload-* >/dev/null 2>&1 && echo yes || echo no)"
+    fi
+    result slice_dropins "$(systemctl show -p MemoryLow -p MemoryMax -p TasksMax --value "eapodman-$UID_.slice" | tr '\n' ' ')"
+    rm -rf "$UD/clos7971-canary.service" "$UD/default.target.wants/clos7971-canary.service" "$MARK" /var/tmp/p0-10-reboot-at
+    ;;
+*) echo "usage: $0 pre|post" >&2; exit 2 ;;
+esac

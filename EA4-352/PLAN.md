@@ -103,20 +103,36 @@ That gives those accounts back exactly what CLOS-4517 removed.
   - **CloudLinux:** it may protect nothing. Page cache isn't charged to the writer's cgroup (CL8, CL9 and CL10, reproduced outside the kit), so there is nothing in the cgroup for a floor to keep.
 
   The units still carry `MemoryLow=`. The plugin's account floor (Phase 6) and the release notes say where it works.
+
+  **T0.2 (P0-4): MGLRU disables the floors against host-wide pressure.** Under pressure from outside the slices (a file 1.5× RAM streamed from `system.slice`), the floors only held where the kernel's multi-gen LRU is off:
+  - **No MGLRU** (EL8 4.18, Ubuntu 22.04 5.15): a 300M page-cache holder under `eapodman-<uid>.slice` (account and `eapodman.slice` floors 832M, its own `MemoryLow=400M`) kept 100%;
+  - **MGLRU on** (`/sys/kernel/mm/lru_gen/enabled` = `0x0007` by default on EL9, EL10, CL9, CL10 and Ubuntu 24.04): the same holder kept 2–4%, the same as one with no floor. With `echo n > /sys/kernel/mm/lru_gen/enabled`, EL9 and Ubuntu 24.04 kept 100% again;
+  - **Pressure inside the account slice** (the kit's `loadtest.sh`, slice `memory.max` 250M below usage) still respects the unit floors on every non-CloudLinux v2 host, MGLRU or not: web kept 245–252M against its 256M floor.
+
+  So on EL9+, CloudLinux 9/10 and Ubuntu 24.04 as shipped, `MemoryLow=` protects a container against its own account, not against the rest of the host. Decision: open (Open items).
 - **F14: `podman exec` processes are not in the container's cgroup.** An exec'd process stays in its caller's cgroup. The OCI runtime (runc on EL8, crun elsewhere) can't move it into the container's `libpod-payload-*` cgroup: on cgroup v2 a move needs write access to `cgroup.procs` of the common ancestor, which is the root-owned `eapodman-<uid>.slice`. The rootless runtime ignores the failure. This happens even when the caller is a delegated transient. Since every 2.0 exec goes through the slice runner, an exec'd process runs in the runner's transient unit under `eapodman-<uid>.slice`:
   - it is bound by the account slice (`MemoryMax`, `TasksMax`, CPU weight), LVE (P0-6) and the namespace rule (F11), but **not** by the container's `--memory`/`--cpus`/`--pids-limit`, and it is not counted in the container's cgroup or `podman stats`;
   - it lives only as long as the runner: `RuntimeMaxSec` and `KillMode=control-group` end it, so `podman exec -d` can't outlive the call.
 
   **Decision: accept and document.** Per-container limits are a resource-planning tool, not a boundary against the account, which can run any process outside them from its own shell. The alternative (root moves the exec'd process into the container unit's delegated subtree) is a follow-up (Open items). 2.0 refuses `exec -d`/`--detach` through ea-podman (Phase 3b) and documents the rest (Phase 7). 1.x very likely behaves the same (an SSH session and `user@<uid>` share only the root-owned `user-<uid>.slice`); P0-13 confirms it.
 
+  **T0.2 (P0-13) overturns part of this. The decision above needs revisiting (F20).** "The rootless runtime ignores the failure" holds for runc only:
+  - **crun** (every target except EL8 and CL8: crun 0.17, 1.14.1, 1.27, 1.30.1): `podman exec` from the slice runner, and from the account's own shell (`ea-podman bash`), **fails**: `crun: write to …/libpod-payload-<id>/cgroup.procs: Permission denied: OCI permission denied`, exit 126;
+  - **runc on v2** (EL8 v2): it works and stays in the caller's cgroup, as described above;
+  - **runc on v1** (EL8 v1, CL8): it works and lands in the container's own cgroup (v1 has no common-ancestor rule);
+  - **1.x does not behave the same.** On every unmasked host, an exec from a login session into a `user@`-managed container lands in the container's own cgroup (podman's systemd cgroup manager moves it).
+
   **Evidence** (AlmaLinux 8.10, cgroup v2, systemd 239, podman 4.4.1, runc 1.1.4; `EA4-352/eapodman-test-kit/loadtest.sh`): `podman exec <web> cat /proc/self/cgroup` shows the runner's `run-u*.service`, with and without `Delegate=yes` on it; a 600M allocation by `podman exec` succeeds in a container with `--memory=512m`, and is OOM-killed (exit 137, `oom_kill` 0 → 1) when the same process is placed in the container's cgroup. The same run confirmed F12/F13: `--cpus` caps exact (1.01/2.01/0.50); `memory.swap.max=0` with no swap used while the host had swap; with equal unit weights, the containers' own `--cpu-shares` (runc weights 39/79/20) made no difference. With the unit's `MemoryLow=`, the page cache held near its floor under slice pressure: web 400M → 251M against a 256M floor, worker 200M → 61M against 64M. But the control without it kept about as much (web 232M, worker 88M; EA4-357 comment 1802943), so on EL8 this run doesn't show the floor protecting (F13).
+
+- **F20: on crun, `podman exec` only works from inside the container unit's delegated subtree** (T0.2, P0-13). A caller that root has placed in a sub-cgroup of `ea-podman-<name>.service` (F14 option 2, Open items) gets its exec'd process into the container's `libpod-payload-*` cgroup on all 9 hosts, crun and runc, v1 and v2. Every other caller fails on crun. This includes the slice runner, a `Delegate=yes` transient (the common ancestor is still the root-owned account slice), and the account's SSH shell. So, as planned, 2.0 breaks `ea-podman bash` and every exec on EL9, EL10, CL9, CL10 and Ubuntu, where 1.x works. `ea-podman cmd` (`exec_in_container`, `nsenter` as root, `util.pm:201`) doesn't use `podman exec` and is unaffected. Decision: open (Open items).
 
 - **F15: a SIGKILLed conmon leaves the container down until it is recreated.** conmon is the unit's main process (`PIDFile=`). With `--cgroups=split` it shares the unit's cgroup with the container, so when conmon dies systemd kills the container too, and no exit status is ever recorded. podman 4.4 then still lists the container as running (or as stopping, after the `ExecStopPost=podman stop` that 1.x units also carry). Every `Restart=` attempt's `podman start` fails ("must be in Created or Stopped state"), the start limit is reached and the unit stays failed. `podman container cleanup` doesn't clear it; only `podman rm -f` and a recreate do. Killing the container's own init instead recovers in about 7 s.
   - **Who can cause it:** the account, which owns conmon, and an OOM kill in the account slice (`MemoryMax`, Phase 6), which can pick conmon. A rootless conmon can't lower its own `oom_score_adj`.
   - **Which podman versions** (Julian, EA4-357 comment 1803523):
     - **Reproduces:** podman 4.4.1 (the AlmaLinux 8.10 host below) and 4.9.3 on Ubuntu 24.04.
     - **Doesn't reproduce:** 4.9.4-rhel (AlmaLinux 8.10, CloudLinux 8) and 5.8.2 (AlmaLinux 9.8 and 10.2, CloudLinux 9 and 10). There the container whose conmon was killed is back in about 7 s.
-    - **Untested:** Ubuntu 22.04 (podman 3.4).
+    - **Ubuntu 22.04 (podman 3.4.4), T0.2:** a different failure. `Restart=` brings the unit back (new conmon, `NRestarts` 1, container `Up`), but the container's published port is gone: `Connection refused`, its rootlessport died with the old conmon. The unit looks healthy and serves nothing.
+    - **T0.2 matrix** (kit `lifecycle.sh`, all 9 VMs): recovers on 4.9.4-rhel (EL8 v1 and v2, CL8 v1) and 5.8.2 (EL9, EL10, CL9, CL10); Ubuntu 24.04 (4.9.3) as above.
   - **Not yet known:** whether 1.x behaves the same. Under 1.x, conmon and the container are in different cgroups, so the container probably survives a conmon kill.
   - **Decision: open** (Open items). Ubuntu 24.04 (and any host still on an affected podman) needs a fix or a documented recovery before 2.0 ships, because an account-slice OOM is a normal event.
   - **Evidence** (same host; `EA4-352/eapodman-test-kit/lifecycle.sh` tests 1 and 3): `Failed with result 'signal'`, then on each restart `Error: unable to start container …: container state improper` and `Failed with result 'exit-code'`, and finally the start limit.
@@ -140,6 +156,7 @@ That gives those accounts back exactly what CLOS-4517 removed.
     - **`--cgroups=enabled`:** the container stays in the unit's cgroup and nothing is enforced, with or without the pin. The flag overrides the pin.
     - In the account's own `user@` session, with the systemd manager, all three forms enforced. That was tested on AlmaLinux 10.2 only.
     - **On CloudLinux 8.10** (runc), `--cgroups=enabled` failed to start. That is unexplained; it may be the exit-143 race of a foreground `podman run` (Dan, EA4-352 comment 1806527 and EA4-358 comment 1806496).
+      **T0.2 explains it:** with runc, a container created without split *and with limits* (`--memory`) can't start from the unit on v2: `runc create failed: … rootless needs no limits + no cgrouppath when no permission is granted for cgroups: mkdir /sys/fs/cgroup/eapodman.slice/eapodman-<uid>.slice/<id>: permission denied` (EL8 v2, podman 4.9.4, runc 1.2.9). crun starts the same container and ignores the limits.
   - **Fix:**
     - **v2 only:** the split pin is conditional on the host's cgroup version, and the pinned file follows the host when the version changes (Phase 1).
     - **One source:** the pinned config is the only source of the cgroups mode and the cgroup manager. `validate_start_args` and CMD refuse `--cgroups*`, `--cgroup-parent`, `--cgroup-conf` and the global `--cgroup-manager` (Phase 3b; EA4-358 comment 1806496). ea-podman's own creates never pass `--cgroups`. CPANEL-57893 passes `--cgroups=enabled` for capped containers (`SOURCES/util.pm:511` on `CPANEL-57893-full`; not on `CPANEL-57513` or main). 2.0 drops that flag in Phase 1, next to this pin.
@@ -148,6 +165,13 @@ That gives those accounts back exactly what CLOS-4517 removed.
       - after v2 → v1, it won't start.
 
       The registry records `cgroup_v` at create, and root's cgroup check names those containers.
+
+      **T0.2 confirmed all of this** (P0-4):
+      - **Fixed at create on podman 3.4.4, 4.9.3, 4.9.4 and 5.8.2.** A split-created container runs split, with its `memory.max`, under a pinned conf without split. A container created without split stays unsplit (`memory.max` = max) under the split conf.
+      - **v1:** a container created under split fails to start on EL8 and CL8 (`mkdir /sys/fs/cgroup/blkio/eapodman.slice/runtime: permission denied`).
+      - **A real switch on EL8,** with the pinned conf re-rendered for the new version:
+        - **v2 → v1:** the split containers fail to start (`mkdir /sys/fs/cgroup/cpu,cpuacct/…/runtime: permission denied`). Back on v2 they start again, with their limits.
+        - **v1 → v2:** the v1 containers start and run with no limits. Rootless podman on v1 drops the limits from the spec at create, so runc's "no limits" rule above doesn't trip.
 
 - **F18: on CloudLinux cgroup v2, a process is in its LVE or in the unit's cgroups, not both** (Chris, EA4-358 comment 1806575; tested on CloudLinux 10, 9.8 and 8.10).
   - **What entering the LVE does:** a process that enters through `PAMName=` (with `pam_lve`) or `lve_wrapper` leaves the unit's cgroup. It moves into the LVE's own cgroup under `lvub` (`/lve.slice/lvub/full/lve<uid>` on the later hosts), outside the account slice:
@@ -162,6 +186,22 @@ That gives those accounts back exactly what CLOS-4517 removed.
     3. **A per-host choice,** set in `runtime.conf`.
     4. **A CloudLinux-side change** that lets an LVE account for a systemd-delegated subtree. This is for the CloudLinux conversation, together with CL10's `max_user_namespaces=0` and F11.
   - **cgroup v1 may differ.** LVE and systemd use separate hierarchies there, so LVE membership and the unit's placement may coexist. Per-container limits are unenforced on v1 anyway (F12, F17). P0-6 probes it.
+  - **T0.2 (P0-6), CL8 v1, CL9 and CL10:**
+    - **v1 does differ.** A `PAMName=ea-podman` unit's process is in `/lve.slice/lve<uid>` for `memory`, `pids` and `cpu,cpuacct`, and in its unit for `name=systemd`, so `systemctl stop` reaches it. The LVE owns the limits there: a slice `MemoryMax=100M` didn't stop a 300M allocation. On v2 the process is wholly in `/lve.slice/lvub/full/lve<uid>`, as above.
+    - **`PAMName=` can't run podman for a caged account.** `pam_lve.so 500 1` (CloudLinux's own `su`/`sshd` line) puts the session in CageFS, where `/usr/bin/podman` doesn't exist: the container unit fails with `203/EXEC`. With `500 0`, `pam_lve` refuses the caged account's session (`PAM failed: Permission denied`, `224/PAM`). So option 2 ("LVE wins") doesn't work through `PAMName=` as planned.
+    - **`/etc/pam.d/ea-podman` needs an `account` line.** systemd runs the account stack too. Without one it falls through to `/etc/pam.d/other` (`pam_deny`) and every start fails with `224/PAM`. The probe used `account required pam_permit.so`.
+    - **The runner loses its deadline on v2.** A `systemd-run --uid -p PAMName=ea-podman -p RuntimeMaxSec=5` transient returned on time (rc 1), but its processes kept running in the LVE cgroup. They are outside the unit's cgroup, so `KillMode=control-group` can't reach them. That breaks 4.2a's guarantee. On v1 they were all killed.
+
+- **F19: SELinux blocks pasta in the runtime tmpfs** (T0.2; EL9 and EL10 enforcing, podman 5.8.2 with pasta). Neither EA4-357's hosts nor the CloudLinux VMs (SELinux disabled) hit this.
+  - **The failure:** on a plain tmpfs (`tmpfs_t`), the `netns` dir podman creates is labelled `container_runtime_tmpfs_t`. `pasta_t` may not search that, so every container fails to start: `pasta: Couldn't open network namespace /run/ea-podman/user/<uid>/netns/…: Permission denied`. logind's `/run/user/<uid>` is `user_tmp_t`, which `pasta_t` may use.
+  - **Labelling the whole mount `user_tmp_t` doesn't work.** pasta then starts, but PID 1 (`init_t`) may not open a `user_tmp_t` `conmon.pid`, and the unit times out (`Can't convert PID files … O_PATH file descriptor to proper file descriptor: Permission denied`).
+  - **Fix (in the kit's `conf/runtime-mount`):** keep the mount `tmpfs_t`, so podman's `conmon.pid` files get `container_runtime_tmpfs_t`, which `init_t` may read. The root helper pre-creates `netns` (owned by the account, 0700) and labels it `user_tmp_t` (`chcon`), so pasta may search and watch it. With this, no AVC denials on EL9 or EL10, pasta exits with its container, and it survives a reboot. Phase 1's anchor helper needs the same step. Open items.
+- **F21: a 1.x libpod DB pins its runroot to `/run/user/<uid>`** (T0.2, P0-1). podman takes the runroot and tmpdir recorded in the DB over `XDG_RUNTIME_DIR`, and over an explicit `runroot` in `storage.conf`.
+  - **While the 1.x session is up,** the pinned old-storage env (new `XDG_RUNTIME_DIR`) silently uses `/run/user/<uid>/containers`, with no warning.
+  - **Once the session ends,** every podman call on the old storage fails: `mkdir /run/user/<uid>: permission denied` (`configure storage:` on 5.x). logind removes `/run/user/<uid>` shortly after `user@` stops (`user-runtime-dir@` is `StopWhenUnneeded`).
+  - **Seen on** EL8 v1 and v2, EL9, EL10, Ubuntu 22.04 and 24.04. On CL8 the old DB failed even with the session up (`lstat /run/user/<uid>/libpod: permission denied`, cause not investigated). On CL9/CL10 a 1.x systemd-managed container couldn't be created to test (`crun: error creating systemd unit libpod-*.scope: got failed`, the known CloudLinux v2 user-manager breakage).
+  - **Consequence for 4.2a/4.3:** every old-storage step (save, export, inspect) must run while the account's `/run/user/<uid>` still exists, before step 12 releases the session. Otherwise root must provide that directory for the step. Open items.
+- **F22: with split pinned, `podman start`/`run` needs a delegated cgroup** (T0.2, P0-8/P0-11). On every v2 host, `podman start` and `podman run --rm` from the non-delegated slice runner fail: `mkdir /sys/fs/cgroup/eapodman.slice/eapodman-<uid>.slice/eapodman-run-…/runtime: permission denied`; `supervisor` on podman 3.4. They work from a `Delegate=yes` transient, and on v1. `podman build` with a `RUN` step works from the plain runner everywhere. So any 2.0 path that starts a container outside its unit needs `Delegate=yes` on the runner, or has to go through the unit. That covers CMD with `run`, and anything that starts a container to verify it. Open items.
 
 ## Phase 0: spikes (gate everything)
 
@@ -196,7 +236,9 @@ Run each probe on these hosts:
 **PoC kit follow-ups.** These feed the task that turns the kit into `t/LiveTests`:
 - real pass/fail checks in `loadtest.sh`, and in `verify.sh` where it only prints;
 - a second account, a reboot test, and `PAMName`/LVE checks on CloudLinux (EA4-357 comment 1802943);
-- CPU test A assumes 4 CPUs;
+- CPU test A assumes 4 CPUs (done in T0.2: with fewer CPUs it measures the caps in two rounds);
+- `lifecycle.sh` test 2 (kill the container's init) is v2-only; v1 needs its own check (T0.2);
+- the anchor helper's SELinux `netns` step (F19; done in the kit's `conf/runtime-mount`), and `setup.sh` on cgroup v1 (done in T0.2);
 - CPU test B's tolerance is loose on some hosts;
 - the floor test must skip when its before-values are 0, as they are on CloudLinux (F13; EA4-357 comment 1803523).
 - done in the kit (PR #43 bot review 6587031689): guarded signals, F15 counted as known only by its journal signature, the hostile-PID write and systemd's refusal asserted, the F16 `XDG_CONFIG_HOME` layout, `SuccessExitStatus=143` kept in the units with lifecycle test 5 for it (third review), the payload-cgroup and load-liveness checks, the floor skip, and checked cleanup and teardown. The live tests keep these rules.
@@ -216,6 +258,97 @@ Run each probe on these hosts:
 | P0-11 | The bounded as-user runner (4.2a): `systemd-run --uid --gid --pipe --wait --collect -p RuntimeMaxSec=` running `podman` against old **and** new storage. On a timeout, does systemd reap a SIGSTOPped child, a ptrace-stopped child, and a grandchild that called `setsid`/double-forked? How does `systemd-run --wait` report `Result=timeout` vs a non-zero exit (systemd 239, 249, 252, 255)? On v1, can the account move a runner process into its own delegated cgroup, and does `--wait` still return? | Runner mechanism; timeout detection |
 | P0-13 | `podman exec` cgroup placement (F14), on every target (podman 3.4 and 4+, crun and runc versions). From the slice runner: is the exec'd process in the runner's transient (not the container's cgroup), under `eapodman-<uid>.slice`, inside the LVE (P0-6), and killed at `RuntimeMaxSec`? 1.x parity, on an unmasked 1.x account: is a `podman exec` from an SSH session in the session scope rather than the container's cgroup? | F14 docs and release-note wording |
 | P0-12 | BPF-LSM namespace boundary (F11), on EL9, CL9, EL10 and Ubuntu 24.04. Does the kernel have the `userns_create` LSM hook, and can `lsm=bpf` be enabled? Load a test-only BPF-LSM program that denies `userns_create` unless the task is under the `eapodman.slice` cgroup. Then all of these must work: install, upgrade, start/stop/restart, reboot, the full migration, plugin builds, backup and restore, `ea-podman bash`, and an anchor restart after the pause process is killed. From the account's SSH shell, cron and a CGI, `unshare -U` and raw `podman run` must be denied | F11 holds; platforms where the rule is supported |
+
+### Phase 0 results (T0.2, 2026-11-06)
+
+**How.** Run on the 9 VMs in `EA4-352/vms.json`:
+
+| VM | OS | cgroup | systemd | podman | OCI runtime | Notes |
+|---|---|---|---|---|---|---|
+| el8-cgv1, el8-cgv2 | AlmaLinux 8.10 | v1, v2 | 239 | 4.9.4-rhel | runc 1.2.9 | SELinux enforcing |
+| el9 | AlmaLinux 9.8 | v2 | 252 | 5.8.2 | crun 1.27 | SELinux enforcing, MGLRU |
+| el10 | AlmaLinux 10.2 | v2 | 257 | 5.8.2 | crun 1.30.1 | SELinux enforcing, MGLRU |
+| cl8-cgv1 | CloudLinux 8.10 | v1 | 239 | 4.9.4-rhel | runc 1.2.9 | CageFS, `hidepid=2` |
+| cl9 | CloudLinux 9.8 | v2 | 252 | 5.8.2 | crun 1.27 | CageFS, `hidepid=invisible`, MGLRU |
+| cl10 | CloudLinux 10 | v2 | 257 | 5.8.2 | crun 1.30.1 | CageFS, MGLRU |
+| u22 | Ubuntu 22.04 | v2 | 249 | 3.4.4 | crun 0.17 | |
+| u24 | Ubuntu 24.04 | v2 | 255 | 4.9.3 | crun 1.14.1 | MGLRU |
+
+- **Setup:** one test account (`eapodtest`) with the kit's layout (`eapodman-test-kit/setup.sh`, now v1-capable) and three containers.
+- **Probes:** in `EA4-352/probes/` (`p0-*.sh`, `f17-switch.sh`, sourcing the kit's `lib.sh`). Per-host logs are in `EA4-352/probes/results/<vm>/`.
+- **Limits:** none of the VMs has cPanel or ea-podman, so the parts that need product code are marked "not run" below. "1.x" means the account's own `user@` session and default storage, emulated by hand (on CloudLinux through a `/run/systemd/system/user@<uid>.service` copy, as EA4-321 does).
+- **CL10:** ships `user.max_user_namespaces=0` (CLOS-2616, confirmed). The probes set it to 15000 in `/etc/sysctl.d/99-ea4-352-userns.conf`.
+- **Ubuntu 24.04:** got `lsm=…,bpf` on its kernel command line for P0-12.
+
+**New findings:** F19 (SELinux and pasta), F20 (exec on crun), F21 (the 1.x DB pins its runroot), F22 (split needs a delegated cgroup to start a container). F13, F14, F15, F17 and F18 have T0.2 notes.
+
+- **P0-1: an error, not a silent fallback, once the session is gone** (F21).
+  - **Session still up:** the pinned env silently uses the 1.x DB's runroot under `/run/user/<uid>`.
+  - **Session gone:** `mkdir /run/user/<uid>: permission denied`, even with an explicit `runroot`.
+  - **Verdict:** recreate-in-fresh-storage is confirmed. The migration's old-storage steps must run before the session is released.
+- **P0-2: recreate is required on v2.**
+  - **Rootless 1.x containers** (recorded `CgroupManager=systemd` on every v2 host) don't start from a cgroupfs system unit, even with the session up. crun 1.14+: `sd-bus call: Interactive authentication required`. crun 0.17: `sd-bus call: Permission denied`. runc on EL8 v2: `unable to apply cgroup configuration`.
+  - **On v1** they are cgroupfs, and one started in the unit's cgroup and served (EL8 v1).
+  - **Rootful:** `podman rename` of a stopped container keeps its ID and named-volume mounts on 3.4.4, 4.9.3, 4.9.4 and 5.8.2. A 1.x rootful container started from a cgroupfs unit runs, but in `/machine.slice/libpod-<id>.scope`, outside the unit and `eapodman-0.slice`. So recreate, as planned.
+- **P0-3: the forking template holds; F15's matrix is extended.** Kit `lifecycle.sh` and `p0-3-hidepid.sh`, all 9:
+  - **Hostile PIDs:** `1` and a root PID in `conmon.pid` are refused, systemd logs it, and stop kills neither. Holds on systemd 239, 249, 252, 255 and 257, v1 included (invariant 19).
+  - **Exit 143:** conmon passes it on everywhere, so `SuccessExitStatus=143` is needed on all 9.
+  - **A killed container init** recovers.
+  - **A killed conmon:** see F15 (Ubuntu 22.04 loses the port, Ubuntu 24.04 stays down).
+  - **conmon's cgroup:** `<unit>/runtime` on v2 (`<unit>/supervisor` on podman 3.4), and the unit's own cgroup on v1, where the container has a cgroup of its own only in `name=systemd`.
+  - **`hidepid=2` (CL8) and `hidepid=invisible` (CL9):** a unit stop ends `Result=success` in at most 1 s, with no `timed out waiting for file …/exits` and nothing left for `KillMode`, and `podman rm` after the stop works. EA4-366's stop timeout doesn't happen in the 2.0 layout.
+  - **Reboot, all 9:** the anchor, tmpfs, XDG dir, all three units (conmon as `MainPID` in the unit's cgroup, split payloads on v2), the ports and the slice drop-ins came back by themselves.
+  - **Not run:** the `start --attach` shape, and F15 under 1.x (T0.4). The kit's test 2 (kill the container init) is v2-only and didn't run on v1.
+- **P0-4: the layout works as designed. Memory floors are kernel-dependent** (F13), and **F17 is confirmed** (see F17).
+  - **Placement:** the pause process sits in `ea-podman-runtime@<uid>.service`.
+  - **Isolation:** stopping one unit leaves the others and the pause process alone.
+  - **Controllers:** `cpu io memory pids` in `cgroup.subtree_control` of `eapodman.slice`, `eapodman-<uid>.slice` and the unit, and received by the container (all v2).
+  - **Swap:** no VM has swap configured. `memory.swap.max` exists on every v2 host and is `0` for `--memory-swap` = `--memory` (`memory.memsw.*` exists on v1). Enforcement with real swap was not measured.
+  - **Shares conversion** for `--cpu-shares` 1024/2048/512: `cpu.weight` 100/174/59 with crun 1.27 and 1.30.1. It is 39/79/20 with runc 1.2.9, crun 1.14.1 and crun 0.17. So it follows the OCI runtime version, not podman's.
+  - **Caps** (kit `loadtest.sh`; CPU test A now runs in two rounds on hosts with fewer than 4 CPUs): `--cpus` exact at 1.00/2.00/0.50 on all 7 v2 hosts. The 512M hard cap held: 400M fine, 600M OOM-killed (137), `swap.current` 0. With the slice capped to 1 CPU, the unit `CPUWeight` decided the split (≈0.29/0.57/0.14).
+  - **Equal unit weights:** the split was ≈⅓ each on most hosts, but noisy on EL9 (0.28/0.53/0.19) and Ubuntu 22.04 (0.13/0.73/0.13), not investigated.
+  - **CPU between slices:** with 3 busy loops each in `system.slice`, `user-<uid>.slice` and two account slices, the shares were system 33%, user 33%, `eapodman.slice` 33% (16 + 16) on all 9, v1 and CloudLinux included. All container accounts together get one `user.slice`-sized share.
+  - **Floors against host-wide pressure:** see F13 (MGLRU). Today's floor on `user-<uid>.slice` doesn't work: with `user.slice` at no floor, a 400M floor kept 4%, the same as none. On CloudLinux, page cache isn't charged to the reader, so there is nothing to protect (F13; 0M on CL8, CL9 and CL10).
+- **P0-5: journald works for writing. Reading it back as the account needs a persistent journal.**
+  - **Unit output:** a `User=` unit's output (podman, plus conmon on Ubuntu) is in `journalctl -u` everywhere.
+  - **Default log driver:** `k8s-file` on EL and CloudLinux, `journald` on Ubuntu. `podman logs` works as the account through the runner on all 9.
+  - **EL and CloudLinux** have a volatile journal (no `/var/log/journal`), so there are no per-user journal files. As the account, `podman events` and `podman logs` of a `--log-driver=journald` container return **nothing, with exit 0**, though root sees the entries. Ubuntu (persistent, split per uid) works.
+  - **Impact:** ea-podman reads neither. 1.x writes to the same system journal, so its readback is very likely the same (not measured).
+  - **Verdict:** keep `events_logger = "journald"` and document the readback.
+- **P0-6:** see F18. On v1, LVE and unit tracking coexist. For caged accounts `PAMName=` can't run podman. The PAM file needs an `account` line. On v2 the runner loses its deadline.
+  - **Not run:** a `PAMName` container through restart and reboot (none would start), and `lve_wrapper` on v1.
+- **P0-7 (partial):**
+  - **Containers:** a caged account's containers run from system units on CL8, CL9 and CL10, including after a reboot.
+  - **From inside the cage:** there is no `systemctl` and no `podman`. `/run/ea-podman` and the unit files aren't visible. The account's own conmon is visible only where `/proc` has no `hidepid` (CL10). The ports are reachable.
+  - **Not run:** the CLI admin fallback (needs ea-podman 2.0).
+- **P0-8: the account's config is fully ignored; F16's layout works on every podman version.**
+  - **Hostile `~/.config/containers` ignored on all 9** (podman 3.4.4, 4.9.3, 4.9.4 and 5.8.2; CNI and netavark). It held `containers.conf` (cgroup manager, events logger, env, log driver), a `containers.conf.d` drop-in, `storage.conf` (vfs, another graphroot), `registries.conf`, a reject-all `policy.json` and `mounts.conf`. strace shows no opens under `~/.config`.
+  - **`XDG_CONFIG_HOME`:** nothing new appears there. Only `cni/net.d` (and `cni.lock` or the conflist) is written through the symlink: on the CNI hosts, and also on CL9 and Ubuntu 24.04.
+  - **podman 3.4.4** doesn't know `default_mounts_file` and warns on every call (`Failed to decode the keys ["containers.default_mounts_file"]`). Leave it out on 3.4; `mounts.conf` is under `XDG_CONFIG_HOME` there and isn't read anyway.
+  - **F22** was found here.
+- **P0-9: confirmed.** On CL8, CL9 and CL10 the account's `systemctl show` on the system unit gets `Access denied` even outside the cage, and inside it there is no `systemctl`. Other hosts allow it. STATUS goes through admin.
+- **P0-10:**
+  - **Reboot:** a CLOS-7971 stand-in canary (a unit in `~/.config/systemd/user`, enabled for `default.target`; `test.sh` isn't in the repo) never ran after a reboot on all 9. There was no `user@<uid>`, no `/run/systemd/system/user@*` and no linger.
+  - **Not run:** after a migration.
+- **P0-11: the runner mechanism holds.**
+  - **Exit reporting:** identical on systemd 239, 249, 252, 255 and 257. Success gives rc 0. An exit 7 gives rc 7 with `Finished with result: exit-code`. A timeout gives **rc 1** with `Finished with result: timeout` and `Main processes terminated with: code=killed, status=15/TERM`. rc 1 alone is ambiguous, so detect the timeout from the `Finished with result:` line, which needs `systemd-run` without `--quiet`, or from the unit's `Result`.
+  - **Reaping:** a SIGSTOPped child, a ptrace-stopped child, a `setsid -f` grandchild and a double-forked grandchild were all killed at `RuntimeMaxSec` on all 9.
+  - **Escape on v2:** the account can't move a runner process into its delegated container cgroup (`EACCES`, or `EIO` on Ubuntu).
+  - **Escape on v1** (EL8, CL8): it can move a child into the unit's `name=systemd` cgroup, which `Delegate` chowns to it, but not into `memory`/`pids`/`cpu`. `--wait` still returns at the deadline. The moved child survives, still in the runner's stale `pids`/`memory` cgroups, until that container unit stops. It also **keeps the `--pipe` stdout open**, so a reader that waits for EOF hangs. The runner must stop reading when `systemd-run` exits.
+  - **SELinux** (EL): PID 1 may not write to a `/tmp` file passed as stdout through `--pipe`; `systemd-run` fails with `Connection timed out` or `Remote peer disconnected`. Use pipes, as 4.2a already says.
+- **P0-12: supported on EL10, CL10 and Ubuntu 24.04. Not on EL9 or CL9.**
+  - **The hook:** `userns_create` exists on EL10 and CL10 (6.12) and Ubuntu 24.04 (6.8). Ubuntu 22.04's 5.15 has it too (not tested). EL9 and CL9 (5.14) don't.
+  - **`bpf` in the LSM list:** active by default on EL and CloudLinux. Ubuntu needs `lsm=…,bpf` and a reboot.
+  - **The test program** (`probes/p0-12/userns_guard.bpf.c`, loaded with `bpftool prog loadall … autoattach`) denies non-root userns creation outside `eapodman.slice`.
+  - **Still worked:** the runner's `podman unshare`, unit restarts, an anchor restart after the pause process was killed, create and start, a `podman build` in a delegated runner, and a nested userns inside a container.
+  - **Denied** on all three: `unshare -U` from a `system.slice` (cron-like) job and from `user-<uid>.slice`. From the account's login shell, `unshare -U` and raw `podman run` were denied on EL10 and Ubuntu 24.04. CL10's caged shell has neither binary. Root is unaffected.
+  - **Not run:** install, upgrade, migration, plugin builds, backup and restore, and `ea-podman bash` (product code). The program doesn't survive a reboot; a shipped policy would need a loader unit.
+- **P0-13:** see F14 and F20.
+  - **From the runner:** fails on every crun host. On runc it works, outside the container's cgroup on v2 and in it on v1.
+  - **From inside the unit's subtree:** works on all 9, in the container's cgroup.
+  - **1.x:** an exec lands in the container's cgroup on every unmasked host.
+  - **LVE:** an exec'd process is never in the LVE (CloudLinux).
+  - **Deadline:** where exec works from the runner, `RuntimeMaxSec` kills it.
 
 ## Phase 1: root-side units module
 
@@ -1058,6 +1191,23 @@ On the plugin side:
 - **Follow-up:** a root-owned graphroot to close F4.
 - **Follow-up: exec'd processes under the container's limits (F14 option 2).** Root forks a child that drops to the account and waits on a pipe, writes the child's PID into a sub-cgroup of the container unit (its delegated subtree), then lets it run `podman exec`; the runtime's own move into `libpod-payload-*` then succeeds because the common ancestor is the delegated unit. Gains: Docker-like accounting, `exec -d` lives as long as the container. Costs: root writes into a tree the account controls (it can remove or retype the target, or set `pids.max=0`, a tiny `memory.max` or `cgroup.freeze`; all self-DoS, but paths must be checked and failures must refuse, never fall back); the process leaves the runner's cgroup, so `RuntimeMaxSec`/`KillMode=control-group` no longer bound it and root must enforce the timeout and reaping itself (4.2a); exec'd work competes with the serving container and can get it OOM-killed. Do it only if the plugin needs exec'd work held to a container's budget.
 - **Follow-up:** a shipped or documented BPF-LSM namespace policy (F11).
+
+**Raised by T0.2** (Phase 0 results):
+- **`podman exec` on crun (F20).** As planned, every exec (the runner path and `ea-podman bash`) fails on EL9, EL10, CL9, CL10 and Ubuntu. 1.x works and places the process in the container's cgroup. The candidates:
+  - **"Option 2" becomes required, not a follow-up.** Root places the exec caller in a sub-cgroup of the container unit; this works on all 9 test VMs. Its costs are in the follow-up above.
+  - **Root-side `nsenter`,** as `ea-podman cmd` already does. This loses the container's cgroup.
+  - **Some other unit shape.**
+
+  `ea-podman bash` also needs a root step, since it is direct today. Revisit F14's "accept and document".
+- **Memory floors and MGLRU (F13).** Accept and document that `MemoryLow=` doesn't hold against host-wide pressure where MGLRU is on (EL9+, CL9/10, Ubuntu 24.04), recommend `lru_gen` off, or drop the floor promises. The plugin's account floor (Phase 6) is affected the same way.
+- **`PAMName=` on CloudLinux (F18).** It can't run podman for a caged account: `pam_lve` either cages the session or refuses it. That needs a CageFS-side answer, or another LVE entry (`lve_wrapper` loses tracking on v2). If any `PAMName=` stays, `/etc/pam.d/ea-podman` needs an `account` line, and on v2 the runner's deadline no longer reaps the account's processes (4.2a). Add both to the CloudLinux conversation (T0.7).
+- **Old storage during the migration (F21).** Order the steps so that every old-storage podman call runs before step 12 releases the 1.x session, or have root provide `/run/user/<uid>` for those steps. Also handle a 1.x DB whose runroot is elsewhere (`/tmp/…`, seen where the account first ran podman without a session).
+- **Starting containers outside a unit (F22).** The slice runner needs `Delegate=yes` (or a unit) for any podman call that starts a container: CMD `run`, and verify steps.
+- **The SELinux `netns` step (F19)** goes into Phase 1's anchor helper, and the SELinux targets go into the live matrix.
+- **Ubuntu 22.04 conmon kill (F15).** Recovery leaves the published port dead (podman 3.4). Fold it into T0.4's decision: Ubuntu 22.04 is affected too, in a less visible way.
+- **podman 3.4 and `default_mounts_file`.** Render the pinned `containers.conf` without that key on podman 3.4, so its warning doesn't appear in every command's output.
+- **journald readback (P0-5).** On EL and CloudLinux the account can't read its own journal entries: `podman events`, and `podman logs` with `--log-driver=journald`, come back empty. Keep `events_logger = "journald"` and document this, or move to `events_logger = "file"` in the capped tmpfs.
+- **runc and unsplit containers with limits (F17).** On EL8 v2, a container created without split and with `--memory` can't start from its unit. 2.0 pins split there, so this only matters for containers created by hand or by 1.x.
 
 ## Verification
 

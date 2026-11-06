@@ -1,6 +1,6 @@
 # eapodman-test-kit
 
-A hand-built version of the layout in `../PLAN.md` for one account. It sets up `eapodman.slice`, the account's `eapodman-<uid>.slice`, the anchor unit and three container units, then tests them. Run every script as root on a cgroup v2 host. `<cpuser>` must have subuid/subgid ranges.
+A hand-built version of the layout in `../PLAN.md` for one account. It sets up `eapodman.slice`, the account's `eapodman-<uid>.slice`, the anchor unit and three container units, then tests them. Run every script as root. On cgroup v1, `setup.sh` leaves `cgroups = "split"` out of the pinned config (F17), and the per-container limit checks in `verify.sh` and `loadtest.sh` fail there by design. `<cpuser>` must have subuid/subgid ranges.
 
 ## Run order
 

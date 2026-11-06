@@ -1,0 +1,28 @@
+host ea4-352-u24 os=ubuntu-24.04 kernel=6.8.0-149-generic cgroup=v2 systemd=255 podman=4.9.3
+
+### journald
+RESULT p0-5.journal_storage /var/log/journal
+persistent
+  journald.conf: 
+  account groups: eapodtest
+
+### unit output in the system journal
+RESULT p0-5.unit_output_in_journal_u yes (46 lines)
+  senders: conmon/uid=1000/unit=ea-podman-web.eapodtest.01.service/userunit=None podman/uid=1000/unit=ea-podman-web.eapodtest.01.service/userunit=None systemd/uid=0/unit=init.scope/userunit=None
+
+### podman logs (container stdout) as the account, through the runner
+RESULT p0-5.log_driver journald
+RESULT p0-5.podman_logs_as_account works
+RESULT p0-5.container_stdout_in_system_journal yes
+RESULT p0-5.account_can_read_its_container_journal yes
+
+### podman logs, forcing --log-driver=journald (the 1.x default where podman uses journald)
+  root sees 17 journal lines for p05.eapodtest.61
+RESULT p0-5.podman_logs_journald_driver_as_account works
+
+### podman events (events_logger=journald) as the account
+  2026-11-06 19:30:42.259581698 +0000 UTC container died 3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077 (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+2026-11-06 19:30:42.322626184 +0000 UTC container cleanup 3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077 (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+2026-11-06 19:30:42.451697492 +0000 UTC container init 3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077 (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+RESULT p0-5.podman_events_as_account works
+RESULT p0-5.events_in_system_journal yes

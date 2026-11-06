@@ -1,0 +1,16 @@
+Trying to pull docker.io/nginxdemos/hello:plain-text...
+Getting image source signatures
+Copying blob sha256:c9ebe2ff2d2cd981811cefb6df49a116da6074c770c07ee86a6ae2ebe7eee926
+Copying blob sha256:9824c27679d3b27c5e1cb00a73adb6f4f8d556994111c12db3c5d61a0c843df8
+Copying blob sha256:7a8a46741e18ed98437271669138116163f14596f411c1948fd7836e39f1afea
+Copying blob sha256:6bc572a340ecbc60aca0c624f76b32de0b073d5efa4fa1e0b6d9da6405976946
+Copying blob sha256:9adfbae99cb79774fdc14ca03a0a0154b8c199a69f69316bcfce64b07f80719f
+Copying blob sha256:403e3f251637881bbdc5fb06df8da55c149c00ccb0addbcb7839fa4ad60dfd04
+Copying blob sha256:a992fbc61ecc9d8291c27f9add7b8a07d374c06a435d4734519b634762cf1c51
+Copying blob sha256:cb1ff4086f82493a4b8b02ec71bfed092cad25bd5bf302aec78d4979895350cb
+Copying blob sha256:b97350973d35548b5e09a20a82eae161f2657a6337a9ac72d37dfc46ec99004f
+Copying blob sha256:b66ba5144950202b8e528987ee7053a1fd197172d39a192ac08ab6e1cf9c3b13
+Copying config sha256:801cc216dbcce09768e2a1cc0b21b353d27ae4552659dabb9e7d979fb1989865
+Writing manifest to image destination
+Job for ea-podman-web.eapodtest.01.service failed because the control process exited with error code.
+See "systemctl status ea-podman-web.eapodtest.01.service" and "journalctl -xeu ea-podman-web.eapodtest.01.service" for details.

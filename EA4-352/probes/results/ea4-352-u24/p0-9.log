@@ -1,0 +1,31 @@
+host ea4-352-u24 os=ubuntu-24.04 kernel=6.8.0-149-generic cgroup=v2 systemd=255 podman=4.9.3
+RESULT p0-9.account_caged no
+  shell /bin/bash
+
+### as the account, via login
+  environment: host
+  MainPID=9827
+User=eapodtest
+ActiveState=active
+RESULT p0-9.systemctl_show_login works (host)
+RESULT p0-9.systemctl_is_active_login active
+  status: ● ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01      Loaded: loaded (/etc/systemd/system/ea-podman-web.eapodtest.01.service; enabled; preset: enabled)      Active: active (running) since Fri 2026-11-06 19:30:51 UTC; 38s ago 
+RESULT p0-9.sees_runtime_dir_login yes
+RESULT p0-9.sees_unit_file_login yes
+RESULT p0-9.sees_own_conmon_login yes
+RESULT p0-9.reaches_container_port_login 200
+RESULT p0-9.raw_podman_ps_login time="2026-11-06T19:31:30Z" level=warning msg="Failed to add pause process to systemd sandbox cgroup: dbus: couldn't determine address of session bus"
+
+### as the account, via runner
+  environment: host
+  MainPID=9827
+User=eapodtest
+ActiveState=active
+RESULT p0-9.systemctl_show_runner works (host)
+RESULT p0-9.systemctl_is_active_runner active
+  status: ● ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01      Loaded: loaded (/etc/systemd/system/ea-podman-web.eapodtest.01.service; enabled; preset: enabled)      Active: active (running) since Fri 2026-11-06 19:30:51 UTC; 39s ago 
+RESULT p0-9.sees_runtime_dir_runner yes
+RESULT p0-9.sees_unit_file_runner yes
+RESULT p0-9.sees_own_conmon_runner yes
+RESULT p0-9.reaches_container_port_runner 200
+RESULT p0-9.raw_podman_ps_runner worker.eapodtest.03

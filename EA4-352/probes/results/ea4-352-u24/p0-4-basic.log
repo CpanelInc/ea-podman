@@ -1,0 +1,28 @@
+host ea4-352-u24 os=ubuntu-24.04 kernel=6.8.0-149-generic cgroup=v2 systemd=255 podman=4.9.3
+
+### 1. placement
+RESULT p0-4.conmon_cgroup /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/runtime
+RESULT p0-4.container_cgroup /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/libpod-payload-3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077
+RESULT p0-4.pause_cgroup /eapodman.slice/eapodman-1000.slice/ea-podman-runtime@1000.service
+
+### 2. stopping one unit
+RESULT p0-4.stop_one_unit_others_unaffected yes
+
+### 3. controllers
+RESULT p0-4.subtree_control_eapodman.slice cpu io memory pids
+RESULT p0-4.subtree_control_eapodman-1000.slice cpu io memory pids
+RESULT p0-4.subtree_control_ea-podman-web.eapodtest.01.service cpu io memory pids
+RESULT p0-4.container_controllers cpu io memory pids
+
+### 4./5. swap accounting and the shares conversion
+RESULT p0-4.swap_on_host 0 swap devices
+RESULT p0-4.web_memory_swap_max 0
+RESULT p0-4.web_cpu_weight 39
+RESULT p0-4.api_memory_swap_max 0
+RESULT p0-4.api_cpu_weight 79
+RESULT p0-4.worker_memory_swap_max 0
+RESULT p0-4.worker_cpu_weight 20
+
+### 6./7. split vs no split, and is the mode fixed at create (F17)
+RESULT p0-4.p04split_created_split_started_nosplit recorded=default ran=split memory.max=67108864
+RESULT p0-4.p04nosplit_created_nosplit_started_split recorded=default ran=no-split memory.max=max

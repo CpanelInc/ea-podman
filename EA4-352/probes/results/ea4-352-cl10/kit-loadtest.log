@@ -1,0 +1,40 @@
+== CPU: busy loops in each container's cgroup (web 2, api 3, worker 2; each more than its --cpus)
+
+A1. caps only, api paused (3 host CPUs; web+worker caps total 1.5)
+  container                CPUs   expected
+  web.eapodtest.01         1.00       1.00
+  api.eapodtest.02         0.00       0.00
+  worker.eapodtest.03      0.50       0.50
+
+A2. caps only, web and worker paused (api cap 2.0)
+  container                CPUs   expected
+  web.eapodtest.01         0.00       0.00
+  api.eapodtest.02         2.01       2.00
+  worker.eapodtest.03      0.00       0.00
+
+B. account slice squeezed to 1 CPU: unit CPUWeight 100/200/50 decides
+  container                CPUs   expected
+  web.eapodtest.01         0.25       0.29
+  api.eapodtest.02         0.61       0.57
+  worker.eapodtest.03      0.15       0.14
+
+C. same, all unit weights 100; container cpu.weight (from --cpu-shares) still 100/174/59
+  container                CPUs   expected
+  web.eapodtest.01         0.36       0.33
+  api.eapodtest.02         0.35       0.33
+  worker.eapodtest.03      0.28       0.33
+
+== memory: hard cap on web.eapodtest.01 (memory.max 512M, swap.max 0)
+  400M allocation: exit 0 (expected 0)
+  600M allocation: exit 137 (expected 137), oom_kill 0 -> 1, swap.current 0
+
+== memory: floors under slice pressure (web 400M + worker 200M page cache, api 400M anon)
+
+1. unit MemoryLow set (web 256M, worker 64M): reclaim should come from above the floors
+  SKIP (TODO): page cache web 0M, worker 0M is not charged to the containers here (F13); no floor to test
+
+2. control, unit MemoryLow 0 (container memory.low unchanged): reclaim spread across both caches
+  SKIP (TODO): page cache web 0M, worker 0M is not charged to the containers here (F13); no floor to test
+
+== cleanup
+restored slice cpu.max/memory.max and unit cpu.weight/memory.low; removed /home/eapodtest/.eapodman-loadtest; units restarted

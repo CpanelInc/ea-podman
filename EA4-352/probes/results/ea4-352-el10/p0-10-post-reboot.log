@@ -1,0 +1,17 @@
+host ea4-352-el10 os=almalinux-10.2 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+RESULT p0-10.booted_after_pre yes
+RESULT p0-10.canary_ran no
+RESULT p0-10.user_manager inactive
+RESULT p0-10.user_manager_units 1
+RESULT p0-10.runtime_carveouts 0
+RESULT p0-10.anchor active
+RESULT p0-10.runtime_tmpfs tmpfs rw,nosuid,nodev,relatime,seclabel,size=303684k,mode=700,uid=1000,gid=1000,
+RESULT p0-10.xdg_dir ./cni->/run/ea-podman/user/1000/cni 
+RESULT p0-10.unit_web active MainPID=865(conmon) in /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/runtime
+RESULT p0-10.unit_api active MainPID=867(conmon) in /eapodman.slice/eapodman-1000.slice/ea-podman-api.eapodtest.02.service/runtime
+RESULT p0-10.unit_worker active MainPID=869(conmon) in /eapodman.slice/eapodman-1000.slice/ea-podman-worker.eapodtest.03.service/runtime
+RESULT p0-10.port_8081 200
+RESULT p0-10.port_8082 200
+RESULT p0-10.port_8083 200
+RESULT p0-10.split_after_reboot yes
+RESULT p0-10.slice_dropins 872415232 2147483648 764 

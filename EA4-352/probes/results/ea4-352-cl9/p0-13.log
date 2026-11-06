@@ -1,0 +1,21 @@
+host ea4-352-cl9 os=cloudlinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+RESULT p0-13.oci_runtime crun 1.27
+
+### exec from the slice runner
+RESULT p0-13.exec_from_runner FAILS (rc=126): Error: crun: write to `/sys/fs/cgroup/eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/libpod-payload-c7ba621db26589758c26abadd744b97b009a9470058024851185a6e19cec709b/cgroup.procs`: Permission denied: OCI permission denied
+
+### exec from the account's login shell (ea-podman bash)
+RESULT p0-13.exec_from_login_shell FAILS (rc=127): -bash: line 1: /usr/bin/podman: No such file or directory
+
+### exec from inside the container unit's delegated subtree (F14 option 2)
+RESULT p0-13.exec_from_unit_subtree works; container's cgroup (/eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/libpod-payload-c7ba621db26589758c26abadd744b97b009a9470058024851185a6e19cec709b)
+
+### LVE
+RESULT p0-13.exec_in_lve_as_user n/a (exec failed)
+RESULT p0-13.exec_in_lve_in_unit_subtree no
+
+### exec killed at the runner's RuntimeMaxSec
+RESULT p0-13.exec_killed_at_runtimemaxsec n/a (exec failed, rc=126)
+
+### 1.x parity: exec into a user@-managed container
+RESULT p0-13.parity_1x skipped (CloudLinux: CageFS masks user@)

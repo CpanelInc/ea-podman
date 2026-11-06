@@ -1,0 +1,8 @@
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v2 systemd=239 podman=4.9.4-rhel
+
+### 8. memory floors under pressure from outside the slices
+  floors: eapodman.slice 872415232, eapodman-1000.slice 872415232, user.slice 0, user-1000.slice 419430400
+RESULT p0-4.pagecache_acct_MiB 300 -> 300
+RESULT p0-4.pagecache_user_MiB 300 -> 12
+RESULT p0-4.pagecache_none_MiB 300 -> 12
+RESULT p0-4.floor_verdict kept: account slice 100%, user-<uid>.slice 4%, no floor 4%

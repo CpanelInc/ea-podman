@@ -9,7 +9,8 @@ U=${1:?usage: $0 <cpuser> [image]}
 IMAGE=${2:-docker.io/nginxdemos/hello:plain-text}
 . ./lib.sh
 
-[ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ] || { echo "not a cgroup v2 host" >&2; exit 1; }
+# F17: split is pinned on cgroup v2 only; on v1 it stops containers starting.
+CGV=1; [ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ] && CGV=2
 grep -q "^$U:" /etc/subuid && grep -q "^$U:" /etc/subgid || { echo "$U has no subuid/subgid" >&2; exit 1; }
 if systemctl is-active -q "user@$UID_.service"; then
     echo "WARNING: user@$UID_.service is running; stop the account's 1.x units first" >&2
@@ -19,7 +20,8 @@ command -v ss >/dev/null || { echo "ss not found; can't check the test ports are
 for port in 8081 8082 8083; do
     listeners=$(ss -Hltn "sport = :$port") || { echo "ss failed probing port $port" >&2; exit 1; }
     if [ -n "$listeners" ]; then
-        ss -Hltnp "sport = :$port" | grep -q 'conmon\|rootlessport\|slirp' \
+        # podman 3.4's rootlessport re-execs /proc/self/exe, so ss shows it as "exe".
+        ss -Hltnp "sport = :$port" | grep -q 'conmon\|rootlessport\|slirp\|"exe"' \
             || { echo "port $port is already in use" >&2; exit 1; }
     fi
 done
@@ -39,7 +41,7 @@ CONMON_PATH=$(command -v conmon) || { echo "conmon not found" >&2; exit 1; }
 
 install -d -m 0755 $ETC
 sed -e "s|@RUNTIME@|$RUNTIME|g" -e "s|@RUNTIME_PATH@|$RUNTIME_PATH|g" -e "s|@CONMON_PATH@|$CONMON_PATH|g" \
-    conf/containers.conf >$ETC/containers.conf
+    conf/containers.conf | { if [ "$CGV" = 2 ]; then cat; else grep -v '^cgroups = "split"$'; fi; } >$ETC/containers.conf
 chmod 0644 $ETC/containers.conf
 install -m 0644 conf/storage.conf conf/registries.conf $ETC/
 install -m 0644 /dev/null $ETC/mounts.conf

@@ -1,0 +1,38 @@
+host ea4-352-u22 os=ubuntu-22.04 kernel=5.15.0-203-generic cgroup=v2 systemd=249 podman=3.4.4
+
+### journald
+RESULT p0-5.journal_storage /var/log/journal
+persistent
+  journald.conf: 
+  account groups: eapodtest
+
+### unit output in the system journal
+RESULT p0-5.unit_output_in_journal_u yes (61 lines)
+  senders: conmon/uid=1000/unit=ea-podman-web.eapodtest.01.service/userunit=None podman/uid=1000/unit=ea-podman-web.eapodtest.01.service/userunit=None systemd/uid=0/unit=init.scope/userunit=None
+
+### podman logs (container stdout) as the account, through the runner
+RESULT p0-5.log_driver time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+journald
+RESULT p0-5.podman_logs_as_account works
+  log path: time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+RESULT p0-5.log_file_location time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:30:46Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+
+### podman logs, forcing --log-driver=journald (the 1.x default where podman uses journald)
+  root sees 17 journal lines for p05.eapodtest.61
+RESULT p0-5.podman_logs_journald_driver_as_account works
+
+### podman events (events_logger=journald) as the account
+  time="2026-11-06T19:30:53Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:30:53Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:30:53Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+RESULT p0-5.podman_events_as_account works
+RESULT p0-5.events_in_system_journal yes
