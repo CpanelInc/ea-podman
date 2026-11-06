@@ -1,0 +1,41 @@
+host ea4-352-u22 os=ubuntu-22.04 kernel=5.15.0-203-generic cgroup=v2 systemd=249 podman=3.4.4
+
+### host
+RESULT t0-6.ram_mib 2968
+RESULT t0-6.cpus 3
+RESULT t0-6.pid_max 4194304
+RESULT t0-6.threads_max 23418
+RESULT t0-6.default_limit_nproc 11709 (soft 11709)
+RESULT t0-6.default_tasks_max 3512
+RESULT t0-6.pid1_nproc 11709/11709
+RESULT t0-6.limits_d_nproc 
+RESULT t0-6.user_slice_tasks_max user.slice=infinity user-1000.slice=7727
+RESULT t0-6.user_slice_dropins /usr/lib/systemd/system/user-.slice.d/10-defaults.conf
+RESULT t0-6.logind 
+RESULT t0-6.io_schedulers loop0=[none] mq-deadline  loop1=[none] mq-deadline  loop2=[none] mq-deadline  loop3=[none] mq-deadline  loop4=[none] mq-deadline  loop5=[none] mq-deadline  loop6=[none] mq-deadline  loop7=[none] mq-deadline  vda=[none] mq-deadline  
+RESULT t0-6.swap_devices 0
+RESULT t0-6.swap_accounting memory.swap.max present
+
+### TasksMax=33% on the account slice, as resolved
+RESULT t0-6.account_slice_tasks_max property=772 pids.max=772 (base for 33% = 2339)
+RESULT t0-6.eapodman_slice_tasks_max 7727
+
+### nproc as 2.0 runs it (kit: unit LimitNPROC=infinity, create through the runner)
+RESULT t0-6.nproc_2x conmon=4194304/4194304 container_init=4194304/4194304 pause=11709/11709 runner=/
+RESULT t0-6.container_spec_nproc 
+
+### 1.x parity: the account's own user@ and logind's /run/user/<uid>
+RESULT t0-6.nproc_1x_user_manager 11709/11709
+RESULT t0-6.runtime_dir_1x size=303956k nr_inodes=75989 mode=700 
+RESULT t0-6.user_slice_pids_max_1x 7727
+RESULT t0-6.events_readback_1x 6 events
+
+### 2.0 runtime dir use with the kit's 3 containers
+RESULT t0-6.runtime_dir_2x size=303956k used=164KiB inodes=88
+
+### exit codes without journal readback (2.0 env, delegated runner)
+RESULT t0-6.run_rm_exit_code 3 (want 3)
+RESULT t0-6.wait_and_inspect_exit_code wait=4 inspect=4 (want 4)
+
+### the account slice's TasksMax under a fork storm (LimitNPROC infinity on the unit)
+RESULT t0-6.fork_storm slice had 72 tasks, TasksMax set to 172; forks that succeeded: 99 of 400

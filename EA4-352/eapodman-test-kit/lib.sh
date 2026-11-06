@@ -7,6 +7,9 @@ RUNDIR=/run/ea-podman/user/$UID_
 XDGDIR=/run/ea-podman/xdg/$UID_
 ETC=/etc/eapodman-test
 
+# T0.6: one nproc source for the unit's LimitNPROC and the create-time --ulimit pin.
+NPROC=$(systemctl show -p DefaultLimitNPROC --value)
+
 # The plan's podman_env($uid). The units carry the same values as Environment= lines.
 ENVS=(
   --setenv=XDG_RUNTIME_DIR=$RUNDIR
@@ -57,8 +60,8 @@ Delegate=cpu io memory pids
 # F13: the unit carries the container's floor and weight, or they do nothing.
 MemoryLow=$memlow
 CPUWeight=$cpuweight
-# Plan's {NPROC}. RLIMIT_NPROC counts every process of the uid, so infinity for the test.
-LimitNPROC=infinity
+# Plan's {NPROC} (T0.6): the host's DefaultLimitNPROC, what 1.x's user manager ran with.
+LimitNPROC=$NPROC
 Environment=XDG_RUNTIME_DIR=$RUNDIR
 Environment=CONTAINERS_CONF=$ETC/containers.conf
 Environment=CONTAINERS_STORAGE_CONF=$ETC/storage.conf

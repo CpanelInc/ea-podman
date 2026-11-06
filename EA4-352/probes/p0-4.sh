@@ -113,7 +113,13 @@ done
 }
 
 floor() {
-hdr "8. memory floors under pressure from outside the slices"
+# FLOOR=low (default) protects with MemoryLow=; FLOOR=min with MemoryMin= (hard), set on both slices too.
+local P=MemoryLow; [ "${FLOOR:-low}" = min ] && P=MemoryMin
+hdr "8. memory floors ($P) under pressure from outside the slices"
+if [ $P = MemoryMin ]; then
+    systemctl set-property --runtime eapodman.slice MemoryMin=400M
+    systemctl set-property --runtime "eapodman-$UID_.slice" MemoryMin=400M
+fi
 if command -v cagefsctl >/dev/null; then info "CloudLinux: page cache isn't charged to the reader's cgroup (F13); measuring anyway"; fi
 mkdir -p /var/tmp/p04; chmod 0755 /var/tmp/p04
 # Each holder's file is read once (page cache charged to the reader's cgroup), then it sleeps.
@@ -122,9 +128,9 @@ chmod 0644 /var/tmp/p04/*
 big=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 * 3 / 2 ))
 dd if=/dev/zero of=/var/tmp/p04/big bs=1M count=$big status=none
 sync; echo 1 >/proc/sys/vm/drop_caches
-systemctl set-property --runtime "user-$UID_.slice" MemoryLow=400M
-systemd-run --quiet --unit=p04-hold-acct --slice="eapodman-$UID_.slice" --uid="$UID_" -p MemoryLow=400M sh -c 'cat /var/tmp/p04/acct >/dev/null; exec sleep 600'
-systemd-run --quiet --unit=p04-hold-user --slice="user-$UID_.slice" --uid="$UID_" -p MemoryLow=400M sh -c 'cat /var/tmp/p04/user >/dev/null; exec sleep 600'
+systemctl set-property --runtime "user-$UID_.slice" $P=400M
+systemd-run --quiet --unit=p04-hold-acct --slice="eapodman-$UID_.slice" --uid="$UID_" -p $P=400M sh -c 'cat /var/tmp/p04/acct >/dev/null; exec sleep 600'
+systemd-run --quiet --unit=p04-hold-user --slice="user-$UID_.slice" --uid="$UID_" -p $P=400M sh -c 'cat /var/tmp/p04/user >/dev/null; exec sleep 600'
 systemd-run --quiet --unit=p04-hold-none --slice=system.slice --uid="$UID_" sh -c 'cat /var/tmp/p04/none >/dev/null; exec sleep 600'
 sleep 8
 file_of() {    # unit -> MiB of page cache charged to its cgroup
@@ -134,7 +140,7 @@ file_of() {    # unit -> MiB of page cache charged to its cgroup
 }
 declare -A b a
 for h in acct user none; do b[$h]=$(file_of p04-hold-$h); done
-info "floors: eapodman.slice $(systemctl show -p MemoryLow --value eapodman.slice), eapodman-$UID_.slice $(systemctl show -p MemoryLow --value eapodman-$UID_.slice), user.slice $(systemctl show -p MemoryLow --value user.slice), user-$UID_.slice $(systemctl show -p MemoryLow --value user-$UID_.slice)"
+info "floors ($P): eapodman.slice $(systemctl show -p $P --value eapodman.slice), eapodman-$UID_.slice $(systemctl show -p $P --value eapodman-$UID_.slice), user.slice $(systemctl show -p $P --value user.slice), user-$UID_.slice $(systemctl show -p $P --value user-$UID_.slice)"
 # Pressure: stream a file 1.5x RAM, twice, from system.slice.
 systemd-run --quiet --wait --unit=p04-pressure --slice=system.slice sh -c 'cat /var/tmp/p04/big >/dev/null; cat /var/tmp/p04/big >/dev/null'
 for h in acct user none; do a[$h]=$(file_of p04-hold-$h); done
@@ -145,7 +151,9 @@ else
     result floor_verdict "kept: account slice $(keep acct)%, user-<uid>.slice $(keep user)%, no floor $(keep none)%"
 fi
 systemctl stop p04-hold-acct p04-hold-user p04-hold-none 2>/dev/null
-systemctl set-property --runtime "user-$UID_.slice" MemoryLow=
+systemctl set-property --runtime "user-$UID_.slice" $P=
+rm -rf /run/systemd/system.control/eapodman.slice.d "/run/systemd/system.control/eapodman-$UID_.slice.d"
+systemctl daemon-reload
 rm -rf /var/tmp/p04
 }
 

@@ -40,8 +40,18 @@ RUNTIME_PATH=$(command -v "$RUNTIME") || { echo "neither crun nor runc found" >&
 CONMON_PATH=$(command -v conmon) || { echo "conmon not found" >&2; exit 1; }
 
 install -d -m 0755 $ETC
+# T0.6 (1.x parity): EL and CloudLinux podman log events to a file and containers with k8s-file;
+# Ubuntu's uses journald for both. The events file lives in the capped runtime tmpfs and rotates at 1 MiB.
+. /etc/os-release
+case " $ID ${ID_LIKE:-} " in
+    *" ubuntu "*|*" debian "*) LOG_DRIVER=journald; EVENTS='events_logger = "journald"' ;;
+    *) LOG_DRIVER=k8s-file; EVENTS='events_logger = "file"\nevents_logfile_max_size = "1m"' ;;
+esac
+PODMAN_MAJOR=$(podman --version | awk '{split($3, v, "."); print v[1]}')
 sed -e "s|@RUNTIME@|$RUNTIME|g" -e "s|@RUNTIME_PATH@|$RUNTIME_PATH|g" -e "s|@CONMON_PATH@|$CONMON_PATH|g" \
-    conf/containers.conf | { if [ "$CGV" = 2 ]; then cat; else grep -v '^cgroups = "split"$'; fi; } >$ETC/containers.conf
+    -e "s|@LOG_DRIVER@|$LOG_DRIVER|" -e "s|^@EVENTS@$|$EVENTS|" conf/containers.conf \
+    | { if [ "$CGV" = 2 ]; then cat; else grep -v '^cgroups = "split"$'; fi; } \
+    | { if [ "$PODMAN_MAJOR" -ge 4 ]; then cat; else grep -v '^default_mounts_file'; fi; } >$ETC/containers.conf
 chmod 0644 $ETC/containers.conf
 install -m 0644 conf/storage.conf conf/registries.conf $ETC/
 install -m 0644 /dev/null $ETC/mounts.conf
@@ -53,9 +63,15 @@ rm -f "/etc/systemd/system/eapodman-$UID_.slice" "systemd/eapodman-$UID_.slice"
 systemctl daemon-reload
 # The account slice is implicit (no file). Its limits are drop-ins under system.control, as the
 # plan's set_slice_properties writes them. Floor = max(plugin floor, 256M+512M+64M) = 832M.
-systemctl set-property "eapodman-$UID_.slice" MemoryLow=832M MemoryMax=2G TasksMax=33%
+# TasksMax as an absolute count: systemd 249-257 writes `set-property TasksMax=33%` as 3.3% (T0.6, F23).
+# 33% of systemd's own base, min(threads-max, pid_max).
+TASKS_BASE=$(( $(cat /proc/sys/kernel/threads-max) < $(cat /proc/sys/kernel/pid_max) ? $(cat /proc/sys/kernel/threads-max) : $(cat /proc/sys/kernel/pid_max) ))
+rm -f "/etc/systemd/system.control/eapodman-$UID_.slice.d/50-TasksMaxScale.conf"
+systemctl set-property "eapodman-$UID_.slice" MemoryLow=832M MemoryMax=2G TasksMax=$(( TASKS_BASE * 33 / 100 ))
 systemctl start "ea-podman-runtime@$UID_.service"
 
+ULIMIT=()
+[ "$NPROC" = infinity ] || ULIMIT=(--ulimit "nproc=$NPROC:$NPROC")
 for c in "${CONTAINERS[@]}"; do
     IFS='|' read -r name flags memlow cpuweight <<<"$c"
     pidfile=$(conmon_pidfile "$name")
@@ -64,7 +80,8 @@ for c in "${CONTAINERS[@]}"; do
     case $rc in
         0) echo "$name already exists; keeping it" ;;
         # shellcheck disable=SC2086
-        1) as_user /usr/bin/podman create --name "$name" --conmon-pidfile "$pidfile" $flags "$IMAGE" >/dev/null ;;
+        # The --ulimit pin comes from the same NPROC as the unit's LimitNPROC (T0.6).
+        1) as_user /usr/bin/podman create --name "$name" --conmon-pidfile "$pidfile" "${ULIMIT[@]}" $flags "$IMAGE" >/dev/null ;;
         *) echo "$name: couldn't check whether it exists (exit $rc); see above" >&2; exit 1 ;;
     esac
     # Cross-check only: the inspect value is never written into the unit.

@@ -1,0 +1,41 @@
+host ea4-352-u24 os=ubuntu-24.04 kernel=6.8.0-149-generic cgroup=v2 systemd=255 podman=4.9.3
+
+### host
+RESULT t0-6.ram_mib 2972
+RESULT t0-6.cpus 3
+RESULT t0-6.pid_max 4194304
+RESULT t0-6.threads_max 23471
+RESULT t0-6.default_limit_nproc 11735 (soft 11735)
+RESULT t0-6.default_tasks_max 3520
+RESULT t0-6.pid1_nproc 11735/11735
+RESULT t0-6.limits_d_nproc 
+RESULT t0-6.user_slice_tasks_max user.slice=infinity user-1000.slice=7745
+RESULT t0-6.user_slice_dropins /usr/lib/systemd/system/user-.slice.d/10-defaults.conf
+RESULT t0-6.logind 
+RESULT t0-6.io_schedulers loop0=[none] mq-deadline  loop1=[none] mq-deadline  loop2=[none] mq-deadline  loop3=[none] mq-deadline  loop4=[none] mq-deadline  loop5=[none] mq-deadline  loop6=[none] mq-deadline  loop7=[none] mq-deadline  vda=[none] mq-deadline  
+RESULT t0-6.swap_devices 0
+RESULT t0-6.swap_accounting memory.swap.max present
+
+### TasksMax=33% on the account slice, as resolved
+RESULT t0-6.account_slice_tasks_max property=774 pids.max=774 (base for 33% = 2345)
+RESULT t0-6.eapodman_slice_tasks_max 7745
+
+### nproc as 2.0 runs it (kit: unit LimitNPROC=infinity, create through the runner)
+RESULT t0-6.nproc_2x conmon=4194304/4194304 container_init=1048576/1048576 pause=11735/11735 runner=/
+RESULT t0-6.container_spec_nproc 1048576/1048576
+
+### 1.x parity: the account's own user@ and logind's /run/user/<uid>
+RESULT t0-6.nproc_1x_user_manager 11735/11735
+RESULT t0-6.runtime_dir_1x size=304360k nr_inodes=76090 mode=700 
+RESULT t0-6.user_slice_pids_max_1x 7745
+RESULT t0-6.events_readback_1x 6 events
+
+### 2.0 runtime dir use with the kit's 3 containers
+RESULT t0-6.runtime_dir_2x size=304364k used=148KiB inodes=81
+
+### exit codes without journal readback (2.0 env, delegated runner)
+RESULT t0-6.run_rm_exit_code 3 (want 3)
+RESULT t0-6.wait_and_inspect_exit_code wait=4 inspect=4 (want 4)
+
+### the account slice's TasksMax under a fork storm (LimitNPROC infinity on the unit)
+RESULT t0-6.fork_storm slice had 61 tasks, TasksMax set to 161; forks that succeeded: 99 of 400

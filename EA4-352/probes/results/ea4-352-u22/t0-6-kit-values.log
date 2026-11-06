@@ -1,0 +1,7 @@
+RESULT nproc unit=11709 conmon=11709 container=11709 default=11709
+RESULT tasksmax 7727 dropin=TasksMax=7727
+RESULT tmpfs size=303956k nr_inodes=75989 
+RESULT conf log_driver = "journald" events_logger = "journald" 
+RESULT p0-5.log_driver journald
+RESULT p0-5.podman_logs_as_account works
+RESULT p0-5.podman_events_as_account works

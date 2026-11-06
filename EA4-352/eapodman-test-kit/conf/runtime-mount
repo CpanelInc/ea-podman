@@ -11,7 +11,9 @@ d=/run/ea-podman/user/$uid
 mkdir -p -m 0755 /run/ea-podman/user
 [ ! -L "$d" ] || { echo "$d is a symlink" >&2; exit 1; }
 [ -d "$d" ] || mkdir -m 0700 "$d"
-mountpoint -q "$d" || mount -t tmpfs -o "size=10%,mode=0700,uid=$uid,gid=$gid,nosuid,nodev" tmpfs "$d"
+# T0.6: logind's defaults, RuntimeDirectorySize=10% and RuntimeDirectoryInodesMax = size / 4096.
+size=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) * 1024 / 10 ))
+mountpoint -q "$d" || mount -t tmpfs -o "size=$size,nr_inodes=$(( size / 4096 )),mode=0700,uid=$uid,gid=$gid,nosuid,nodev" tmpfs "$d"
 # F16: XDG_CONFIG_HOME is root-owned and holds only a root-owned cni symlink into the tmpfs, where
 # rootless CNI (EL8's podman 4.x default) can write. Rebuilt every time, so nothing else survives.
 # $d is the account's own tmpfs, so it could swap cni for a symlink or a file between starts;

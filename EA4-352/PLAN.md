@@ -109,7 +109,14 @@ That gives those accounts back exactly what CLOS-4517 removed.
   - **MGLRU on** (`/sys/kernel/mm/lru_gen/enabled` = `0x0007` by default on EL9, EL10, CL9, CL10 and Ubuntu 24.04): the same holder kept 2–4%, the same as one with no floor. With `echo n > /sys/kernel/mm/lru_gen/enabled`, EL9 and Ubuntu 24.04 kept 100% again;
   - **Pressure inside the account slice** (the kit's `loadtest.sh`, slice `memory.max` 250M below usage) still respects the unit floors on every non-CloudLinux v2 host, MGLRU or not: web kept 245–252M against its 256M floor.
 
-  So on EL9+, CloudLinux 9/10 and Ubuntu 24.04 as shipped, `MemoryLow=` protects a container against its own account, not against the rest of the host. Decision: open (Open items).
+  So on EL9+, CloudLinux 9/10 and Ubuntu 24.04 as shipped, `MemoryLow=` protects a container against its own account, not against the rest of the host.
+
+  **T0.6: `MemoryMin=` does hold under MGLRU.** The same test with `MemoryMin=400M` on the holder, the account slice and `eapodman.slice` kept 100% on EL9 and Ubuntu 24.04 (MGLRU on) and on EL8 v2. As with `MemoryLow`, a floor on `user-<uid>.slice` still kept nothing.
+
+  **Decision (T0.6): keep `MemoryLow=` for both the unit floors and the account floor, and document the floors by platform.**
+  - **Why not `MemoryMin=`.** It is a hard reservation: the kernel never reclaims below it, so floors can't be overcommitted safely. The account slice's floor includes its units' floors, which come from the account's own `--memory-reservation`. With `MemoryMin` an account could pin host memory with an install flag.
+  - **Why not change the host.** Turning MGLRU off is a host-wide performance choice, not ea-podman's to make. The docs say what was measured, so an admin who wants host-wide protection can choose it.
+  - **Follow-up:** an admin-only "hard floor" in the plugin, which sets `MemoryMin` on the account slice from the admin's value alone, never from unit reservations, if Limits wants one.
 - **F14: `podman exec` processes are not in the container's cgroup.** An exec'd process stays in its caller's cgroup. The OCI runtime (runc on EL8, crun elsewhere) can't move it into the container's `libpod-payload-*` cgroup: on cgroup v2 a move needs write access to `cgroup.procs` of the common ancestor, which is the root-owned `eapodman-<uid>.slice`. The rootless runtime ignores the failure. This happens even when the caller is a delegated transient. Since every 2.0 exec goes through the slice runner, an exec'd process runs in the runner's transient unit under `eapodman-<uid>.slice`:
   - it is bound by the account slice (`MemoryMax`, `TasksMax`, CPU weight) and the namespace rule (F11), not by the LVE (F18), but **not** by the container's `--memory`/`--cpus`/`--pids-limit`, and it is not counted in the container's cgroup or `podman stats`;
   - it lives only as long as the runner: `RuntimeMaxSec` and `KillMode=control-group` end it, so `podman exec -d` can't outlive the call.
@@ -236,6 +243,10 @@ That gives those accounts back exactly what CLOS-4517 removed.
   - **Once the session ends,** every podman call on the old storage fails: `mkdir /run/user/<uid>: permission denied` (`configure storage:` on 5.x). logind removes `/run/user/<uid>` shortly after `user@` stops (`user-runtime-dir@` is `StopWhenUnneeded`).
   - **Seen on** EL8 v1 and v2, EL9, EL10, Ubuntu 22.04 and 24.04. On CL8 the old DB failed even with the session up (`lstat /run/user/<uid>/libpod: permission denied`, cause not investigated). On CL9/CL10 a 1.x systemd-managed container couldn't be created to test (`crun: error creating systemd unit libpod-*.scope: got failed`, the known CloudLinux v2 user-manager breakage).
   - **Consequence for 4.2a/4.3:** every old-storage step (save, export, inspect) must run while the account's `/run/user/<uid>` still exists, before step 12 releases the session. Otherwise root must provide that directory for the step. Open items.
+- **F23: `systemctl set-property … TasksMax=N%` is written as N/10 % on systemd 249–257** (T0.6). `set-property TasksMax=33%` writes `TasksMax=3.3%` into the `system.control` drop-in and applies it: about 700 tasks on these VMs instead of about 7,000.
+  - **Where:** systemd 249, 252, 255 and 257 (Ubuntu 22.04 and 24.04, EL9, EL10, CL9, CL10). 239 (EL8, CL8) writes 33%.
+  - **Only `TasksMax`:** `MemoryMax=10%`, `MemoryLow=5%` and `CPUQuota=150%` are written and applied correctly. A percentage in a unit file is also correct (`eapodman.slice`'s `TasksMax=33%` resolves to about 7,000).
+  - **Fix:** ea-podman never passes a `TasksMax` percentage to `set-property`. It resolves percentages itself to `floor(pct × min(threads-max, pid_max) / 100)`, which is systemd's own base: it matched `user-<uid>.slice` on every VM. `set_slice_properties` accepts `TasksMax` only as digits or `infinity`.
 - **F22: with split pinned, `podman start`/`run` needs a delegated cgroup** (T0.2, P0-8/P0-11). On every v2 host, `podman start` and `podman run --rm` from the non-delegated slice runner fail: `mkdir /sys/fs/cgroup/eapodman.slice/eapodman-<uid>.slice/eapodman-run-…/runtime: permission denied`; `supervisor` on podman 3.4. They work from a `Delegate=yes` transient, and on v1. `podman build` with a `RUN` step works from the plain runner everywhere. So any 2.0 path that starts a container outside its unit needs `Delegate=yes` on the runner, or has to go through the unit. That covers CMD with `run`, and anything that starts a container to verify it. Open items.
 
 ## Phase 0: spikes (gate everything)
@@ -348,8 +359,21 @@ Run each probe on these hosts:
   - **Unit output:** a `User=` unit's output (podman, plus conmon on Ubuntu) is in `journalctl -u` everywhere.
   - **Default log driver:** `k8s-file` on EL and CloudLinux, `journald` on Ubuntu. `podman logs` works as the account through the runner on all 9.
   - **EL and CloudLinux** have a volatile journal (no `/var/log/journal`), so there are no per-user journal files. As the account, `podman events` and `podman logs` of a `--log-driver=journald` container return **nothing, with exit 0**, though root sees the entries. Ubuntu (persistent, split per uid) works.
-  - **Impact:** ea-podman reads neither. 1.x writes to the same system journal, so its readback is very likely the same (not measured).
-  - **Verdict:** keep `events_logger = "journald"` and document the readback.
+  - **Impact:** ea-podman reads neither.
+  - **T0.6 correction:** 1.x does *not* have this gap. Its podman reads the distro's own config: on EL and CloudLinux that is `events_logger = "file"` (and log driver `k8s-file`), so the account reads its events back; on Ubuntu, `journald`. The plan's "journald is the 1.x default" held only on Ubuntu, so pinning `journald` everywhere would regress `podman events` on EL and CloudLinux.
+  - **Verdict (T0.6):** pin what each distro's podman uses: `events_logger = "file"` with `events_logfile_max_size = "1m"`, and `log_driver = "k8s-file"`, on EL and CloudLinux; `journald` for both on Ubuntu. The events file lives in the capped runtime tmpfs and rotates (a 1.2 MB file dropped to about 600 KB on the next event, podman 4.9.4 and 5.8.2). With this, `podman events` and `podman logs` work as the account on all 9 VMs.
+- **T0.6 measurements** (`probes/t0-6.sh`, `p0-4.sh floor` with `FLOOR=min`, logs in `probes/results/`):
+  - **nproc:** `DefaultLimitNPROC` is 10.5k–11.7k on these 3 GB VMs (`threads-max / 2`). The 1.x user manager runs with exactly that on all 9.
+  - **The nproc pin:** podman 3.4.4, 4.9.3, 4.9.4 and 5.8.2 all start a container at the unit's `LimitNPROC`, whether or not create pinned `--ulimit nproc`. Created through the runner, nothing bakes a value the unit can't honour (CPANEL-54037 needed cpsrvd's unlimited creator).
+  - **Tasks:** systemd's base for `TasksMax=%` is `threads-max` (about 21–23k). `user-<uid>.slice` is 33% (about 7k) on EL9+, CL9+ and Ubuntu, and 80% on EL8/CL8 (RHEL 8's `user-.slice` default). `DefaultTasksMax` is 80% on EL and CloudLinux, 15% on Ubuntu.
+  - **Fork storm:** with the unit's `LimitNPROC` at `infinity`, the account slice's `TasksMax` stopped a fork storm exactly at the limit on all 9 (99 of 400 forks).
+  - **Runtime dir:** 1.x's `/run/user/<uid>` is `size=10%` of RAM, plus `nr_inodes=size/4096` on systemd ≥ 246 (none on 239). The 2.0 tmpfs held 92–208 KiB and 66–91 inodes with three containers.
+  - **Units:** 3,000 extra enabled units added 0.5 s (EL8, systemd 239) to 1 s (EL10, 257) to a `daemon-reload` and 8–13 MiB to PID 1, about 0.2–0.3 ms and 3–4 KiB per unit.
+  - **Swap:** accounting exists on all 9 (`memory.swap.max` on v2, `memory.memsw.*` on v1). With a real 1G swap file on EL8 v2, EL9 and Ubuntu 24.04:
+    - `--memory=256m --memory-swap=256m` gives `swap.max=0`, and a 400M allocation is OOM-killed with no swap used;
+    - `--memory-swap=768m` lets it succeed with about 160 MiB swapped.
+  - **Exit codes:** `podman run --rm` and `podman wait` exit codes are right on all 9, so nothing functional depends on the journal.
+  - **IO:** every VM disk runs `none` or `mq-deadline`, so `IOWeight=` has no effect there (it needs BFQ or `io.cost`).
 - **P0-6:** see F18. On v1, LVE and unit tracking coexist. For caged accounts `PAMName=` can't run podman. The PAM file needs an `account` line. On v2 the runner loses its deadline.
   - **Not run:** a `PAMName` container through restart and reboot (none would start), and `lve_wrapper` on v1.
 - **P0-7 (partial):**
@@ -392,7 +416,7 @@ Run each probe on these hosts:
 - Load it with the guarded sibling-require used for `subids.pm` (`util.pm:92-100`).
 
 **Pinned config, root:root 0644 under `/opt/cpanel/ea-podman/etc/`:**
-- `containers.conf`: `cgroup_manager="cgroupfs"`, `cgroups="split"` **on cgroup v2 only** (F12, F17), `events_logger="journald"` (the 1.x default; per P0-5), explicit `runtime` and `conmon_path`, `hooks_dir=[]`, and `default_mounts_file` pointed at an empty root-owned file, so the account's `~/.config/containers/mounts.conf` can't add mounts. If P0-5 forces `events_logger="file"`, also set `events_logfile_max_size` wherever the podman version supports it. The events file then lives in the capped runtime tmpfs (F8), so it can't grow past that cap even on podman 3.4, which doesn't rotate it.
+- `containers.conf`: `cgroup_manager="cgroupfs"`, `cgroups="split"` **on cgroup v2 only** (F12, F17), `events_logger` and `log_driver` as each distro's own podman uses them (T0.6, 1.x parity): `"file"` with `events_logfile_max_size = "1m"` and `log_driver = "k8s-file"` on EL and CloudLinux, `"journald"` for both on Ubuntu. Also explicit `runtime` and `conmon_path`, `hooks_dir=[]`, and `default_mounts_file` pointed at an empty root-owned file, so the account's `~/.config/containers/mounts.conf` can't add mounts. `default_mounts_file` is left out on podman 3.4, which doesn't know it (T0.2). The events file lives in the capped runtime tmpfs (F8).
 - **`containers.conf` follows the host's cgroup version (F17).**
   - **How it is rendered:** root renders it from fixed text in code. The `cgroups = "split"` line is present only when `/sys/fs/cgroup/cgroup.controllers` exists, and a marker line records the version it was rendered for.
   - **Atomic rewrite:** a tmp file, fsync, then rename, so a podman reading it mid-change sees the old or the new file, never half of one.
@@ -411,7 +435,7 @@ Run each probe on these hosts:
 - `ExecStartPre=+/opt/cpanel/ea-podman/bin/runtime-mount %i`. This is a root-owned helper and the only privileged Exec line in any ea-podman unit. It is allowed because the anchor is fixed packaged text, never rendered. The helper:
   - accepts only a numeric `%i` that `getpwuid` resolves, and is not 0;
   - creates `/run/ea-podman/user/<uid>` (root parents, 0755) unless it exists, refusing a symlink or a non-directory;
-  - mounts a tmpfs on it unless one is already mounted there: `size=` and `nr_inodes=` from root-owned `/opt/cpanel/ea-podman/etc/runtime.conf` (defaults matching logind's `RuntimeDirectorySize=10%` and `RuntimeDirectoryInodesMax`), `mode=0700`, `uid=`, `gid=`, `nosuid`, `nodev`;
+  - mounts a tmpfs on it unless one is already mounted there: `size=` and `nr_inodes=` from root-owned `/opt/cpanel/ea-podman/etc/runtime.conf`. The defaults are logind's: `size` = 10% of RAM, resolved to bytes, and `nr_inodes` = size / 4096 (T0.6), `mode=0700`, `uid=`, `gid=`, `nosuid`, `nodev`;
   - creates `/run/ea-podman/xdg/<uid>` (root:root 0755) and its root-owned `cni` symlink into the tmpfs (F16), replacing anything else found there;
   - re-renders the pinned `containers.conf` if its cgroup-version marker doesn't match the host (F17). This is fixed text with no input from the account.
 
@@ -434,7 +458,7 @@ Run each probe on these hosts:
 - `PIDFile=/run/ea-podman/user/{UID}/{NAME}.conmon.pid`. Root chooses this path, and the as-user create sets it with `podman create --conmon-pidfile` (`units::conmon_pidfile($uid, $name)`, Phase 3). Root never takes the path from `podman inspect`, which reads the account's libpod DB (F4).
   - The account can still change where conmon writes, through its DB or by recreating the container with raw podman. The unit then finds no PID file and fails to start; that only harms the account. A PID it writes there that is outside the unit's cgroup is refused (invariant 19).
   - Rootful containers use `/run/ea-podman-{NAME}.conmon.pid`, directly under root-owned `/run`.
-- `LimitNPROC={NPROC}`.
+- `LimitNPROC={NPROC}`: the host's `DefaultLimitNPROC` (`systemctl show -p DefaultLimitNPROC`), or `infinity` if that is what it says (T0.6). 1.x's user manager ran with exactly this on every target. The account-wide bound is the slice's `TasksMax`, not this.
 - `Delegate=`, written as the explicit list `cpu io memory pids` (plus `cpuset` where systemd is 244 or newer; EL8's 239 can't delegate it, so `--cpuset-cpus` is not supported there). This is the same as `Delegate=yes` today, but makes it clear what the account receives.
 - `MemoryLow={MEMLOW}` and `CPUWeight={CPUWEIGHT}` (F13). Without them, a container's `--memory-reservation` and `--cpu-shares` are written into its cgroup but do nothing.
   - The values come from the validated install args (`--memory-reservation`, `--cpu-shares`), recorded in the registry entry as `memory_low` and `cpu_weight` at `REGISTER`. Root never reads them back from the libpod DB, which the account owns (F4).
@@ -460,14 +484,14 @@ Run each probe on these hosts:
 - It groups the account's anchor unit, its container units, and the plugin's build jobs. It gives the account a place for a `MemoryLow` floor, real totals (`MemoryMax`, `CPUQuota`, `TasksMax`) and live changes through `systemctl set-property`. Per-container flags still need a recreate.
 - **Naming and nesting.** Dashes in slice names mean nesting, so `eapodman-1002.slice` sits under `eapodman.slice`, which sits directly under the root (F9). The account slices must not sit at the top level: each would be a sibling of `system.slice` with the same CPU and IO weight, and N container accounts would together outweigh every system service N to 1.
 - **Parent slice: `/usr/lib/systemd/system/eapodman.slice`**, shipped in the package as fixed text:
-  - `CPUWeight=` and `IOWeight=` equal to `user.slice`'s, so all container accounts together compete like one `user.slice`;
-  - `TasksMax=` from `runtime.conf` (default 33%, logind's `UserTasksMax`) as a host-wide total;
+  - `CPUWeight=100` and `IOWeight=100`, equal to `user.slice`'s, so all container accounts together compete like one `user.slice` (T0.2/T0.6: 33% each for system, user and `eapodman.slice` on all 9). `IOWeight` only has an effect where the disk's scheduler supports weights;
+  - `TasksMax=` from `runtime.conf` (`eapodman_tasks_max`, default 33%) as a host-wide total, written as an absolute count (F23);
   - `MemoryLow=` is kept by root equal to the sum of the account slices' floors. A child's `memory.low` only takes effect up to what its ancestors are protected for, so `set_slice_properties` and `clear_slice_properties` recompute the parent in the same call.
 - **Account floor includes unit floors (F13).** The account slice's effective `MemoryLow` is the larger of the plugin's account floor and the sum of the account's container units' `MemoryLow`. `write_unit` and `remove_unit` recompute it, and `eapodman.slice`'s, in the same call as `set_slice_properties`, so a reservation is never larger than what its ancestors protect.
-- **Per-account defaults.** Each account slice gets a default `TasksMax` (from `runtime.conf`, default the same as `user-<uid>.slice` today), so an account's units share one task total instead of 15% each. If the host has drop-ins on `user-.slice` or `user-<uid>.slice` (`MemoryMax`, `CPUQuota`, `TasksMax`), `ensure_runtime` logs them and the release notes say that they no longer cover containers and must be set on `eapodman-.slice` instead.
+- **Per-account defaults.** Each account slice gets a default `TasksMax` (`account_tasks_max` in `runtime.conf`, default 33%, written as an absolute count, F23), so an account's units share one task total instead of each unit getting `DefaultTasksMax`. That equals `user-<uid>.slice` on EL9+, CloudLinux 9+ and Ubuntu. RHEL 8's `user-.slice` says 80%, but `eapodman.slice`'s 33% caps it anyway (T0.6). If the host has drop-ins on `user-.slice` or `user-<uid>.slice` (`MemoryMax`, `CPUQuota`, `TasksMax`), `ensure_runtime` logs them and the release notes say that they no longer cover containers and must be set on `eapodman-.slice` instead.
 - **Implicit, no file.** systemd cannot template slices, and it creates a slice implicitly when a unit references it with `Slice=`. So no per-account slice file is written; the defaults are set by `ensure_runtime` through `set_slice_properties`. On EL8 (systemd 239), `systemctl set-property` on the implicit slice was confirmed to write its drop-ins under `system.control` and apply them (`eapodman-test-kit/verify.sh`). If P0-4 shows a file is needed elsewhere, it is fixed text with the uid from `getpwnam`, written like the unit file.
 - **Properties are set only by root,** through `set_slice_properties($user, %props)`:
-  - whitelist: `MemoryLow`, `MemoryMax`, `CPUQuota`, `TasksMax`;
+  - whitelist: `MemoryLow`, `MemoryMax`, `CPUQuota`, `TasksMax`. `TasksMax` must be digits or `infinity`; a `runtime.conf` percentage is resolved by ea-podman first (F23);
   - values must be numeric, unit-suffixed, or `infinity`;
   - the slice name is always derived from `getpwnam`, never from caller input.
 
@@ -496,7 +520,9 @@ After rendering, check the output against the template skeleton:
 - Write a tmp file in `/etc/systemd/system` with `O_EXCL|O_NOFOLLOW`, root:root 0644, fsync, then rename.
 - Refuse if the destination is a symlink or not a regular file.
 - Then `daemon-reload`, coalesced: a reload already pending (the 1.x `/run/ea-podman/reload-pending` pattern) is not repeated, and reloads are rate-limited host-wide. Accounts can trigger `UNIT_INSTALL`/`UNIT_REMOVE`, and each one reloads PID 1, which in 1.x only the account's own manager did.
-- **Per-account unit cap.** `write_unit` refuses past `max_units_per_account` (root-owned `runtime.conf`), so an account can't fill `/etc/systemd/system` or PID 1's memory.
+- **Per-account unit cap.** `write_unit` refuses past `max_units_per_account` (root-owned `runtime.conf`, default 50, T0.6), so an account can't fill `/etc/systemd/system` or PID 1's memory.
+  - **The cost it bounds:** each enabled unit costs PID 1 about 3–4 KiB and 0.2–0.3 ms per `daemon-reload` (T0.6).
+  - **Migration never refuses:** an account's existing 1.x containers are migrated even past the cap. The cap only refuses new installs, and its message names the setting.
 
 **API, all root-only (each dies unless `$> == 0`):**
 - `write_unit`, `remove_unit`
@@ -559,7 +585,7 @@ All in `SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm`.
   - `ensure_su_login` (`util.pm:118`), `run_in_user_session` (`util.pm:3353`) and `resolve_container_init_pid` (`util.pm:300`) apply `podman_env`. When root calls them, they run through the slice runner (F11), never a direct setuid fork.
   - Keep the "rootless runtime directory … does not exist" wording, because `ea-podman.pl:103` matches on it.
   - `get_containers` (`util.pm:646`) and `util.pm:2103` check the new runtime dir.
-- **nproc:** the unit's `LimitNPROC` and the `--ulimit nproc` passed at create (`util.pm:479-491`) come from the same `container_nproc_cap`.
+- **nproc:** the unit's `LimitNPROC` and the `--ulimit nproc` passed at create (`util.pm:479-491`) come from the same `container_nproc_cap`, which is now the host's `DefaultLimitNPROC` rather than the user manager's (T0.6). The pin stays as a guard: the baked value can never exceed what the unit allows.
 - **conmon PID file:** every create (install, upgrade, rollback, `op => 'migrate'`) also passes `--conmon-pidfile` from `conmon_pidfile($uid, $name)`, so the unit's `PIDFile=` (Phase 1) is where conmon writes.
 - **`_backup_name_is_free` (`util.pm:2153`)** checks the `/etc` unit path.
   - **The session gap closes.** Its podman check no longer depends on the account having a session.
@@ -615,7 +641,7 @@ All in `SOURCES/Cpanel-Admin-Modules-Cpanel-ea_podman.pm`.
 - Output is buffered, not streamed. That's acceptable; note it in the help text for install/upgrade.
 - **Root-side limits, because every non-root verb now runs in cpsrvd:**
   - the captured output and the Storable return of `_as_cpuser` are capped at 1 MB per stream, like the migration runner (the rest is drained and discarded, and the reply says it was truncated);
-  - a per-account semaphore (`max_concurrent_admin_actions` in `runtime.conf`, default 2) limits how many long-running actions (INSTALL, UPGRADE, BACKUP, RESTORE, CLEAN, CMD) one account can hold open at once. Further calls fail at once with "too many ea-podman operations in progress for this account".
+  - a per-account semaphore (`max_concurrent_admin_actions` in `runtime.conf`, default 2; kept by T0.6) limits how many long-running actions (INSTALL, UPGRADE, BACKUP, RESTORE, CLEAN, CMD) one account can hold open at once. Further calls fail at once with "too many ea-podman operations in progress for this account".
 
 **Remove the EAPodman UAPI:**
 - **Code and build:**
@@ -1113,7 +1139,7 @@ On the plugin side:
     - the runtime dir is a capped tmpfs (`runtime.conf`), as `/run/user/<uid>` was;
     - path arguments to ea-podman (other than `-v`/`--mount`, EA4-343) must be inside the account's home;
     - per-account limits on concurrent ea-podman operations and on the number of containers;
-    - per-container `--memory`/`--memory-swap`/`--cpus`/`--pids-limit` are now enforced on cgroup v2 (`--cgroups=split`); `--memory-swap` needs kernel swap accounting; `--memory-reservation` and `--cpu-shares` now take effect between containers through the unit's `MemoryLow=`/`CPUWeight=` (F13), and changing them needs a recreate; `--cgroups`, `--cgroup-parent` and `--cgroup-conf` start args are refused;
+    - per-container `--memory`/`--memory-swap`/`--cpus`/`--pids-limit` are now enforced on cgroup v2 (`--cgroups=split`); `--memory-swap` needs kernel swap accounting (present on every supported target; where it is missing, INSTALL warns and podman drops the limit, T0.6); `--memory-reservation` and `--cpu-shares` now take effect between containers through the unit's `MemoryLow=`/`CPUWeight=` (F13), and changing them needs a recreate; `--cgroups`, `--cgroup-parent` and `--cgroup-conf` start args are refused;
     - cgroup v2 is recommended on every OS except CloudLinux 8, which stays on v1 until EA4-365 (`tuned-adm profile cloudlinux-default-cgv2` on CloudLinux 9/10, `grubby` elsewhere). On CL8, per-container limits stay unenforced, as in 1.x. Split, and so per-container limits, is pinned only on v2. A container created before a cgroup switch must be recreated (`ea-podman upgrade`): after v1 → v2 to get its limits, after v2 → v1 to start at all (F17). `--cgroup-manager` start args are refused, like `--cgroups*`;
     - memory floors (`--memory-reservation`, the plugin's account floor) are best effort: reliable on newer kernels, not on EL8, and possibly ineffective on CloudLinux (F13);
     - on CloudLinux, how containers relate to the account's LVE, as decided under F18;
@@ -1200,17 +1226,24 @@ On the plugin side:
 ## Open items (resolved by the spikes or a quick call)
 
 - **Resolved (T0.3): the LVE or the limits on CloudLinux (F18).** Limits win. Containers run outside the LVE, the account slice owns account totals (its `MemoryMax` is set by the plugin), and WHM warns about it on CloudLinux (EA4-368 comment 1806876). Still open, with CloudLinux (T0.7): their view, and an LVE that can account for a systemd-delegated subtree.
-- **`LimitNPROC`:** use the system `DefaultLimitNPROC`, or a fixed cap?
-- **Parent slice values:** `eapodman.slice` `CPUWeight`/`IOWeight`/`TasksMax`, and the per-account default `TasksMax` (P0-4). Nesting itself is decided (F9).
-- **`runtime.conf` defaults:** tmpfs `size`/`nr_inodes`, `max_units_per_account`, `max_concurrent_admin_actions`.
-- **Swap accounting and the runtime's shares conversion:** which targets lack `memory.swap.max`, and what `cpu.weight` each target's OCI runtime (crun or runc) writes for `--cpu-shares` (P0-4).
+- **Resolved (T0.6): `LimitNPROC`.** The host's `DefaultLimitNPROC`, for the unit and the create-time pin alike, because that is what 1.x's user manager ran with on every target. A fixed cap was rejected: it would sit below 1.x on large hosts, and the account-wide bound is the slice's `TasksMax`, which stopped a fork storm on all 9 VMs.
+- **Resolved (T0.6): parent slice values.**
+  - **`eapodman.slice`:** `CPUWeight=100` and `IOWeight=100` (`user.slice`'s), and `TasksMax` 33% as a host total.
+  - **Each account slice:** `TasksMax` 33% by default.
+  - **Both** are written as absolute counts (F23); `MemoryLow` is the sum of the floors, as decided.
+- **Resolved (T0.6): `runtime.conf` defaults.**
+  - `runtime_dir_size` 10% of RAM and `runtime_dir_inodes` = size/4096 (logind's);
+  - `max_units_per_account` 50 (migration exempt);
+  - `max_concurrent_admin_actions` 2;
+  - `eapodman_tasks_max` and `account_tasks_max` 33%.
+- **Resolved (T0.2): swap accounting and the runtime's shares conversion.** Swap accounting is present on all 9 targets. `cpu.weight` for `--cpu-shares` follows the OCI runtime version (P0-4).
 - **Resolved (T0.4): a killed conmon (F15).** 1.x behaves the same, so the decision is to accept it, document the recovery (`ea-podman upgrade --force` on Ubuntu 24.04, `ea-podman restart` on 22.04) and revisit when Ubuntu's podman moves. See F15.
-- **Swap accounting:** where it is missing, does INSTALL refuse `--memory-swap` or only warn?
+- **Resolved (T0.6): `--memory-swap` without swap accounting.** INSTALL warns and doesn't refuse. That matches podman, which warns and drops the limit, and cgroup v1 rootless, where every limit is dropped (F12). Root detects it per host: no `memory.swap.max` on v2, no `memory.memsw.*` on v1. It didn't fire on any target: accounting is present on all 9, and enforcement was confirmed with real swap on EL8 v2, EL9 and Ubuntu 24.04.
 - **BPF-LSM support matrix:** which platforms can enable the F11 rule (P0-12).
 - **CloudLinux 10 ships `user.max_user_namespaces=0`** (CLOS-2616). That blocks 1.x and 2.0 alike. The EA4-360 gate reports it with https://go.cpanel.net/userns. Raise it with CloudLinux, together with F11 and F18.
 - **Resolved (T0.5): containers created before a cgroup switch (F17).** The mode is fixed at create. Root names them with the remedy `ea-podman upgrade --force <name>`, and never recreates them on its own. See F17.
 - **CPANEL-57893 (`CPANEL-57893-full`; PR #44 and the denylist are on `CPANEL-57513`).** When it reaches main, reconcile its start-arg denylist, and its dropping of recorded cap flags on upgrade and restore, with Phase 3b and with F13's install args (`--memory-reservation` and `--cpu-shares`, recorded as `memory_low` and `cpu_weight`). Also drop its `--cgroups=enabled` (F17).
-- **`hidepid=2` and `podman stop` (EA4-366).** On CL8, a rootless stop times out and the unit ends `failed`; 1.x does the same. P0-3 measures the effect on STOP and UNIT_REMOVE. EA4-366 decides whether ea-podman keeps recommending `hidepid=2`.
+- **Resolved for 2.0 (T0.2/T0.6): `hidepid=2` and `podman stop` (EA4-366).** In the 2.0 layout the stop doesn't time out (CL8 `hidepid=2`, CL9 `invisible`: `Result=success`, nothing left, `podman rm` works). So STOP's verdict and UNIT_REMOVE's stop-then-remove order need no special case. Whether ea-podman keeps recommending `hidepid=2` stays with EA4-366.
 - **Uninstall without user namespaces (EA4-367).** Both of its gaps survive this plan, and Phase 3 covers them: the uninstall result, and "couldn't check" in `_podman_container_exists`.
 - **Follow-up:** a root-owned graphroot to close F4.
 - **Follow-up: exec'd processes under the container's limits (F14 option 2).** Root forks a child that drops to the account and waits on a pipe, writes the child's PID into a sub-cgroup of the container unit (its delegated subtree), then lets it run `podman exec`; the runtime's own move into `libpod-payload-*` then succeeds because the common ancestor is the delegated unit. Gains: Docker-like accounting, `exec -d` lives as long as the container. Costs: root writes into a tree the account controls (it can remove or retype the target, or set `pids.max=0`, a tiny `memory.max` or `cgroup.freeze`; all self-DoS, but paths must be checked and failures must refuse, never fall back); the process leaves the runner's cgroup, so `RuntimeMaxSec`/`KillMode=control-group` no longer bound it and root must enforce the timeout and reaping itself (4.2a); exec'd work competes with the serving container and can get it OOM-killed. Do it only if the plugin needs exec'd work held to a container's budget.
@@ -1223,14 +1256,17 @@ On the plugin side:
   - **Some other unit shape.**
 
   `ea-podman bash` also needs a root step, since it is direct today. Revisit F14's "accept and document".
-- **Memory floors and MGLRU (F13).** Accept and document that `MemoryLow=` doesn't hold against host-wide pressure where MGLRU is on (EL9+, CL9/10, Ubuntu 24.04), recommend `lru_gen` off, or drop the floor promises. The plugin's account floor (Phase 6) is affected the same way.
+- **Resolved (T0.6): memory floors and MGLRU (F13).** Keep `MemoryLow=` for the unit and account floors and document them by platform. `MemoryMin=` holds under MGLRU but is a hard reservation an account could inflate through `--memory-reservation`. An admin-only hard floor in the plugin is a follow-up.
 - **Resolved (T0.3): `PAMName=` on CloudLinux (F18).** Not used. These T0.2 results are why, and they go to the CloudLinux conversation (T0.7): `pam_lve` cages or refuses a caged account's session; a `PAM` file without an `account` line fails; and on v2 a `PAMName` transient escapes its deadline.
 - **Old storage during the migration (F21).** Order the steps so that every old-storage podman call runs before step 12 releases the 1.x session, or have root provide `/run/user/<uid>` for those steps. Also handle a 1.x DB whose runroot is elsewhere (`/tmp/…`, seen where the account first ran podman without a session).
 - **Starting containers outside a unit (F22).** The slice runner needs `Delegate=yes` (or a unit) for any podman call that starts a container: CMD `run`, and verify steps.
 - **The SELinux `netns` step (F19)** goes into Phase 1's anchor helper, and the SELinux targets go into the live matrix.
 - **Resolved (T0.4): Ubuntu 22.04 conmon kill (F15).** Part of F15's decision: `ea-podman restart` restores the port.
-- **podman 3.4 and `default_mounts_file`.** Render the pinned `containers.conf` without that key on podman 3.4, so its warning doesn't appear in every command's output.
-- **journald readback (P0-5).** On EL and CloudLinux the account can't read its own journal entries: `podman events`, and `podman logs` with `--log-driver=journald`, come back empty. Keep `events_logger = "journald"` and document this, or move to `events_logger = "file"` in the capped tmpfs.
+- **Resolved (T0.6): podman 3.4 and `default_mounts_file`.** The pinned `containers.conf` leaves the key out on podman 3.4 (the kit does; no warnings on Ubuntu 22.04).
+- **Resolved (T0.6): `events_logger` (P0-5).**
+  - **What 1.x used:** EL and CloudLinux's podman used `file` (the vendor `containers.conf`), not journald. Pinning journald would have regressed `podman events` there.
+  - **The pin:** `file` with `events_logfile_max_size = "1m"` and `log_driver = "k8s-file"` on EL and CloudLinux; `journald` for both on Ubuntu.
+  - **Verified:** events and logs read back as the account on all 9, and the file rotates.
 - **runc and unsplit containers with limits (F17).** On EL8 v2, a container created without split and with `--memory` can't start from its unit. 2.0 pins split there, so this only matters for containers created by hand or by 1.x.
 
 ## Verification

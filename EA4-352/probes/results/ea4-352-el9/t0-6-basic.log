@@ -1,0 +1,41 @@
+host ea4-352-el9 os=almalinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+
+### host
+RESULT t0-6.ram_mib 2711
+RESULT t0-6.cpus 3
+RESULT t0-6.pid_max 4194304
+RESULT t0-6.threads_max 21032
+RESULT t0-6.default_limit_nproc 10516 (soft 10516)
+RESULT t0-6.default_tasks_max 16825
+RESULT t0-6.pid1_nproc 10516/10516
+RESULT t0-6.limits_d_nproc 
+RESULT t0-6.user_slice_tasks_max user.slice=infinity user-1000.slice=6940
+RESULT t0-6.user_slice_dropins /usr/lib/systemd/system/user-.slice.d/10-defaults.conf
+RESULT t0-6.logind 
+RESULT t0-6.io_schedulers vda=[none] mq-deadline kyber bfq  
+RESULT t0-6.swap_devices 0
+RESULT t0-6.swap_accounting memory.swap.max present
+
+### TasksMax=33% on the account slice, as resolved
+RESULT t0-6.account_slice_tasks_max property=694 pids.max=694 (base for 33% = 2103)
+RESULT t0-6.eapodman_slice_tasks_max 6940
+
+### nproc as 2.0 runs it (kit: unit LimitNPROC=infinity, create through the runner)
+RESULT t0-6.nproc_2x conmon=unlimited/unlimited container_init=1048576/1048576 pause=10516/10516 runner=10516/10516
+RESULT t0-6.container_spec_nproc 1048576/1048576
+
+### 1.x parity: the account's own user@ and logind's /run/user/<uid>
+RESULT t0-6.nproc_1x_user_manager 10516/10516
+RESULT t0-6.runtime_dir_1x size=277708k nr_inodes=69427 mode=700 
+RESULT t0-6.user_slice_pids_max_1x 6940
+RESULT t0-6.events_readback_1x 6 events
+
+### 2.0 runtime dir use with the kit's 3 containers
+RESULT t0-6.runtime_dir_2x size=277712k used=152KiB inodes=91
+
+### exit codes without journal readback (2.0 env, delegated runner)
+RESULT t0-6.run_rm_exit_code 3 (want 3)
+RESULT t0-6.wait_and_inspect_exit_code wait=4 inspect=4 (want 4)
+
+### the account slice's TasksMax under a fork storm (LimitNPROC infinity on the unit)
+RESULT t0-6.fork_storm slice had 19 tasks, TasksMax set to 119; forks that succeeded: 99 of 400

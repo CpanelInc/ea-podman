@@ -1,0 +1,7 @@
+RESULT nproc unit=10516 conmon=10516 container=10516 default=10516
+RESULT tasksmax 6940 dropin=TasksMax=6940
+RESULT tmpfs size=277712k nr_inodes=69427 
+RESULT conf default_mounts_file = "/etc/eapodman-test/mounts.conf" log_driver = "k8s-file" events_logger = "file" events_logfile_max_size = "1m" 
+RESULT p0-5.log_driver k8s-file
+RESULT p0-5.podman_logs_as_account works
+RESULT p0-5.podman_events_as_account works
