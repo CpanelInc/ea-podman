@@ -133,8 +133,29 @@ That gives those accounts back exactly what CLOS-4517 removed.
     - **Doesn't reproduce:** 4.9.4-rhel (AlmaLinux 8.10, CloudLinux 8) and 5.8.2 (AlmaLinux 9.8 and 10.2, CloudLinux 9 and 10). There the container whose conmon was killed is back in about 7 s.
     - **Ubuntu 22.04 (podman 3.4.4), T0.2:** a different failure. `Restart=` brings the unit back (new conmon, `NRestarts` 1, container `Up`), but the container's published port is gone: `Connection refused`, its rootlessport died with the old conmon. The unit looks healthy and serves nothing.
     - **T0.2 matrix** (kit `lifecycle.sh`, all 9 VMs): recovers on 4.9.4-rhel (EL8 v1 and v2, CL8 v1) and 5.8.2 (EL9, EL10, CL9, CL10); Ubuntu 24.04 (4.9.3) as above.
-  - **Not yet known:** whether 1.x behaves the same. Under 1.x, conmon and the container are in different cgroups, so the container probably survives a conmon kill.
-  - **Decision: open** (Open items). Ubuntu 24.04 (and any host still on an affected podman) needs a fix or a documented recovery before 2.0 ships, because an account-slice OOM is a normal event.
+  - **1.x behaves the same** (T0.4, `probes/f15-1x.sh`). The test used a 1.x container under the account's own `user@`, with 1.x's generated unit (`podman generate systemd --restart-policy on-failure` plus `%container_unit_directives`). There the container has its own `libpod-*.scope` outside the unit. After a conmon SIGKILL:
+    - **Ubuntu 24.04:** the unit ends `failed` after 3 restarts, with the container stuck in `stopping`;
+    - **Ubuntu 22.04:** the unit is back `active`, the container is `running`, and the port is dead.
+
+    So F15 is a podman bug in those versions, not something 2.0's unit shape introduces.
+  - **What is stuck on 4.9.3:** the DB says `stopping` while crun says `stopped` (`podman kill`: `container state improper: stopped`). None of `podman stop -t 0`, `stop --ignore`, `kill`, `container cleanup`, `init` or `ps --sync` clears it.
+    - podman's own post-reboot state refresh does clear it (`stopping` → `created`). Stop all of the account's units and its anchor, remove `libpod/tmp/alive` and the stale `pause.pid` in its runtime dir, then start the anchor and the units. The first start can fail once with `crun: container … already exists`, and `Restart=` then brings it up.
+    - That refresh is account-wide, so it can't be a per-unit `ExecStartPre`.
+    - `podman rm -f` plus a recreate also works, but loses anonymous volumes.
+  - **The OOM path is theoretical.** Six account-slice OOMs on Ubuntu 22.04 and 24.04 (slice `MemoryMax` below a 400M allocation in a container) each killed the allocating process, never conmon, and the container kept serving. conmon's footprint is a few MB, so the OOM killer doesn't pick it while a container process is larger. The practical trigger is the account killing its own conmon, which only harms the account.
+  - **`OOMScoreAdjust=` on the unit doesn't work as a guard.** With `-1000` the container also inherits `-1000` on podman 4.9 and 5.8 (not on 3.4), which makes it unkillable unless every create passes `--oom-score-adj=0`. The kernel also lets the account lower its own processes back to the inherited value. So it could make its containers immune in a host-wide OOM, which is worse than F15.
+  - **Decision (T0.4): accept, document the recovery, and track podman.**
+    - **Why not ship-blocking:** it is pre-existing in 1.x, it is caused in practice only by the account itself, and it is limited to Ubuntu's podman 3.4.4 and 4.9.3.
+    - **The options, one by one:**
+      - **No minimum podman version.** Ubuntu 22.04 and 24.04 ship only these versions, so a minimum would drop Ubuntu.
+      - **No `ExecStartPre` cleanup.** No per-container command clears the state without losing data.
+      - **No unit-shape change.** 1.x's shape, with the container in its own scope, fails the same way.
+      - **No `OOMScoreAdjust=`** (above).
+    - **Recovery** (Phase 7 docs, and the status message when a unit hits its start limit on Ubuntu):
+      - **Ubuntu 24.04:** `ea-podman upgrade <name>` (a recreate; anonymous volumes are lost, as with any upgrade).
+      - **Ubuntu 22.04:** `ea-podman restart <name>` brings the port back.
+    - **Revisit:** when Ubuntu ships podman 4.9.4+ or 5.x, or if an account-wide "reset runtime" verb is wanted (the refresh above).
+    - **Live test** (T1.20): a hard check on EL and CloudLinux. On Ubuntu 24.04 it is a known TODO matched by `container state improper`; on Ubuntu 22.04, a known TODO matched by "unit active, port refused".
   - **Evidence** (same host; `EA4-352/eapodman-test-kit/lifecycle.sh` tests 1 and 3): `Failed with result 'signal'`, then on each restart `Error: unable to start container …: container state improper` and `Failed with result 'exit-code'`, and finally the start limit.
 
 - **F16: rootless CNI needs a writable `$XDG_CONFIG_HOME/cni`** (Julian, EA4-357 comment 1803523).
@@ -304,7 +325,7 @@ Run each probe on these hosts:
   - **conmon's cgroup:** `<unit>/runtime` on v2 (`<unit>/supervisor` on podman 3.4), and the unit's own cgroup on v1, where the container has a cgroup of its own only in `name=systemd`.
   - **`hidepid=2` (CL8) and `hidepid=invisible` (CL9):** a unit stop ends `Result=success` in at most 1 s, with no `timed out waiting for file …/exits` and nothing left for `KillMode`, and `podman rm` after the stop works. EA4-366's stop timeout doesn't happen in the 2.0 layout.
   - **Reboot, all 9:** the anchor, tmpfs, XDG dir, all three units (conmon as `MainPID` in the unit's cgroup, split payloads on v2), the ports and the slice drop-ins came back by themselves.
-  - **Not run:** the `start --attach` shape, and F15 under 1.x (T0.4). The kit's test 2 (kill the container init) is v2-only and didn't run on v1.
+  - **Not run:** the `start --attach` shape. (T0.4 then ran F15 under 1.x: same failure, see F15.) The kit's test 2 (kill the container init) is v2-only and didn't run on v1.
 - **P0-4: the layout works as designed. Memory floors are kernel-dependent** (F13), and **F17 is confirmed** (see F17).
   - **Placement:** the pause process sits in `ea-podman-runtime@<uid>.service`.
   - **Isolation:** stopping one unit leaves the others and the pause process alone.
@@ -1037,7 +1058,7 @@ On the plugin side:
   - `TasksMax` defaults come from ea-podman (Phase 1); the plugin doesn't set them;
   - **on CloudLinux,** the plugin sets the account slice's `MemoryLow`/`MemoryMax` as on every other OS (F18: limits win). WHM shows a warning on CloudLinux that Web Apps containers run outside the account's LVE, so the LVE's limits don't cover them and the account slice's do;
   - **on cgroup v1,** split isn't pinned and per-container caps aren't enforced, as today (F17). This matches the Limits design's LIM-ENF-4a.
-- **OOM policy.** A `MemoryMax` OOM can kill any process in the account slice, including a container within its own allocation, a container's conmon, and a build. A killed conmon leaves its container down until it is recreated (F15, open). The rest is accepted, with one preference: build transients get `OOMScoreAdjust=500`, so the kernel kills a build before a serving container. The account can raise its own score but not lower it.
+- **OOM policy.** A `MemoryMax` OOM can kill any process in the account slice, including a container within its own allocation, a container's conmon, and a build. A killed conmon leaves its container down on Ubuntu's podman until it is recreated or restarted (F15). T0.4 accepted that: the OOM killer picked the allocating process, never conmon, in every test. The rest is accepted, with one preference: build transients get `OOMScoreAdjust=500`, so the kernel kills a build before a serving container. The account can raise its own score but not lower it.
 - `Session.pm` `ensure` / `ENSURE_SESSION` are replaced by ENSURE_USER. Drop the `user@.service.d` delegate drop-in (`Session.pm:175-198`).
 - Builds (`systemd-run --user`, `Podman.pm:1167,1817`) move to the plugin's adminbin, which calls `ea_podman::units::run_as_user_in_slice` (Phase 1) with fixed properties (`RuntimeMaxSec`, `oom_score_adjust => 500`; no `PAMName=`, F18) and validated inputs. It never hand-builds a `systemd-run` line, and callers must never pass `-p`. stdin is `/dev/null`, stdout/stderr are fresh pipes, and captured output is capped.
 - `_in_user_session` (`Podman.pm:1930`): when the plugin's root side runs it, it goes through `run_as_user_in_slice`, not a direct setuid fork (F11).
@@ -1175,12 +1196,8 @@ On the plugin side:
 - **Parent slice values:** `eapodman.slice` `CPUWeight`/`IOWeight`/`TasksMax`, and the per-account default `TasksMax` (P0-4). Nesting itself is decided (F9).
 - **`runtime.conf` defaults:** tmpfs `size`/`nr_inodes`, `max_units_per_account`, `max_concurrent_admin_actions`.
 - **Swap accounting and the runtime's shares conversion:** which targets lack `memory.swap.max`, and what `cpu.weight` each target's OCI runtime (crun or runc) writes for `--cpu-shares` (P0-4).
-- **A killed conmon (F15):** keep the container recoverable after conmon is SIGKILLed, by the account or by an account-slice OOM. Candidates:
-  - a podman version that clears the stale running/stopping state. 4.9.4-rhel and 5.8.2 already recover, so on EL and CloudLinux this may only need a minimum podman version. Ubuntu 24.04's 4.9.3 does not recover;
-  - an `ExecStartPre=` that clears that state as the account. It must be shown not to lose data; `podman rm -f` plus a recreate loses anonymous volumes;
-  - a unit shape where conmon's death doesn't take the container down.
-
-  Compare with 1.x first (P0-3). Where swap accounting is missing, does INSTALL refuse `--memory-swap` or only warn?
+- **Resolved (T0.4): a killed conmon (F15).** 1.x behaves the same, so the decision is to accept it, document the recovery (`ea-podman upgrade` on Ubuntu 24.04, `ea-podman restart` on 22.04) and revisit when Ubuntu's podman moves. See F15.
+- **Swap accounting:** where it is missing, does INSTALL refuse `--memory-swap` or only warn?
 - **BPF-LSM support matrix:** which platforms can enable the F11 rule (P0-12).
 - **CloudLinux 10 ships `user.max_user_namespaces=0`** (CLOS-2616). That blocks 1.x and 2.0 alike. The EA4-360 gate reports it with https://go.cpanel.net/userns. Raise it with CloudLinux, together with F11 and F18.
 - **Containers created before a cgroup switch (F17).** Once P0-4 confirms the mode is fixed at create: is naming them in root's check enough, or should root recreate them? A recreate means `ea-podman upgrade`, which pulls.
@@ -1203,7 +1220,7 @@ On the plugin side:
 - **Old storage during the migration (F21).** Order the steps so that every old-storage podman call runs before step 12 releases the 1.x session, or have root provide `/run/user/<uid>` for those steps. Also handle a 1.x DB whose runroot is elsewhere (`/tmp/…`, seen where the account first ran podman without a session).
 - **Starting containers outside a unit (F22).** The slice runner needs `Delegate=yes` (or a unit) for any podman call that starts a container: CMD `run`, and verify steps.
 - **The SELinux `netns` step (F19)** goes into Phase 1's anchor helper, and the SELinux targets go into the live matrix.
-- **Ubuntu 22.04 conmon kill (F15).** Recovery leaves the published port dead (podman 3.4). Fold it into T0.4's decision: Ubuntu 22.04 is affected too, in a less visible way.
+- **Resolved (T0.4): Ubuntu 22.04 conmon kill (F15).** Part of F15's decision: `ea-podman restart` restores the port.
 - **podman 3.4 and `default_mounts_file`.** Render the pinned `containers.conf` without that key on podman 3.4, so its warning doesn't appear in every command's output.
 - **journald readback (P0-5).** On EL and CloudLinux the account can't read its own journal entries: `podman events`, and `podman logs` with `--log-driver=journald`, come back empty. Keep `events_logger = "journald"` and document this, or move to `events_logger = "file"` in the capped tmpfs.
 - **runc and unsplit containers with limits (F17).** On EL8 v2, a container created without split and with `--memory` can't start from its unit. 2.0 pins split there, so this only matters for containers created by hand or by 1.x.
