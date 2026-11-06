@@ -58,7 +58,7 @@ That gives those accounts back exactly what CLOS-4517 removed.
   - **refuse:** INSTALL, UPGRADE, START, RESTART, UNIT_INSTALL, and `ensure_runtime` (the anchor runs `podman unshare`);
   - **warn only:** STOP, STATUS/UNIT_SHOW, UNIT_REMOVE, RESET_FAILED, UNINSTALL, `remove_containers`, the account hooks and `containers`;
   - **`migrate_units`:** checks once per run (Phase 4, entry point). Without user namespaces it migrates nothing and marks no account `failed`. On masked hosts it still applies step 12, which is root-only;
-  - **CloudLinux 10:** new installs ship with `user.max_user_namespaces=0` (CLOS-2616; Julian, EA4-357 comment 1803523). The gate catches it, and the host docs (Phase 3b) say how to restore the value. Raise it with CloudLinux together with F11: a BPF-LSM rule is a narrow alternative to that blanket `0`.
+  - **CloudLinux 10:** new installs ship with `user.max_user_namespaces=0` (CLOS-2616; Julian, EA4-357 comment 1803523). The gate catches it, and the host docs (Phase 3b) say how to restore the value. Raised with CloudLinux together with F11 (EA4-389): a BPF-LSM rule is a narrow alternative to that blanket `0`.
 - **cgroups.** Containers still get their own cgroups:
   - `Delegate=yes` on the system units hands the account's processes a subtree;
   - podman uses `cgroupfs` there instead of asking the user manager over D-Bus, with `cgroups = "split"` pinned on cgroup v2 (F17). Split puts conmon and the container in sub-cgroups of the unit's delegated cgroup;
@@ -225,7 +225,7 @@ That gives those accounts back exactly what CLOS-4517 removed.
       - **LVE wins** costs every slice and per-container limit on v2. T0.2 also showed it can't work through `PAMName=` at all: `pam_lve` either cages a caged account's session (no podman inside) or refuses it. And on v2 the runner's deadline stops reaping.
       - **A per-host choice** would carry both designs and both test matrices.
       - **`lve_wrapper`** loses the process on stop.
-    - **What stays open, for the CloudLinux conversation (T0.7):** CloudLinux's view of this decision, and a CloudLinux-side change that lets an LVE account for a systemd-delegated subtree. That change would let a later release have both, and it is not a 2.0 blocker.
+    - **What stays open, for the CloudLinux follow-up (EA4-389):** CloudLinux's view of this decision, and a CloudLinux-side change that lets an LVE account for a systemd-delegated subtree. That change would let a later release have both, and it is not a 2.0 blocker.
     - **cgroup v1 (CL8):** the same rule. Slice limits apply there; per-container limits don't, as everywhere on v1 (F12, F17).
   - **cgroup v1 may differ.** LVE and systemd use separate hierarchies there, so LVE membership and the unit's placement may coexist. Per-container limits are unenforced on v1 anyway (F12, F17). P0-6 probes it.
   - **T0.2 (P0-6), CL8 v1, CL9 and CL10:**
@@ -1212,7 +1212,7 @@ On the plugin side:
 
 ## Sequence
 
-1. **Spikes P0-1 … P0-13.** If a spike invalidates an assumption, the design changes before code is written. P0-6 was the CloudLinux ship gate; T0.3 settled F18 for the limits (Chris, EA4-368 comment 1806876), and CloudLinux's review of it runs in parallel (T0.7).
+1. **Spikes P0-1 … P0-13.** If a spike invalidates an assumption, the design changes before code is written. P0-6 was the CloudLinux ship gate; T0.3 settled F18 for the limits (Chris, EA4-368 comment 1806876), and CloudLinux's review of it runs in parallel (EA4-389).
 2. **Implement everything:** Phases 1-7 in ea-podman and Phase 6 in the plugin.
 3. **Pre-release testing:**
    - the unit suite, including the injection and migration tests;
@@ -1222,11 +1222,11 @@ On the plugin side:
 5. **Remove 1.x from the mirrors** (RPM and Ubuntu). Keep an internal archive copy for tests.
 6. **Release + 6 months at the earliest** (the date is in the release notes and the verb's warning; check adoption telemetry first): a 2.x removes `migrate_units` / `migrate.pm`, `ea-podman-migrate.timer` and `ea-podman-migrate.service` (its scriptlet disables the timer first), and ships the post-removal detector (4.8). This is not a deprecation period; the warning text carries the date.
 7. **Follow-up:** a root-owned graphroot (F4).
-8. **Follow-up:** once P0-12 passes, ship or document a BPF-LSM namespace policy (with CloudLinux / hardening). It is not part of 2.0; 2.0 only makes it possible (F11). Raise it with CloudLinux together with CloudLinux 10's default `user.max_user_namespaces=0` (CLOS-2616) and F18.
+8. **Follow-up:** once P0-12 passes, ship or document a BPF-LSM namespace policy (with CloudLinux / hardening). It is not part of 2.0; 2.0 only makes it possible (F11). Raised with CloudLinux together with CloudLinux 10's default `user.max_user_namespaces=0` (CLOS-2616) and F18 (EA4-389).
 
 ## Open items (resolved by the spikes or a quick call)
 
-- **Resolved (T0.3): the LVE or the limits on CloudLinux (F18).** Limits win. Containers run outside the LVE, the account slice owns account totals (its `MemoryMax` is set by the plugin), and WHM warns about it on CloudLinux (EA4-368 comment 1806876). Still open, with CloudLinux (T0.7): their view, and an LVE that can account for a systemd-delegated subtree.
+- **Resolved (T0.3): the LVE or the limits on CloudLinux (F18).** Limits win. Containers run outside the LVE, the account slice owns account totals (its `MemoryMax` is set by the plugin), and WHM warns about it on CloudLinux (EA4-368 comment 1806876). Still open, with CloudLinux (EA4-389): their view, and an LVE that can account for a systemd-delegated subtree.
 - **Resolved (T0.6): `LimitNPROC`.** The host's `DefaultLimitNPROC`, for the unit and the create-time pin alike, because that is what 1.x's user manager ran with on every target. A fixed cap was rejected: it would sit below 1.x on large hosts, and the account-wide bound is the slice's `TasksMax`, which stopped a fork storm on all 9 VMs.
 - **Resolved (T0.6): parent slice values.**
   - **`eapodman.slice`:** `CPUWeight=100` and `IOWeight=100` (`user.slice`'s), and `TasksMax` 33% as a host total.
@@ -1241,7 +1241,7 @@ On the plugin side:
 - **Resolved (T0.4): a killed conmon (F15).** 1.x behaves the same, so the decision is to accept it, document the recovery (`ea-podman upgrade --force` on Ubuntu 24.04, `ea-podman restart` on 22.04) and revisit when Ubuntu's podman moves. See F15.
 - **Resolved (T0.6): `--memory-swap` without swap accounting.** INSTALL warns and doesn't refuse. That matches podman, which warns and drops the limit, and cgroup v1 rootless, where every limit is dropped (F12). Root detects it per host: no `memory.swap.max` on v2, no `memory.memsw.*` on v1. It didn't fire on any target: accounting is present on all 9, and enforcement was confirmed with real swap on EL8 v2, EL9 and Ubuntu 24.04.
 - **BPF-LSM support matrix:** which platforms can enable the F11 rule (P0-12).
-- **CloudLinux 10 ships `user.max_user_namespaces=0`** (CLOS-2616). That blocks 1.x and 2.0 alike. The EA4-360 gate reports it with https://go.cpanel.net/userns. Raise it with CloudLinux, together with F11 and F18.
+- **CloudLinux 10 ships `user.max_user_namespaces=0`** (CLOS-2616). That blocks 1.x and 2.0 alike. The EA4-360 gate reports it with https://go.cpanel.net/userns. Raised with CloudLinux, together with F11 and F18 (EA4-389).
 - **Resolved (T0.5): containers created before a cgroup switch (F17).** The mode is fixed at create. Root names them with the remedy `ea-podman upgrade --force <name>`, and never recreates them on its own. See F17.
 - **CPANEL-57893 (`CPANEL-57893-full`; PR #44 and the denylist are on `CPANEL-57513`).** When it reaches main, reconcile its start-arg denylist, and its dropping of recorded cap flags on upgrade and restore, with Phase 3b and with F13's install args (`--memory-reservation` and `--cpu-shares`, recorded as `memory_low` and `cpu_weight`). Also drop its `--cgroups=enabled` (F17).
 - **Resolved for 2.0 (T0.2/T0.6): `hidepid=2` and `podman stop` (EA4-366).** In the 2.0 layout the stop doesn't time out (CL8 `hidepid=2`, CL9 `invisible`: `Result=success`, nothing left, `podman rm` works). So STOP's verdict and UNIT_REMOVE's stop-then-remove order need no special case. Whether ea-podman keeps recommending `hidepid=2` stays with EA4-366.
@@ -1258,7 +1258,7 @@ On the plugin side:
 
   `ea-podman bash` also needs a root step, since it is direct today, and that step has to carry an interactive TTY. Revisit F14's "accept and document", and settle F22 alongside it: both decide how account-run podman reaches a container's cgroup. T0.8 gates T1-B's exec path (EA4-370 T1.10) and T1-D's `exec-placement-live.t` (EA4-372 T1.22); the decision goes here first, then into EA4-369, EA4-370, EA4-372 and EA4-374.
 - **Resolved (T0.6): memory floors and MGLRU (F13).** Keep `MemoryLow=` for the unit and account floors and document them by platform. `MemoryMin=` holds under MGLRU but is a hard reservation an account could inflate through `--memory-reservation`. An admin-only hard floor in the plugin is a follow-up.
-- **Resolved (T0.3): `PAMName=` on CloudLinux (F18).** Not used. These T0.2 results are why, and they go to the CloudLinux conversation (T0.7): `pam_lve` cages or refuses a caged account's session; a `PAM` file without an `account` line fails; and on v2 a `PAMName` transient escapes its deadline.
+- **Resolved (T0.3): `PAMName=` on CloudLinux (F18).** Not used. These T0.2 results are why, and they go to the CloudLinux follow-up (EA4-389): `pam_lve` cages or refuses a caged account's session; a `PAM` file without an `account` line fails; and on v2 a `PAMName` transient escapes its deadline.
 - **Old storage during the migration (F21).** Order the steps so that every old-storage podman call runs before step 12 releases the 1.x session, or have root provide `/run/user/<uid>` for those steps. Also handle a 1.x DB whose runroot is elsewhere (`/tmp/…`, seen where the account first ran podman without a session).
 - **Starting containers outside a unit (F22).** The slice runner needs `Delegate=yes` (or a unit) for any podman call that starts a container: CMD `run`, and verify steps.
 - **The SELinux `netns` step (F19)** goes into Phase 1's anchor helper, and the SELinux targets go into the live matrix.
