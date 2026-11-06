@@ -152,7 +152,7 @@ That gives those accounts back exactly what CLOS-4517 removed.
       - **No unit-shape change.** 1.x's shape, with the container in its own scope, fails the same way.
       - **No `OOMScoreAdjust=`** (above).
     - **Recovery** (Phase 7 docs, and the status message when a unit hits its start limit on Ubuntu):
-      - **Ubuntu 24.04:** `ea-podman upgrade <name>` (a recreate; anonymous volumes are lost, as with any upgrade).
+      - **Ubuntu 24.04:** `ea-podman upgrade --force <name>`. Without `--force`, `upgrade` skips a container whose image hasn't moved (`_upgrade_is_needed`), which is the usual case here. It still pulls first and falls back to the cached image; anonymous volumes are lost, as with any recreate.
       - **Ubuntu 22.04:** `ea-podman restart <name>` brings the port back.
     - **Revisit:** when Ubuntu ships podman 4.9.4+ or 5.x, or if an account-wide "reset runtime" verb is wanted (the refresh above).
     - **Live test** (T1.20): a hard check on EL and CloudLinux. On Ubuntu 24.04 it is a known TODO matched by `container state improper`; on Ubuntu 22.04, a known TODO matched by "unit active, port refused".
@@ -186,6 +186,14 @@ That gives those accounts back exactly what CLOS-4517 removed.
       - after v2 → v1, it won't start.
 
       The registry records `cgroup_v` at create, and root's cgroup check names those containers.
+
+      **T0.5 decision: name them, don't recreate them.** T0.2 confirmed the mode is fixed at create (podman 3.4.4, 4.9.3, 4.9.4 and 5.8.2, and a real switch on EL8).
+      - **Why root doesn't recreate.** The only recreate path is `ea-podman upgrade --force <name>`; plain `upgrade` skips a container whose image hasn't moved (`_upgrade_is_needed`). That pulls first, so the container can come back on a newer image. It also costs downtime and anonymous volumes. A cgroup switch needs a reboot an admin chose to do, so the admin decides when each container pays that, and nothing changes underneath a running service unasked.
+      - **What root reports.** A container whose registry `cgroup_v` doesn't match the host is named, with the remedy `ea-podman upgrade --force <name>`, wherever root reports the cgroup version: `warn_if_not_cgroup_v2` and the root-side status. The wording depends on the direction:
+        - **created on v1, host now v2** (the direction EA4-360 recommends): a warning that the container runs, but without its resource limits;
+        - **created on v2, host now v1:** an error that the container can't start. START's verdict says the same when the unit fails with `mkdir …/runtime: permission denied` and the registry says v2.
+      - **What makes it right again.** A recreate (`upgrade --force`, or the migration's step 6) writes the host's current `cgroup_v` into the registry, so the container stops being named.
+      - **On v1 → v2 specifically:** per-container limits never applied on v1 rootless (F12), so these containers lose nothing they had. They just don't gain the limits until recreated.
 
       **T0.2 confirmed all of this** (P0-4):
       - **Fixed at create on podman 3.4.4, 4.9.3, 4.9.4 and 5.8.2.** A split-created container runs split, with its `memory.max`, under a pinned conf without split. A container created without split stays unsplit (`memory.max` = max) under the split conf.
@@ -389,7 +397,7 @@ Run each probe on these hosts:
   - **How it is rendered:** root renders it from fixed text in code. The `cgroups = "split"` line is present only when `/sys/fs/cgroup/cgroup.controllers` exists, and a marker line records the version it was rendered for.
   - **Atomic rewrite:** a tmp file, fsync, then rename, so a podman reading it mid-change sees the old or the new file, never half of one.
   - **When it is checked:** the package scriptlets, `ensure_runtime`, and the anchor's root helper (below) each re-render it when the marker doesn't match the host. A cgroup switch needs a reboot, and every container unit `Requires=` its anchor, so after a switch the first container start re-renders the file first.
-  - **Old containers keep their mode:** the mode is fixed at create, so containers created under the other version keep it until they are recreated (F17). The registry records `cgroup_v` (below), and root's cgroup check names them.
+  - **Old containers keep their mode:** the mode is fixed at create, so containers created under the other version keep it until they are recreated (F17). The registry records `cgroup_v` (below), and root's cgroup check names them, with `ea-podman upgrade --force <name>` as the remedy (T0.5; never an automatic recreate).
 - `storage.conf`: `rootless_storage_path` = `~/.local/share/ea-podman/storage`.
 - `old-storage.conf` and `old-containers.conf`, for the migration only (4.2a): the 1.x graphroot (`~/.local/share/containers/storage`) with the same pinned runtime, conmon, hooks and mounts settings. The migration never runs podman under the account's own `containers.conf`.
 - A registries reference.
@@ -1196,11 +1204,11 @@ On the plugin side:
 - **Parent slice values:** `eapodman.slice` `CPUWeight`/`IOWeight`/`TasksMax`, and the per-account default `TasksMax` (P0-4). Nesting itself is decided (F9).
 - **`runtime.conf` defaults:** tmpfs `size`/`nr_inodes`, `max_units_per_account`, `max_concurrent_admin_actions`.
 - **Swap accounting and the runtime's shares conversion:** which targets lack `memory.swap.max`, and what `cpu.weight` each target's OCI runtime (crun or runc) writes for `--cpu-shares` (P0-4).
-- **Resolved (T0.4): a killed conmon (F15).** 1.x behaves the same, so the decision is to accept it, document the recovery (`ea-podman upgrade` on Ubuntu 24.04, `ea-podman restart` on 22.04) and revisit when Ubuntu's podman moves. See F15.
+- **Resolved (T0.4): a killed conmon (F15).** 1.x behaves the same, so the decision is to accept it, document the recovery (`ea-podman upgrade --force` on Ubuntu 24.04, `ea-podman restart` on 22.04) and revisit when Ubuntu's podman moves. See F15.
 - **Swap accounting:** where it is missing, does INSTALL refuse `--memory-swap` or only warn?
 - **BPF-LSM support matrix:** which platforms can enable the F11 rule (P0-12).
 - **CloudLinux 10 ships `user.max_user_namespaces=0`** (CLOS-2616). That blocks 1.x and 2.0 alike. The EA4-360 gate reports it with https://go.cpanel.net/userns. Raise it with CloudLinux, together with F11 and F18.
-- **Containers created before a cgroup switch (F17).** Once P0-4 confirms the mode is fixed at create: is naming them in root's check enough, or should root recreate them? A recreate means `ea-podman upgrade`, which pulls.
+- **Resolved (T0.5): containers created before a cgroup switch (F17).** The mode is fixed at create. Root names them with the remedy `ea-podman upgrade --force <name>`, and never recreates them on its own. See F17.
 - **CPANEL-57893 (`CPANEL-57893-full`; PR #44 and the denylist are on `CPANEL-57513`).** When it reaches main, reconcile its start-arg denylist, and its dropping of recorded cap flags on upgrade and restore, with Phase 3b and with F13's install args (`--memory-reservation` and `--cpu-shares`, recorded as `memory_low` and `cpu_weight`). Also drop its `--cgroups=enabled` (F17).
 - **`hidepid=2` and `podman stop` (EA4-366).** On CL8, a rootless stop times out and the unit ends `failed`; 1.x does the same. P0-3 measures the effect on STOP and UNIT_REMOVE. EA4-366 decides whether ea-podman keeps recommending `hidepid=2`.
 - **Uninstall without user namespaces (EA4-367).** Both of its gaps survive this plan, and Phase 3 covers them: the uninstall result, and "couldn't check" in `_podman_container_exists`.
