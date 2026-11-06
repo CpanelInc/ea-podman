@@ -97,7 +97,7 @@
     "ssh": { "user": "root", "port": 22 },
     "os": { "id": "cloudlinux", "version": "9.8", "family": "cloudlinux", "major": 9 },
     "kernel": "5.14.0-687.66.1.el9_8.x86_64",
-    "cgroup": { "requested": "v2", "actual": "v1" },
+    "cgroup": { "requested": "v2", "actual": "v2" },
     "cagefs": { "enabled": true, "version": "7.6.52-1.el9.cloudlinux" },
     "hidepid": "invisible",
     "podman": "5.8.2",
@@ -105,7 +105,7 @@
     "vcpus": 3,
     "ram_mb": 3072,
     "tickets": ["EA4-352"],
-    "notes": "Not changed: the cloudlinux-9 image boots with systemd.unified_cgroup_hierarchy=0 systemd.legacy_systemd_cgroup_controller. hidepid=invisible is the newer spelling of hidepid=2."
+    "notes": "The cloudlinux-9 image boots on v1 (tuned profile cloudlinux-default-cgv1). Switched to v2 with tuned-adm profile cloudlinux-default-cgv2 (adds cgroup_no_v1=all) and a reboot. hidepid=invisible is the newer spelling of hidepid=2."
   },
   {
     "name": "ea4-352-cl10",
