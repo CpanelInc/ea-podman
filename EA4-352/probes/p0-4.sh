@@ -151,8 +151,9 @@ else
     result floor_verdict "kept: account slice $(keep acct)%, user-<uid>.slice $(keep user)%, no floor $(keep none)%"
 fi
 systemctl stop p04-hold-acct p04-hold-user p04-hold-none 2>/dev/null
-systemctl set-property --runtime "user-$UID_.slice" $P=
-rm -rf /run/systemd/system.control/eapodman.slice.d "/run/systemd/system.control/eapodman-$UID_.slice.d"
+# Remove the runtime drop-ins: an empty `set-property X=` writes `infinity` on systemd 239 (F23).
+rm -rf /run/systemd/system.control/eapodman.slice.d "/run/systemd/system.control/eapodman-$UID_.slice.d" \
+    "/run/systemd/system.control/user-$UID_.slice.d"
 systemctl daemon-reload
 rm -rf /var/tmp/p04
 }
