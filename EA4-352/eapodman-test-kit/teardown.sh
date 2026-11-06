@@ -28,7 +28,11 @@ if [ -e "/run/systemd/system/$TEST_UNIT" ]; then
     try "stop $TEST_UNIT" systemctl stop "$TEST_UNIT"
     try "remove /run/systemd/system/$TEST_UNIT" rm -f "/run/systemd/system/$TEST_UNIT"
 fi
-try "stop ea-podman-runtime@$UID_.service" systemctl stop "ea-podman-runtime@$UID_.service"
+# Not there if setup.sh stopped before installing the template (e.g. on a cgroup v1 host); stopping
+# a unit systemd can't find fails, though there is nothing to undo.
+if [ "$(systemctl show -p LoadState --value "ea-podman-runtime@$UID_.service")" != not-found ]; then
+    try "stop ea-podman-runtime@$UID_.service" systemctl stop "ea-podman-runtime@$UID_.service"
+fi
 if mountpoint -q "$RUNDIR"; then try "umount $RUNDIR" umount "$RUNDIR"; fi
 if [ -d "$RUNDIR" ]; then try "rmdir $RUNDIR" rmdir "$RUNDIR"; fi
 try "remove $XDGDIR" rm -rf "$XDGDIR"
