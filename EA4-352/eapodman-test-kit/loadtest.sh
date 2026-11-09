@@ -214,10 +214,10 @@ mem_floor_test() {
     echo; echo "== memory: floors under slice pressure (web 400M + worker 200M page cache, api 400M anon)"
     as_account mkdir -p -m 0700 "$SCRATCH" || { echo "  creating $SCRATCH as $U failed" >&2; exit 1; }
     in_container "$w" dd if=/dev/zero of="$SCRATCH/web.bin" bs=1M count=400 conv=fsync 2>/dev/null \
-        && [ "$(stat -c %s "$SCRATCH/web.bin")" = $(( 400 * 1048576 )) ] \
+        && [ "$(as_account stat -c %s "$SCRATCH/web.bin")" = $(( 400 * 1048576 )) ] \
         || { echo "  writing $SCRATCH/web.bin (400M) failed" >&2; exit 1; }
     in_container "$k" dd if=/dev/zero of="$SCRATCH/worker.bin" bs=1M count=200 conv=fsync 2>/dev/null \
-        && [ "$(stat -c %s "$SCRATCH/worker.bin")" = $(( 200 * 1048576 )) ] \
+        && [ "$(as_account stat -c %s "$SCRATCH/worker.bin")" = $(( 200 * 1048576 )) ] \
         || { echo "  writing $SCRATCH/worker.bin (200M) failed" >&2; exit 1; }
     in_container_bg "$a" python3 -c 'import time; x = b"a" * (400 << 20); time.sleep(600)'
     local reached=0

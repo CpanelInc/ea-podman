@@ -122,16 +122,25 @@ else
     check "api's container init is a process in its payload cgroup (test 2 not run)" false
 fi
 
+# A PID file in the runtime tmpfs is the account's: it can be a symlink to /etc/shadow. Root reads
+# it only as the account, and only digits come back; nothing else from it is ever printed.
+acct_pid() {    # file
+    local v
+    v=$(cd / && setpriv --reuid="$UID_" --regid="$GID_" --clear-groups head -c 32 -- "$1" 2>/dev/null </dev/null | tr -d '\n')
+    case $v in ''|*[!0-9]*) return 1;; esac
+    echo "$v"
+}
+
 echo; echo "== 3. account writes root PID $DECOY into web.$U.01's conmon.pid, then conmon dies"
 n=web.$U.01; main=$(prop "$n" MainPID); nr=$(prop "$n" NRestarts); t=$(cursor) || exit 1
 pidfile=$(prop "$n" PIDFile)
 # The test only means something if the hostile PID really is in the file when conmon dies.
 if ! safe_target "$main" conmon "/ea-podman-$n.service"; then
     check "web's MainPID is a conmon inside its unit (test 3 not run)" false
-elif ! as_user /bin/sh -c 'echo "$1" >"$2"' _ "$DECOY" "$pidfile" || [ "$(cat "$pidfile" 2>/dev/null)" != "$DECOY" ]; then
-    check "the account wrote $DECOY into $pidfile (test 3 not run; holds '$(cat "$pidfile" 2>/dev/null)')" false
+elif ! as_user /bin/sh -c 'echo "$1" >"$2"' _ "$DECOY" "$pidfile" || [ "$(acct_pid "$pidfile")" != "$DECOY" ]; then
+    check "the account wrote $DECOY into $pidfile (test 3 not run; it holds $(acct_pid "$pidfile" || echo 'no PID'))" false
 else
-    echo "  conmon.pid now holds $(cat "$pidfile")"
+    echo "  conmon.pid now holds $(acct_pid "$pidfile")"
     kill -KILL "$main"
     f15_check "$t" "ea-podman-$n.service" "web comes back through Restart=" recovered "$n" "$main" "$nr"
     check "the root process is still alive" alive "$DECOY"
@@ -169,8 +178,8 @@ UNIT
     t=$(cursor) || exit 1
     systemctl start "$TEST_UNIT" 2>/dev/null; rc=$?
     main=$(systemctl show -p MainPID --value "$TEST_UNIT")
-    written=$(cat "$RUNDIR/test.pid.sent" 2>/dev/null)
-    echo "  $label: start exit $rc, Result=$(systemctl show -p Result --value "$TEST_UNIT"), MainPID $main, PID file $written"
+    written=$(acct_pid "$RUNDIR/test.pid.sent")
+    echo "  $label: start exit $rc, Result=$(systemctl show -p Result --value "$TEST_UNIT"), MainPID $main, PID file ${written:-none}"
     journal_since "$t" "$TEST_UNIT"
     if [ "$expect" = refuse ]; then
         # Without the hostile PID in the file, or without systemd's own refusal message, a failed
@@ -185,11 +194,10 @@ UNIT
         check "$label: root process $DECOY survives the stop" alive "$DECOY"
     else
         check "$label: start succeeds" test "$rc" = 0
-        # The account wrote this file, so its content is never put into a shell string, and
-        # nothing below uses it unless it is a PID.
+        # acct_pid passes only digits; 0 and 1 aren't a PID this case can use.
         case $written in
-        ''|0|1|*[!0-9]*)
-            check "$label: the PID file holds a PID (got '$written'; rest of case not run)" false
+        ''|0|1)
+            check "$label: the PID file holds a PID (got '${written:-none}'; rest of case not run)" false
             systemctl stop "$TEST_UNIT" 2>/dev/null
             return ;;
         esac
