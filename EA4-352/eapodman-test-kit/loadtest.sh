@@ -40,6 +40,9 @@ payload() {
     esac
     return 1
 }
+# Account-side file work on $SCRATCH, which sits in the account's home: as root, a symlink the
+# account planted there (the dir itself or a parent) would aim mkdir/chown/rm at anything on the host.
+as_account() { (cd / && setpriv --reuid="$UID_" --regid="$GID_" --clear-groups "$@" </dev/null); }
 stat_of() { awk -v k="$2" '$1 == k { print $2 }' "$1"; }
 mib()     { echo $(( $1 / 1048576 )); }
 
@@ -98,7 +101,7 @@ cleanup() {
         set_cg "$(svc "$n")/cpu.weight" "${ORIG_W[$n]}" || failed+=("$n cpu.weight")
         set_cg "$(svc "$n")/memory.low" "${ORIG_L[$n]}" || failed+=("$n memory.low")
     done
-    rm -rf "$SCRATCH" || failed+=("remove $SCRATCH")
+    as_account rm -rf "$SCRATCH" || failed+=("remove $SCRATCH")
     for n in "${NAMES[@]}"; do
         systemctl restart "ea-podman-$n.service" || failed+=("restart ea-podman-$n.service")
     done
@@ -209,7 +212,7 @@ mem_floor_round() {    # label
 mem_floor_test() {
     local w="web.$U.01" k="worker.$U.03" a="api.$U.02" i
     echo; echo "== memory: floors under slice pressure (web 400M + worker 200M page cache, api 400M anon)"
-    install -d -o "$UID_" -g "$GID_" -m 0700 "$SCRATCH"
+    as_account mkdir -p -m 0700 "$SCRATCH" || { echo "  creating $SCRATCH as $U failed" >&2; exit 1; }
     in_container "$w" dd if=/dev/zero of="$SCRATCH/web.bin" bs=1M count=400 conv=fsync 2>/dev/null \
         && [ "$(stat -c %s "$SCRATCH/web.bin")" = $(( 400 * 1048576 )) ] \
         || { echo "  writing $SCRATCH/web.bin (400M) failed" >&2; exit 1; }

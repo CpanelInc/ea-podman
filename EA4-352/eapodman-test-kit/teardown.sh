@@ -28,6 +28,23 @@ if [ -e "/run/systemd/system/$TEST_UNIT" ]; then
     try "stop $TEST_UNIT" systemctl stop "$TEST_UNIT"
     try "remove /run/systemd/system/$TEST_UNIT" rm -f "/run/systemd/system/$TEST_UNIT"
 fi
+# The purge runs as the account, never as root: a symlink the account planted in any component of
+# these home-directory paths would aim a root rm -rf anywhere on the host. `podman system reset`
+# deletes the storage from inside the account's user namespace, which the subordinate-ID files
+# need (`podman unshare rm` can't: the overlay driver holds storage/overlay mounted in there).
+# What it leaves, and loadtest's scratch dir, are the account's own files. It needs the kit's
+# runtime dir and config, so it runs before they go, and there is no root fallback: if it
+# fails, the failure is listed and the files stay.
+if [ "$PURGE" = --purge ]; then
+    if [ -f "$ETC/containers.conf" ] && systemctl start "ea-podman-runtime@$UID_.service" 2>/dev/null; then
+        try "podman system reset (as $U)" as_user /usr/bin/podman system reset --force
+        try "remove the test storage and $HOME_/.eapodman-loadtest (as $U)" as_user \
+            /bin/sh -c 'rm -rf "$1/.local/share/ea-podman/storage" "$1/.eapodman-loadtest" \
+                && { rmdir "$1/.local/share/ea-podman" 2>/dev/null; true; }' _ "$HOME_"
+    else
+        failed+=("remove the test storage: the kit's runtime is gone; run ./setup.sh $U, then ./teardown.sh $U --purge")
+    fi
+fi
 # Not there if setup.sh stopped before installing the template (e.g. on a cgroup v1 host); stopping
 # a unit systemd can't find fails, though there is nothing to undo.
 if [ "$(systemctl show -p LoadState --value "ea-podman-runtime@$UID_.service")" != not-found ]; then
@@ -45,11 +62,6 @@ systemctl reset-failed 'ea-podman-*' 'eapodman-*' 2>/dev/null
 try "remove $ETC" rm -rf "$ETC"
 # Generated copies setup.sh left in the kit (the shipped files stay).
 rm -f "systemd/eapodman-$UID_.slice" systemd/ea-podman-*."$U".[0-9][0-9].service
-if [ "$PURGE" = --purge ]; then
-    try "remove the test storage" rm -rf "$HOME_/.local/share/ea-podman/storage"
-    rmdir "$HOME_/.local/share/ea-podman" 2>/dev/null
-    try "remove $HOME_/.eapodman-loadtest" rm -rf "$HOME_/.eapodman-loadtest"
-fi
 
 if [ ${#failed[@]} -gt 0 ]; then
     echo "teardown incomplete; these steps failed:" >&2
