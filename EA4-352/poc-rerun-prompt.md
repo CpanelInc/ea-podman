@@ -42,6 +42,10 @@ Not regressions:
 - EA4-392 on the EL hosts (above).
 - Known quirks: t0-6's `nproc_2x … runner=/` on Ubuntu (dash's `ulimit` has no `-u`), and the exact crun error text in t0-8's `exec_not_moved`, which varies between runs.
 - A **new INCONCLUSIVE** where the old log had a verdict: the probes used to turn a failed command into a verdict, so the old value was never measured. Report it, and say what the old log claimed.
+- Changes from the second PR #43 review round, which are the script, not the host. Mark these **changed** and say they're expected:
+  - `p0-5.log_file_location` now reads `~/.local/share/ea-podman/storage/…` where the old logs printed `/root/…`. The old value came from a tilde-expansion bug in the probe; the `log path:` line above it always had the account's home.
+  - `p0-11.all_reaped_on_timeout` is now `INCONCLUSIVE` unless the runner timed out and its script listed its children. If it's INCONCLUSIVE on a host, that is a real finding (the runner didn't run), not noise.
+  - `p0-12` prints real `counters: allowed=N denied=M` lines (they were blank) and has two new results, `allowed_by_program` and `denials_by_program`. Treat these as **first run from current script**. `denials_by_program` must be `yes (+4)` or more wherever `supported` is yes; if it's `NO` or INCONCLUSIVE, the denials came from something other than the BPF program, so say so prominently. That puts PLAN.md's P0-12 verdict in doubt.
 
 No committed log comes from HEAD's exact scripts. The ones re-run on 2026-11-09 carry a hash line naming the scripts that produced them; map it to a commit with the recipe in the probes README (F25 changed `lib.sh` after most of them). The older logs have no hash line and predate the review. Where a result differs, say whether the cause is the script change or the host. Use the hash lines, the probe's git history and PLAN.md to decide.
 

@@ -42,7 +42,8 @@ if [ "$drv" = journald ]; then
 else
     lp=$(as_user /usr/bin/podman inspect --format '{{.HostConfig.LogConfig.Path}}' "$C" 2>&1)
     info "log path: $lp"
-    result log_file_location "${lp/#$HOME_/~}"
+    # Quoted: an unquoted ~ in the replacement is tilde-expanded to root's home.
+    result log_file_location "${lp/#"$HOME_"/'~'}"
 fi
 
 hdr "podman logs, forcing --log-driver=journald (the 1.x default where podman uses journald)"

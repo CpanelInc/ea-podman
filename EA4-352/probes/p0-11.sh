@@ -14,7 +14,6 @@ runner() {    # timeout, then argv; prints systemd-run's own stderr too (no --qu
     local tmo=$1; shift
     acct_unit -v -n p011 -t "$tmo" -p TimeoutStopSec=10 -p KillMode=control-group -- "$@"
 }
-leftovers() { pgrep -u "$U" -f "sleep 3$TAG" | tr '\n' ' '; }
 cleanup() { pkill -9 -u "$U" -f "sleep 3$TAG" 2>/dev/null; pkill -9 -u "$U" -f "p011-escape-$$" 2>/dev/null; }
 TD=$(mktemp -d /tmp/p011.XXXXXX) || exit 1; chmod 0755 "$TD"    # root's; the runner only reads it
 trap 'cleanup; rm -rf "$TD"' EXIT
@@ -55,8 +54,17 @@ info "runner returned rc=$rc after ${t}s"
 grep -q " T " <<<"$out" && result sigstop_child_present_before yes || result sigstop_child_present_before NO
 grep -q " t " <<<"$out" && result ptrace_stopped_child_present_before yes || result ptrace_stopped_child_present_before NO
 sleep 1
-left=$(comm -13 <(echo "$before_pids") <(acct_pids) | tr '\n' ' ')
-result all_reaped_on_timeout "$([ -z "$left" ] && echo yes || echo "NO: $(ps -o pid,stat,args -p ${left// /,} | tail -n +2 | tr '\n' ';')")"
+# rc is non-zero on a timeout, which is the point here, so it can't tell a run from a non-run.
+# The reaping verdict needs the unit to have timed out and the script's children to have been
+# seen; otherwise an empty "left" would only mean nothing ran.
+if ! grep -q 'Finished with result: timeout' <<<"$out"; then
+    inconclusive all_reaped_on_timeout "the runner didn't time out (rc=$rc), so nothing was reaped on a timeout"
+elif ! grep -qE "sleep 3${TAG}[1-4]" <<<"$out"; then
+    inconclusive all_reaped_on_timeout "the script listed none of its children before the timeout"
+else
+    left=$(comm -13 <(echo "$before_pids") <(acct_pids) | tr '\n' ' ')
+    result all_reaped_on_timeout "$([ -z "$left" ] && echo yes || echo "NO: $(ps -o pid,stat,args -p ${left// /,} | tail -n +2 | tr '\n' ';')")"
+fi
 result timeout_returned_after_s "$t"
 
 hdr "escape into the account's own delegated cgroup"

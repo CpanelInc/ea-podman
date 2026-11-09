@@ -33,10 +33,14 @@ detach
 o=$(bpftool prog loadall "$B/userns_guard.bpf.o" "$PIN" autoattach 2>&1); rc=$?
 result load_and_attach "$([ $rc = 0 ] && echo works || echo "FAILS: $(tail -2 <<<"$o" | tr '\n' ' ')")"
 [ $rc = 0 ] || exit 0
-counters() {
+# The program's .bss map (libbpf names it userns_g.bss). bpftool prints each variable as its
+# own object ([{"allowed":N},{"denied":M}]), so read them one at a time.
+counter() {
     local id; id=$(bpftool map show 2>/dev/null | awk '/\.bss/ && /userns/ {sub(":","",$1); print $1}' | tail -1)
-    [ -n "$id" ] && bpftool map dump id "$id" 2>/dev/null | tr -d '\n ' | grep -o '"allowed":[0-9]*,"denied":[0-9]*'
+    [ -n "$id" ] && bpftool map dump id "$id" 2>/dev/null | tr -d '\n ' | grep -oE "\"$1\":[0-9]+" | cut -d: -f2
 }
+counters() { echo "allowed=$(counter allowed) denied=$(counter denied)"; }
+a0=$(counter allowed); d0=$(counter denied)
 info "counters: $(counters)"
 
 ok() { [ "$1" = 0 ] && echo works || echo "FAILS: $2"; }
@@ -69,6 +73,7 @@ ctx=$HOME_/.p012-build; user_build_ctx "$ctx" 'echo built'
 o=$(as_user_deleg /usr/bin/podman build -t localhost/p012:latest "$ctx" 2>&1); result plugin_build_standin "$(ok $? "$(tail -1 <<<"$o")")"
 as_user /usr/bin/podman rmi -f localhost/p012:latest >/dev/null 2>&1; user_rm "$ctx"
 o=$(as_user_deleg /usr/bin/podman run --rm "$IMAGE" sh -c 'unshare -U true && echo nested-ok' 2>&1); result nested_userns_inside_container "$(tail -1 <<<"$o")"
+a1=$(counter allowed); d1=$(counter denied)
 
 hdr "must be denied (outside eapodman.slice)"
 o=$(su - "$U" -s /bin/bash -c 'unshare -U true' </dev/null 2>&1); result ssh_shell_unshare "$(denied $? "$o")"
@@ -76,6 +81,16 @@ o=$(su - "$U" -s /bin/bash -c "cd; mkdir -p -m 0700 /tmp/p012-\$(id -u); XDG_RUN
 o=$(systemd-run --quiet --wait --pipe --collect --uid="$UID_" --slice=system.slice unshare -U true </dev/null 2>&1); result cron_like_system_slice_unshare "$(denied $? "$o")"
 o=$(systemd-run --quiet --wait --pipe --collect --uid="$UID_" --slice="user-$UID_.slice" unshare -U true </dev/null 2>&1); result user_slice_unshare "$(denied $? "$o")"
 o=$(unshare -U true 2>&1); result root_unshare "$(ok $? "$o")"
+a2=$(counter allowed); d2=$(counter denied)
 info "counters: $(counters)"
+# The denials above are the program's only if its denied counter rose by at least the 4 checks
+# (and its allowed counter rose across "must work"); otherwise seccomp, max_user_namespaces or
+# CageFS could have produced them.
+if [ -z "$a0" ] || [ -z "$d0" ] || [ -z "$a1" ] || [ -z "$d1" ] || [ -z "$a2" ] || [ -z "$d2" ]; then
+    inconclusive denials_by_program "couldn't read the program's counters (start a=$a0 d=$d0; mid a=$a1 d=$d1; end a=$a2 d=$d2)"
+else
+    result allowed_by_program "$([ $((a1 - a0)) -gt 0 ] && echo "yes (+$((a1 - a0)))" || echo "NO (+0)")"
+    result denials_by_program "$([ $((d2 - d1)) -ge 4 ] && echo "yes (+$((d2 - d1)))" || echo "NO (+$((d2 - d1)), expected >= 4)")"
+fi
 rm -rf /tmp/p012-store-"$UID_" /tmp/p012-"$UID_" 2>/dev/null
 probe_exit
