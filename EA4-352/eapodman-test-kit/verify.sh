@@ -81,5 +81,42 @@ for unit in /etc/systemd/system/ea-podman-*."$U".[0-9][0-9].service; do
     fi
 done
 
+echo; echo "== runtime dir (F16, F19)"
+# conf/runtime-mount has the account create these; they must be real dirs, never symlinks.
+for e in cni netns; do
+    check "$RUNDIR/$e is a real directory, $U's, 0700" \
+        test ! -L "$RUNDIR/$e" -a -d "$RUNDIR/$e" -a "$(stat -c '%u %a' "$RUNDIR/$e" 2>/dev/null)" = "$UID_ 700"
+done
+for unit in /etc/systemd/system/ea-podman-*."$U".[0-9][0-9].service; do
+    [ -e "$unit" ] || continue
+    check "$(basename "$unit") is active (its container started)" systemctl is-active -q "$(basename "$unit")"
+done
+# F19: on SELinux hosts pasta needs netns labelled user_tmp_t (runtime-mount's chcon -h), and
+# nothing of ea-podman's may be denied since the anchor started.
+if command -v selinuxenabled >/dev/null && selinuxenabled; then
+    echo "  SELinux: $(getenforce)"
+    check "$RUNDIR/netns is labelled user_tmp_t" \
+        test "$(stat -c %C "$RUNDIR/netns" 2>/dev/null | cut -d: -f3)" = user_tmp_t
+    since=$(date -d "$(systemctl show -p ActiveEnterTimestamp --value "ea-podman-runtime@$UID_.service")" +%s 2>/dev/null)
+    if [ -z "$since" ] || ! command -v ausearch >/dev/null; then
+        check "AVC denials can be searched (ausearch, and the anchor's start time)" false
+    else
+        avc=$(LC_ALL=C ausearch -m avc,user_avc -i -ts $(LC_ALL=C date -d "@$since" '+%x %H:%M:%S') 2>&1); rc=$?
+        # ausearch exits 1 with "<no matches>" when there are none; any other failure is an error.
+        if [ $rc = 1 ] && grep -q '<no matches>' <<<"$avc"; then
+            ours=
+        elif [ $rc = 0 ]; then
+            ours=$(grep -E 'pasta|slirp4netns|netavark|aardvark|conmon|podman|crun|runc|catatonit|ea-podman|eapodman' <<<"$avc")
+            [ -n "$ours" ] || echo "  (AVC denials since the anchor started, none of them ea-podman's)"
+        else
+            ours="ausearch failed (rc $rc): $avc"
+        fi
+        check "no ea-podman AVC denials since the anchor started" test -z "$ours"
+        [ -z "$ours" ] || sed 's/^/    /' <<<"$ours" | tail -20
+    fi
+else
+    echo "  SELinux disabled: the netns label and AVC checks (F19) don't apply here"
+fi
+
 echo
 [ "$FAILS" = 0 ] && echo "all checks passed" || { echo "$FAILS check(s) failed"; exit 1; }
