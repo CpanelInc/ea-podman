@@ -21,15 +21,36 @@ cgof() { grep -E '^0::|name=systemd' "/proc/$1/cgroup" 2>/dev/null | head -1 | c
 unit_cg() { systemctl show -p ControlGroup --value "ea-podman-$1.service"; }    # from systemd, never from the account
 envs() { printf '%s ' "${PINNED[@]}"; }
 
+# A PID from the account (acct_session's pid file) is only a claim. Root accepts it only if the
+# kernel puts it in the session scope root itself just created, owned by the account and running
+# the pty's sh: any other PID (a host service, another user's process) is refused. The account
+# can't move processes into that root-owned scope, so whatever is in it is the account's own.
+# scope_pid <pid> <scope unit>
+scope_pid() {
+    local scg
+    case $1 in ''|0|1|*[!0-9]*) echo "refusing PID '$1'"; return 1;; esac
+    scg=$(systemctl show -p ControlGroup --value "$2"); [ -n "$scg" ] || { echo "refusing PID $1: $2 is gone"; return 1; }
+    [ "$(cgof "$1")" = "$scg" ] || { echo "refusing PID $1: in '$(cgof "$1")', not $2"; return 1; }
+    [ "$(stat -c %u "/proc/$1" 2>/dev/null)" = "$UID_" ] || { echo "refusing PID $1: not uid $UID_"; return 1; }
+    [ "$(ps -o comm= -p "$1" 2>/dev/null)" = sh ] || { echo "refusing PID $1: comm '$(ps -o comm= -p "$1" 2>/dev/null)', not sh"; return 1; }
+}
+
 # Root's placement step: move <pid> into <unit>/<leaf> (v2 only; on v1 exec already lands in the
-# container's cgroup, P0-13). Prints what happened; non-zero means "refuse".
-place() {    # pid, container, leaf
-    local cg d
+# container's cgroup, P0-13). With a scope, the PID came from the account and must pass scope_pid,
+# before and (for PID reuse in between) after the move. Prints what happened; non-zero means "refuse".
+place() {    # pid, container, leaf, [scope unit the PID must be in]
+    local cg d r
+    if [ -n "${4:-}" ]; then r=$(scope_pid "$1" "$4") || { echo "$r"; return 1; }; fi
     [ $CGV = 2 ] || { echo "v1: not moved"; return 0; }
     cg=$(unit_cg "$2"); [ -n "$cg" ] || { echo "unit not running"; return 1; }
     d=$CG$cg/$3
     mkdir "$d" 2>/dev/null || [ -d "$d" ] || { echo "mkdir $d failed"; return 1; }
     echo "$1" 2>&1 >"$d/cgroup.procs" || { echo "write to $d/cgroup.procs failed"; return 1; }
+    if [ -n "${4:-}" ] && { [ "$(stat -c %u "/proc/$1" 2>/dev/null)" != "$UID_" ] \
+            || [ "$(ps -o comm= -p "$1" 2>/dev/null)" != sh ]; }; then
+        echo "PID $1 changed hands during the move (now uid $(stat -c %u "/proc/$1" 2>/dev/null), comm $(ps -o comm= -p "$1" 2>/dev/null))"
+        return 1
+    fi
     echo "moved to $cg/$3"
 }
 
@@ -105,7 +126,7 @@ bash_mode() {
 
     hdr "root moves the account's waiting process into <unit>/ea-podman-exec, then it runs exec -it"
     p=$(acct_session 1 "$(exec_cmd $X 1)")
-    result place_1 "$(place "$p" $X ea-podman-exec)"
+    result place_1 "$(place "$p" $X ea-podman-exec "t08-acct-$TAG-1.scope")"
     go 1; sleep 4
     if [ -n "$(held 1)" ]; then
         result exec_moved "works; exec'd process in $(cgof "$(held 1)")"
@@ -129,7 +150,7 @@ bash_mode() {
         as_user /bin/sh -c "mkdir $CG$cg/ea-podman-exec && echo 1 >$CG$cg/ea-podman-exec/cgroup.freeze" >/dev/null 2>&1
         result hostile_leaf "account mkdir+freeze: $(cat $CG$cg/ea-podman-exec/cgroup.freeze 2>/dev/null || echo 'not created')"
         p=$(acct_session 2 "$(exec_cmd $X 2)")
-        t0=$(date +%s%N); r=$(place "$p" $X ea-podman-exec); t1=$(date +%s%N)
+        t0=$(date +%s%N); r=$(place "$p" $X ea-podman-exec "t08-acct-$TAG-2.scope"); t1=$(date +%s%N)
         go 2; sleep 4
         result hostile_place "root step: $r in $(( (t1 - t0) / 1000000 )) ms; account's process state=$(awk '/^State/{print $2}' /proc/$p/status 2>/dev/null) frozen=$(awk '/^frozen/{print $2}' $CG$cg/ea-podman-exec/cgroup.events); exec ran=$([ -n "$(held 2)" ] && echo yes || echo no)"
         echo 0 >"$CG$cg/ea-podman-exec/cgroup.freeze"; sleep 3

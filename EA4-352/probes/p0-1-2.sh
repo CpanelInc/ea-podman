@@ -12,12 +12,25 @@ ROOTC=p02root
 DS=$HOME_/.local/share/containers
 DSBK=$HOME_/.local/share/containers.p01-backup
 # Refuse before any cleanup is armed: a leftover backup belongs to an earlier run, not this one.
-[ -e "$DSBK" ] && { echo "$DSBK exists; restore it first" >&2; exit 1; }
+as_acct test -e "$DSBK" && { echo "$DSBK exists; restore it first" >&2; exit 1; }
+# DS and DSBK are in the account's home, so every move and removal there runs as the account: as
+# root, a symlink planted on any component (e.g. ~/.local/share -> /var/lib) would aim them at the
+# host. There is no root fallback; a failed restore is reported and the backup is kept.
 MOVED=
 restore_storage() {    # only what this run moved aside
     [ -n "$MOVED" ] || return 0
-    as_user_env 120 XDG_RUNTIME_DIR=$RUNDIR -- /usr/bin/podman unshare rm -rf "$DS" 2>/dev/null || rm -rf "$DS"
-    mv "$DSBK" "$DS"
+    # Inside the account's user namespace, for the subordinate-ID files. podman gets a throwaway
+    # store: DS's own database points at the 1.x session's runroot, gone once user@ has stopped,
+    # and opening DS would also mount over the files being removed.
+    if as_user_env 120 XDG_RUNTIME_DIR=$RUNDIR -- /usr/bin/podman --root "$RUNDIR/p01-unshare/root" \
+            --runroot "$RUNDIR/p01-unshare/run" unshare rm -rf "$DS" \
+        && user_sh '[ ! -e "$2" ] && [ ! -L "$2" ] && mv "$1" "$2"' "$DSBK" "$DS"; then
+        MOVED=
+    else
+        echo "p0-1: could not restore the account's storage; it is still at $DSBK" >&2
+        result restore_storage "FAILS: backup kept at $DSBK"
+    fi
+    user_rm "$RUNDIR/p01-unshare"    # the throwaway store: no images, so only the account's own files
 }
 cleanup() {
     systemctl stop "ea-podman-$OLD.service" 2>/dev/null
@@ -66,8 +79,8 @@ EOF
 }
 
 hdr "create a 1.x container in the account's own session (default storage, systemd manager)"
-if [ -e "$DS" ]; then
-    mv "$DS" "$DSBK" || { echo "could not move $DS aside" >&2; exit 1; }
+if as_acct test -e "$DS"; then
+    user_sh 'mv "$1" "$2"' "$DS" "$DSBK" || { echo "could not move $DS aside" >&2; exit 1; }
     MOVED=1
 fi
 old_session_start || { result setup "could not start user@$UID_"; exit 1; }
