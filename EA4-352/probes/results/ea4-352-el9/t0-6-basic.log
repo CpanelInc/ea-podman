@@ -1,4 +1,5 @@
 host ea4-352-el9 os=almalinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+probe t0-6.sh=4bff04d63e10 plib.sh=fd17d062fc15 lib.sh=a7f0c6e05931
 
 ### host
 RESULT t0-6.ram_mib 2711
@@ -17,12 +18,12 @@ RESULT t0-6.swap_devices 0
 RESULT t0-6.swap_accounting memory.swap.max present
 
 ### TasksMax=33% on the account slice, as resolved
-RESULT t0-6.account_slice_tasks_max property=694 pids.max=694 (base for 33% = 2103)
+RESULT t0-6.account_slice_tasks_max property=6940 pids.max=6940 (base for 33% = 21030)
 RESULT t0-6.eapodman_slice_tasks_max 6940
 
 ### nproc as 2.0 runs it (kit: unit LimitNPROC=infinity, create through the runner)
-RESULT t0-6.nproc_2x conmon=unlimited/unlimited container_init=1048576/1048576 pause=10516/10516 runner=10516/10516
-RESULT t0-6.container_spec_nproc 1048576/1048576
+RESULT t0-6.nproc_2x conmon=10516/10516 container_init=10516/10516 pause=10516/10516 runner=10516/10516
+RESULT t0-6.container_spec_nproc 10516/10516
 
 ### 1.x parity: the account's own user@ and logind's /run/user/<uid>
 RESULT t0-6.nproc_1x_user_manager 10516/10516
@@ -31,7 +32,7 @@ RESULT t0-6.user_slice_pids_max_1x 6940
 RESULT t0-6.events_readback_1x 6 events
 
 ### 2.0 runtime dir use with the kit's 3 containers
-RESULT t0-6.runtime_dir_2x size=277712k used=152KiB inodes=91
+RESULT t0-6.runtime_dir_2x size=277712k nr_inodes=69427 used=260KiB inodes=103
 
 ### exit codes without journal readback (2.0 env, delegated runner)
 RESULT t0-6.run_rm_exit_code 3 (want 3)

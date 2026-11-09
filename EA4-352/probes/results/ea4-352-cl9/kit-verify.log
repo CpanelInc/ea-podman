@@ -1,0 +1,204 @@
+Unit eapodman.slice (/eapodman.slice):
+└─eapodman-1001.slice (#1248)
+  → user.invocation_id: d5dfeac31a5b4e07bfe2bb9f23135a11
+  → trusted.invocation_id: d5dfeac31a5b4e07bfe2bb9f23135a11
+  ├─ea-podman-worker.eapodtest.03.service … (#47272)
+  │ → user.invocation_id: 13e3c94eef3a484fb4ffe8447f83b128
+  │ → user.delegate: 1
+  │ → trusted.invocation_id: 13e3c94eef3a484fb4ffe8447f83b128
+  │ → trusted.delegate: 1
+  │ ├─libpod-payload-463a7a14d2145be4f2c28b233f25e87f0bc54d02ebc71eab30a137cc6e74c08a (#47335)
+  │ │ ├─9428 nginx: master process nginx -g daemon off;
+  │ │ ├─9445 nginx: worker process
+  │ │ ├─9446 nginx: worker process
+  │ │ └─9447 nginx: worker process
+  │ └─runtime (#47321)
+  │   ├─9423 /usr/bin/pasta --config-net -t 127.0.0.1/8083-8083:80-80 --dns-for…
+  │   └─9425 /usr/bin/conmon --api-version 1 -c 463a7a14d2145be4f2c28b233f25e87…
+  ├─ea-podman-runtime@1001.service … (#46488)
+  │ → user.invocation_id: bfa75bba2d7f4a00b096f77b05e4b9f9
+  │ → user.delegate: 1
+  │ → trusted.invocation_id: bfa75bba2d7f4a00b096f77b05e4b9f9
+  │ → trusted.delegate: 1
+  │ └─9047 catatonit -P
+  ├─ea-podman-web.eapodtest.01.service … (#48993)
+  │ → user.invocation_id: 703e2a2021e74b87997dde05cdaa5e89
+  │ → user.delegate: 1
+  │ → trusted.invocation_id: 703e2a2021e74b87997dde05cdaa5e89
+  │ → trusted.delegate: 1
+  │ ├─runtime (#49042)
+  │ │ ├─10239 /usr/bin/pasta --config-net -t 127.0.0.1/8081-8081:80-80 --dns-fo…
+  │ │ └─10241 /usr/bin/conmon --api-version 1 -c af685ec2ae5c03091496d7a37b5a8f…
+  │ └─libpod-payload-af685ec2ae5c03091496d7a37b5a8f1262b59801c4a77c3673eefbc0193ab989 (#49056)
+  │   ├─10243 nginx: master process nginx -g daemon off;
+  │   ├─10259 nginx: worker process
+  │   ├─10260 nginx: worker process
+  │   └─10261 nginx: worker process
+  └─ea-podman-api.eapodtest.02.service … (#47125)
+    → user.invocation_id: 3ddb5692ce864555a92973a8ebf93812
+    → user.delegate: 1
+    → trusted.invocation_id: 3ddb5692ce864555a92973a8ebf93812
+    → trusted.delegate: 1
+    ├─libpod-payload-3daf91d415fe174190398129cec593f6a3ca1f9048309872ef9e54c318f79c3d (#47188)
+    │ ├─9347 nginx: master process nginx -g daemon off;
+    │ ├─9363 nginx: worker process
+    │ ├─9364 nginx: worker process
+    │ └─9365 nginx: worker process
+    └─runtime (#47174)
+      ├─9343 /usr/bin/pasta --config-net -t 127.0.0.1/8082-8082:80-80 --dns-for…
+      └─9345 /usr/bin/conmon --api-version 1 -c 3daf91d415fe174190398129cec593f…
+
+user.slice CPUWeight: [not set] (eapodman.slice should match)
+user@1001 active: inactive  (should be inactive)
+
+== eapodman.slice
+  memory.low               872415232 
+  cpu.weight               100 
+  io.weight                default 100 
+  pids.max                 6915 
+  cgroup.subtree_control   cpu io memory pids 
+
+== eapodman.slice/eapodman-1001.slice
+  memory.low               872415232 
+  memory.max               2147483648 
+  pids.max                 6915 
+  cgroup.subtree_control   cpu io memory pids 
+
+== eapodman.slice/eapodman-1001.slice/ea-podman-api.eapodtest.02.service
+  memory.low               536870912 
+  cpu.weight               200 
+  cgroup.subtree_control   cpu io memory pids 
+  cgroup.procs             
+
+== eapodman.slice/eapodman-1001.slice/ea-podman-api.eapodtest.02.service/libpod-payload-3daf91d415fe174190398129cec593f6a3ca1f9048309872ef9e54c318f79c3d
+  memory.max               1073741824 
+  memory.swap.max          0 
+  memory.low               536870912 
+  cpu.max                  200000 100000 
+  cpu.weight               174 
+  pids.max                 max 
+  cgroup.procs             9347 9363 9364 9365 
+
+== eapodman.slice/eapodman-1001.slice/ea-podman-api.eapodtest.02.service/runtime
+  memory.max               max 
+  memory.swap.max          max 
+  memory.low               0 
+  cpu.max                  max 100000 
+  cpu.weight               100 
+  pids.max                 max 
+  cgroup.procs             9343 9345 
+
+== eapodman.slice/eapodman-1001.slice/ea-podman-runtime@1001.service
+  memory.low               0 
+  cpu.weight               100 
+  cgroup.subtree_control   
+  cgroup.procs             9047 
+
+== eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+  memory.low               268435456 
+  cpu.weight               100 
+  cgroup.subtree_control   cpu io memory pids 
+  cgroup.procs             
+
+== eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/libpod-payload-af685ec2ae5c03091496d7a37b5a8f1262b59801c4a77c3673eefbc0193ab989
+  memory.max               536870912 
+  memory.swap.max          0 
+  memory.low               268435456 
+  cpu.max                  100000 100000 
+  cpu.weight               100 
+  pids.max                 max 
+  cgroup.procs             10243 10259 10260 10261 
+
+== eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/runtime
+  memory.max               max 
+  memory.swap.max          max 
+  memory.low               0 
+  cpu.max                  max 100000 
+  cpu.weight               100 
+  pids.max                 max 
+  cgroup.procs             10239 10241 
+
+== eapodman.slice/eapodman-1001.slice/ea-podman-worker.eapodtest.03.service
+  memory.low               67108864 
+  cpu.weight               50 
+  cgroup.subtree_control   cpu io memory pids 
+  cgroup.procs             
+
+== eapodman.slice/eapodman-1001.slice/ea-podman-worker.eapodtest.03.service/libpod-payload-463a7a14d2145be4f2c28b233f25e87f0bc54d02ebc71eab30a137cc6e74c08a
+  memory.max               268435456 
+  memory.swap.max          0 
+  memory.low               67108864 
+  cpu.max                  50000 100000 
+  cpu.weight               59 
+  pids.max                 max 
+  cgroup.procs             9428 9445 9446 9447 
+
+== eapodman.slice/eapodman-1001.slice/ea-podman-worker.eapodtest.03.service/runtime
+  memory.max               max 
+  memory.swap.max          max 
+  memory.low               0 
+  cpu.max                  max 100000 
+  cpu.weight               100 
+  pids.max                 max 
+  cgroup.procs             9423 9425 
+
+== account slice
+  PASS  eapodman-1001.slice is loaded
+  PASS  eapodman-1001.slice is active
+  PASS  eapodman-1001.slice has no unit file (implicit, as in the plan)
+  PASS  eapodman-1001.slice limits are drop-ins under /etc/systemd/system.control
+
+== pinned podman config, as seen by the account
+  runtime /usr/bin/crun, conmon /usr/bin/conmon, cgroup manager cgroupfs
+  graphroot /home/eapodtest/.local/share/ea-podman/storage
+  runroot /run/ea-podman/user/1001/containers
+  PASS  podman info answered as the account
+  PASS  /etc/eapodman-test/containers.conf pins an OCI runtime
+  PASS  OCI runtime is the one pinned in /etc/eapodman-test/containers.conf
+  PASS  conmon is the one pinned in /etc/eapodman-test/containers.conf
+  PASS  cgroup manager is cgroupfs
+  PASS  graphroot is the fresh ea-podman storage
+  PASS  runroot is in the runtime tmpfs
+
+== container units (cgroup v2)
+  PASS  setup.sh's three container units exist (found 3)
+  ea-podman-api.eapodtest.02.service: MainPID 9345 (conmon), PIDFile /run/ea-podman/user/1001/api.eapodtest.02.conmon.pid
+  PASS  ea-podman-api.eapodtest.02.service PIDFile is derived from the container name
+  PASS  ea-podman-api.eapodtest.02.service ExecStart starts that container
+  PASS  ea-podman-api.eapodtest.02.service MainPID is conmon
+  PASS  ea-podman-api.eapodtest.02.service MainPID is inside the unit's cgroup
+  PASS  ea-podman-api.eapodtest.02.service has a libpod-payload-* container cgroup (--cgroups=split in effect)
+  PASS  ea-podman-api.eapodtest.02.service container cgroup has memory.max
+  PASS  ea-podman-api.eapodtest.02.service container cgroup has memory.swap.max
+  PASS  ea-podman-api.eapodtest.02.service container cgroup has cpu.max
+  PASS  ea-podman-api.eapodtest.02.service container cgroup has pids.max
+  ea-podman-web.eapodtest.01.service: MainPID 10241 (conmon), PIDFile /run/ea-podman/user/1001/web.eapodtest.01.conmon.pid
+  PASS  ea-podman-web.eapodtest.01.service PIDFile is derived from the container name
+  PASS  ea-podman-web.eapodtest.01.service ExecStart starts that container
+  PASS  ea-podman-web.eapodtest.01.service MainPID is conmon
+  PASS  ea-podman-web.eapodtest.01.service MainPID is inside the unit's cgroup
+  PASS  ea-podman-web.eapodtest.01.service has a libpod-payload-* container cgroup (--cgroups=split in effect)
+  PASS  ea-podman-web.eapodtest.01.service container cgroup has memory.max
+  PASS  ea-podman-web.eapodtest.01.service container cgroup has memory.swap.max
+  PASS  ea-podman-web.eapodtest.01.service container cgroup has cpu.max
+  PASS  ea-podman-web.eapodtest.01.service container cgroup has pids.max
+  ea-podman-worker.eapodtest.03.service: MainPID 9425 (conmon), PIDFile /run/ea-podman/user/1001/worker.eapodtest.03.conmon.pid
+  PASS  ea-podman-worker.eapodtest.03.service PIDFile is derived from the container name
+  PASS  ea-podman-worker.eapodtest.03.service ExecStart starts that container
+  PASS  ea-podman-worker.eapodtest.03.service MainPID is conmon
+  PASS  ea-podman-worker.eapodtest.03.service MainPID is inside the unit's cgroup
+  PASS  ea-podman-worker.eapodtest.03.service has a libpod-payload-* container cgroup (--cgroups=split in effect)
+  PASS  ea-podman-worker.eapodtest.03.service container cgroup has memory.max
+  PASS  ea-podman-worker.eapodtest.03.service container cgroup has memory.swap.max
+  PASS  ea-podman-worker.eapodtest.03.service container cgroup has cpu.max
+  PASS  ea-podman-worker.eapodtest.03.service container cgroup has pids.max
+
+== runtime dir (F16, F19)
+  PASS  /run/ea-podman/user/1001/cni is a real directory, eapodtest's, 0700
+  PASS  /run/ea-podman/user/1001/netns is a real directory, eapodtest's, 0700
+  PASS  ea-podman-api.eapodtest.02.service is active (its container started)
+  PASS  ea-podman-web.eapodtest.01.service is active (its container started)
+  PASS  ea-podman-worker.eapodtest.03.service is active (its container started)
+  SELinux disabled: the netns label and AVC checks (F19) don't apply here
+
+all checks passed

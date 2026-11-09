@@ -1,24 +1,21 @@
 host ea4-352-u22 os=ubuntu-22.04 kernel=5.15.0-203-generic cgroup=v2 systemd=249 podman=3.4.4
+probe p0-8.sh=15419e83e542 plib.sh=fd17d062fc15 lib.sh=a7f0c6e05931
 
 ### podman info under podman_env, with a hostile ~/.config/containers
-  time="2026-11-06T19:30:10Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
-time="2026-11-06T19:30:10Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
-time="2026-11-06T19:30:10Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
-time="2026-11-06T19:30:10Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
-cgroupfs|overlay|/home/eapodtest/.local/share/ea-podman/storage|journald|Error: template: info:1:101: executing "info" at <.Host.NetworkBackend>: can't evaluate field NetworkBackend in type *define.HostInfo
+  cgroupfs|overlay|/home/eapodtest/.local/share/ea-podman/storage|journald|Error: template: info:1:101: executing "info" at <.Host.NetworkBackend>: can't evaluate field NetworkBackend in type *define.HostInfo
 RESULT p0-8.user_containers_conf_ignored yes
 RESULT p0-8.user_storage_conf_ignored yes
 RESULT p0-8.network_backend Error: template: info:1:101: executing "info" at <.Host.NetworkBackend>: can't evaluate field NetworkBackend in type *define.HostInfo
-RESULT p0-8.pinned_conf_warnings Failed to decode the keys [\"containers.default_mounts_file\"] 
+RESULT p0-8.pinned_conf_warnings none
 
 ### create + start a container (policy.json, registries.conf, mounts.conf, drop-ins, env)
-  create rc=0: bffd44b8c1ebc82f040b2151358712e08715765b99ec5a092838416bd758d808
+  create rc=0: bed37a7d104a6e2dda6b5e0b6ebec911125969fef6959d059714507b3be18611
 RESULT p0-8.user_policy_json_ignored yes
-RESULT p0-8.start_from_plain_runner FAILS: Error: unable to start container "bffd44b8c1ebc82f040b2151358712e08715765b99ec5a092838416bd758d808": mkdir /sys/fs/cgroup/eapodman.slice/eapodman-1000.slice/eapodman-run-1000-test-12405-1.service/supervisor: permission denied
+RESULT p0-8.start_from_plain_runner FAILS: Error: unable to start container "bed37a7d104a6e2dda6b5e0b6ebec911125969fef6959d059714507b3be18611": mkdir /sys/fs/cgroup/eapodman.slice/eapodman-1000.slice/eapodman-run-1000-test-20592-2.service/supervisor: permission denied
   start rc=0: 
 RESULT p0-8.start_with_pinned_xdg_config_home works
 RESULT p0-8.user_env_and_dropins_ignored yes
-RESULT p0-8.user_mounts_conf_ignored yes
+RESULT p0-8.user_mounts_conf_ignored NO: /run/ea-podman/user/1000/containers/overlay-containers/bed37a7d104a6e2dda6b5e0b6ebec911125969fef6959d059714507b3be18611/userdata/run/p08-mark->/run/p08-mark (content 'hostile'; the hostile file holds 'hostile')
 RESULT p0-8.log_driver journald (user conf says none)
 RESULT p0-8.hostile_graphroot_touched no
 
@@ -26,8 +23,8 @@ RESULT p0-8.hostile_graphroot_touched no
   before: l ./cni -> /run/ea-podman/user/1000/cni
   after:  l ./cni -> /run/ea-podman/user/1000/cni
 RESULT p0-8.xdg_config_home_unchanged yes
-  cni dir in the tmpfs: ./net.d ./net.d/87-podman.conflist 
-RESULT p0-8.cni_dir_used yes (./net.d ./net.d/87-podman.conflist )
+  cni dir in the tmpfs: 
+RESULT p0-8.cni_dir_used no
 
 ### what podman opened under the account's ~/.config while it ran (strace, if present)
 RESULT p0-8.opens_under_home_config none

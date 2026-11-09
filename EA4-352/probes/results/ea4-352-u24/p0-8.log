@@ -1,4 +1,5 @@
 host ea4-352-u24 os=ubuntu-24.04 kernel=6.8.0-149-generic cgroup=v2 systemd=255 podman=4.9.3
+probe p0-8.sh=15419e83e542 plib.sh=fd17d062fc15 lib.sh=a7f0c6e05931
 
 ### podman info under podman_env, with a hostile ~/.config/containers
   cgroupfs|overlay|/home/eapodtest/.local/share/ea-podman/storage|journald|netavark
@@ -8,13 +9,13 @@ RESULT p0-8.network_backend netavark
 RESULT p0-8.pinned_conf_warnings none
 
 ### create + start a container (policy.json, registries.conf, mounts.conf, drop-ins, env)
-  create rc=0: 42ae301bd1de813abf581ad741fb99fb43d73c4b1322a193330ffa1b05dddfd5
+  create rc=0: 6b1b2e38a2f7b74db302e900863720562ca8e71322e74c282751be88e016ff53
 RESULT p0-8.user_policy_json_ignored yes
-RESULT p0-8.start_from_plain_runner FAILS: Error: unable to start container "42ae301bd1de813abf581ad741fb99fb43d73c4b1322a193330ffa1b05dddfd5": mkdir /sys/fs/cgroup/eapodman.slice/eapodman-1000.slice/eapodman-run-1000-test-8769-1.service/runtime: permission denied
+RESULT p0-8.start_from_plain_runner FAILS: Error: unable to start container "6b1b2e38a2f7b74db302e900863720562ca8e71322e74c282751be88e016ff53": mkdir /sys/fs/cgroup/eapodman.slice/eapodman-1000.slice/eapodman-run-1000-test-5104-2.service/runtime: permission denied
   start rc=0: 
 RESULT p0-8.start_with_pinned_xdg_config_home works
 RESULT p0-8.user_env_and_dropins_ignored yes
-RESULT p0-8.user_mounts_conf_ignored yes
+RESULT p0-8.user_mounts_conf_ignored NO: /run/ea-podman/user/1000/containers/overlay-containers/6b1b2e38a2f7b74db302e900863720562ca8e71322e74c282751be88e016ff53/userdata/run/p08-mark->/run/p08-mark (content 'hostile'; the hostile file holds 'hostile')
 RESULT p0-8.log_driver journald (user conf says none)
 RESULT p0-8.hostile_graphroot_touched no
 
@@ -22,8 +23,8 @@ RESULT p0-8.hostile_graphroot_touched no
   before: l ./cni -> /run/ea-podman/user/1000/cni
   after:  l ./cni -> /run/ea-podman/user/1000/cni
 RESULT p0-8.xdg_config_home_unchanged yes
-  cni dir in the tmpfs: ./net.d ./net.d/cni.lock 
-RESULT p0-8.cni_dir_used yes (./net.d ./net.d/cni.lock )
+  cni dir in the tmpfs: 
+RESULT p0-8.cni_dir_used no
 
 ### what podman opened under the account's ~/.config while it ran (strace, if present)
 RESULT p0-8.opens_under_home_config none

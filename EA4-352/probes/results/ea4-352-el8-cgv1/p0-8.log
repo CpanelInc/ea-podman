@@ -1,20 +1,21 @@
 host ea4-352-el8-cgv1 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+probe p0-8.sh=15419e83e542 plib.sh=fd17d062fc15 lib.sh=a7f0c6e05931
 
 ### podman info under podman_env, with a hostile ~/.config/containers
-  cgroupfs|overlay|/home/eapodtest/.local/share/ea-podman/storage|journald|cni
+  cgroupfs|overlay|/home/eapodtest/.local/share/ea-podman/storage|file|cni
 RESULT p0-8.user_containers_conf_ignored yes
 RESULT p0-8.user_storage_conf_ignored yes
 RESULT p0-8.network_backend cni
 RESULT p0-8.pinned_conf_warnings none
 
 ### create + start a container (policy.json, registries.conf, mounts.conf, drop-ins, env)
-  create rc=0: 98bd1d225b0f587308495302f11da6b6973df4fd81a7ec9e4166888ae26c3a26
+  create rc=0: 0a94da1a26bbb1efe3ad85ad5fe34bfd8eeb3247bc6455c8f9de84c890dd6b6f
 RESULT p0-8.user_policy_json_ignored yes
 RESULT p0-8.start_from_plain_runner works
   start rc=0: 
 RESULT p0-8.start_with_pinned_xdg_config_home works
 RESULT p0-8.user_env_and_dropins_ignored yes
-RESULT p0-8.user_mounts_conf_ignored NO
+RESULT p0-8.user_mounts_conf_ignored NO: /run/ea-podman/user/1000/containers/overlay-containers/0a94da1a26bbb1efe3ad85ad5fe34bfd8eeb3247bc6455c8f9de84c890dd6b6f/userdata/run/p08-mark->/run/p08-mark (content 'hostile'; the hostile file holds 'hostile')
 RESULT p0-8.log_driver k8s-file (user conf says none)
 RESULT p0-8.hostile_graphroot_touched no
 

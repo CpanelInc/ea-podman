@@ -1,0 +1,5 @@
+host ea4-352-u22 os=ubuntu-22.04 kernel=5.15.0-203-generic cgroup=v2 systemd=249 podman=3.4.4
+probe p0-12.sh=c47d0157c7f7 plib.sh=fd17d062fc15 lib.sh=a7f0c6e05931
+RESULT p0-12.userns_create_hook no
+RESULT p0-12.bpf_in_lsm_list no (lockdown,capability,landlock,yama,apparmor)
+RESULT p0-12.supported no

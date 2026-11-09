@@ -1,0 +1,13 @@
+host ea4-352-el8-cgv1 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+probe p0-3-hidepid.sh=fa49f25ae4f8 plib.sh=fd17d062fc15 lib.sh=a7f0c6e05931
+RESULT p0-3.hidepid none
+
+### systemctl stop
+RESULT p0-3.stop rc=0 after 0s; ActiveState=inactive Result=success
+RESULT p0-3.stop_exit_file_timeout no
+RESULT p0-3.killmode_reaped none needed
+RESULT p0-3.leftovers_in_unit_cgroup none (the unit's cgroup is gone)
+RESULT p0-3.podman_state_after_stop exited
+
+### UNIT_REMOVE order: podman rm after the stop
+RESULT p0-3.rm_after_stop works
