@@ -22,4 +22,13 @@ Scripts for the Phase 0 probes in `../PLAN.md`. They were run on the VMs in `../
 
 `results/<vm>/` holds the logs from the 2026-11-06 run, and the `t0-8-*.log` files from 2026-11-09. The `kit-*.log` files there are the kit's own scripts.
 
+Each probe's log starts with two lines from `plib.sh`: the host (`os`, `kernel`, `cgroup`, `systemd`, `podman`) and the scripts that produced it, as the first 12 hex digits of each file's sha256 (`probe p0-4.sh=… plib.sh=… lib.sh=…`). The probes run from copies without git, so the hashes name the files rather than a commit. To find the commit, hash each revision of the script:
+
+```
+git log --format=%h -- EA4-352/probes/p0-4.sh | while read -r c; do
+    echo "$c $(git show "$c:EA4-352/probes/p0-4.sh" | sha256sum | cut -c1-12)"; done
+```
+
+Logs from before 2026-11-09 have no second line and come from earlier revisions of the scripts; some don't match the scripts at HEAD (for example `results/ea4-352-el9/p0-4-cpu.log` names a variable `p0-4.sh` no longer has).
+
 These change the host: `p0-6.sh` writes `/etc/pam.d/ea-podman`, `f17-switch.sh` edits the kernel command line, `t0-6.sh units` and `t0-6.sh swap` add and then remove dummy units and a swap file, `t0-8.sh` adds and then removes test containers, units and timers, and `p0-1-2.sh`, `p0-13.sh` and `f15-1x.sh` start the account's `user@` (on CloudLinux through a `/run/systemd/system` copy). Run them only on test VMs.

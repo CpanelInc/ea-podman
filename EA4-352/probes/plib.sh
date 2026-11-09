@@ -112,4 +112,10 @@ podman_env; PINNED=("${PODMAN_ENV[@]}")
 PINNED_OLD=("${PINNED[@]/#CONTAINERS_STORAGE_CONF=*/CONTAINERS_STORAGE_CONF=$OLDSTORE_CONF}")
 IMAGE=docker.io/nginxdemos/hello:plain-text
 
+# Provenance: the environment, and the exact scripts that produced this log. The hashes are of the
+# files as run (the probes are copied to the hosts without git); README.md shows how to find the
+# commit that has them.
+src_hash() { sha256sum "$1" 2>/dev/null | cut -c1-12; }
 echo "host $(hostname -s) os=$OSID kernel=$(uname -r) cgroup=v$CGV systemd=$SDV podman=$PODV"
+# Every probe has cd'd to its own directory before sourcing this, so $0's basename is the file.
+echo "probe $(basename "$0")=$(src_hash "$(basename "$0")") plib.sh=$(src_hash "${BASH_SOURCE[0]}") lib.sh=$(src_hash "$KIT/lib.sh")"
