@@ -18,8 +18,9 @@ command -v ss >/dev/null || { echo "ss not found; can't check the test ports are
 for port in 8081 8082 8083; do
     listeners=$(ss -Hltn "sport = :$port") || { echo "ss failed probing port $port" >&2; exit 1; }
     if [ -n "$listeners" ]; then
-        # podman 3.4's rootlessport re-execs /proc/self/exe, so ss shows it as "exe".
-        ss -Hltnp "sport = :$port" | grep -q 'conmon\|rootlessport\|slirp\|"exe"' \
+        # podman 3.4's rootlessport re-execs /proc/self/exe, so ss shows it as "exe"; podman 5's
+        # pasta shows as "pasta" or "pasta.avx2".
+        ss -Hltnp "sport = :$port" | grep -q 'conmon\|rootlessport\|slirp\|"exe"\|"pasta' \
             || { echo "port $port is already in use" >&2; exit 1; }
     fi
 done
