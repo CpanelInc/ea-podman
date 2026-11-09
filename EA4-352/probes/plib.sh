@@ -52,11 +52,13 @@ as_acct() { setpriv --reuid="$UID_" --regid="$GID_" --init-groups "$@"; }
 # planted symlink makes it fail instead of being followed. new_tmp <path>
 new_tmp() { rm -f "$1" && ( set -C; : >"$1" ); }
 
-# A probe container with its own unit, from the kit's template: probe_create <name> <podman create flags...>
-# then probe_unit_start <name>; probe_unit_rm <name> removes both.
+# A probe container with its own unit, from the kit's template:
+#   probe_create [-c containers.conf] <name> <podman create flags...>
+# then probe_unit_start <name>; probe_unit_rm <name> removes both. -c applies to that call only.
 probe_create() {
+    local c=(); [ "$1" = -c ] && { c=(-c "$2"); shift 2; }
     local name=$1; shift
-    as_user /usr/bin/podman create --name "$name" --conmon-pidfile "$(conmon_pidfile "$name")" "$@"
+    as_user "${c[@]}" /usr/bin/podman create --name "$name" --conmon-pidfile "$(conmon_pidfile "$name")" "$@"
 }
 probe_unit_start() {
     container_unit "$1" 0 100 143 >"/etc/systemd/system/ea-podman-$1.service"
@@ -110,12 +112,8 @@ rootless_storage_path = "$HOME/.local/share/containers/storage"
 EOF
     chmod 0644 $OLDSTORE_CONF
 }
-PINNED_OLD=(XDG_RUNTIME_DIR=$RUNDIR CONTAINERS_CONF=$ETC/containers.conf
-    CONTAINERS_STORAGE_CONF=$OLDSTORE_CONF CONTAINERS_REGISTRIES_CONF=$ETC/registries.conf
-    XDG_CONFIG_HOME=$XDGDIR)
-PINNED=(XDG_RUNTIME_DIR=$RUNDIR CONTAINERS_CONF=$ETC/containers.conf
-    CONTAINERS_STORAGE_CONF=$ETC/storage.conf CONTAINERS_REGISTRIES_CONF=$ETC/registries.conf
-    XDG_CONFIG_HOME=$XDGDIR)
+podman_env; PINNED=("${PODMAN_ENV[@]}")
+PINNED_OLD=("${PINNED[@]/#CONTAINERS_STORAGE_CONF=*/CONTAINERS_STORAGE_CONF=$OLDSTORE_CONF}")
 IMAGE=docker.io/nginxdemos/hello:plain-text
 
 echo "host $(hostname -s) os=$OSID kernel=$(uname -r) cgroup=v$CGV systemd=$SDV podman=$PODV"

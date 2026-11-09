@@ -13,22 +13,31 @@ CGV=1; [ "$(stat -fc %T $CG)" = cgroup2fs ] && CGV=2
 # T0.6: one nproc source for the unit's LimitNPROC and the create-time --ulimit pin.
 NPROC=$(systemctl show -p DefaultLimitNPROC --value)
 
-# The plan's podman_env($uid). The units carry the same values as Environment= lines.
-ENVS=(
-  --setenv=XDG_RUNTIME_DIR=$RUNDIR
-  --setenv=CONTAINERS_CONF=$ETC/containers.conf
-  --setenv=CONTAINERS_STORAGE_CONF=$ETC/storage.conf
-  --setenv=CONTAINERS_REGISTRIES_CONF=$ETC/registries.conf
-  --setenv=XDG_CONFIG_HOME=$XDGDIR
-)
+# The plan's podman_env($uid): sets PODMAN_ENV to the pinned assignments. The only variation a
+# caller can ask for is a different containers.conf; the units carry the same values.
+# podman_env [containers.conf]
+podman_env() {
+    PODMAN_ENV=(
+        XDG_RUNTIME_DIR=$RUNDIR
+        CONTAINERS_CONF=${1:-$ETC/containers.conf}
+        CONTAINERS_STORAGE_CONF=$ETC/storage.conf
+        CONTAINERS_REGISTRIES_CONF=$ETC/registries.conf
+        XDG_CONFIG_HOME=$XDGDIR
+    )
+}
+# systemd-run's form of the pinned env. Read-only: a caller that wants another containers.conf
+# asks as_user -c for that one call, instead of changing what every later call gets.
+podman_env; ENVS=("${PODMAN_ENV[@]/#/--setenv=}"); readonly ENVS
 
-# The plan's run_as_user_in_slice, by hand.
+# The plan's run_as_user_in_slice, by hand: as_user [-c containers.conf] <argv...>
 seq=0
 as_user() {
+    local envs=("${ENVS[@]}") PODMAN_ENV
+    if [ "${1:-}" = -c ]; then podman_env "$2"; envs=("${PODMAN_ENV[@]/#/--setenv=}"); shift 2; fi
     seq=$((seq + 1))
     systemd-run --quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
         --unit="eapodman-run-$UID_-test-$$-$seq" --pipe --wait --collect \
-        -p RuntimeMaxSec=600 -p WorkingDirectory="$HOME_" "${ENVS[@]}" "$@" </dev/null
+        -p RuntimeMaxSec=600 -p WorkingDirectory="$HOME_" "${envs[@]}" "$@" </dev/null
 }
 
 # Root chooses the PID file path from the container name and passes it to `podman create
