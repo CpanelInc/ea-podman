@@ -23,7 +23,7 @@ nproc_of() {    # label, pid, safe_target checks...
 }
 
 basic() {
-trap restore_changes EXIT    # the slice TasksMax the fork storm lowers
+trap restore_changes_or_fail EXIT    # the slice TasksMax the fork storm lowers
 hdr "host"
 result ram_mib "$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)"
 result cpus "$(nproc)"

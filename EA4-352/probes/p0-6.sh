@@ -38,7 +38,7 @@ EOF
 
 case ${1:-run} in
 run)
-trap restore_changes EXIT    # the slice MemoryMax section 2 lowers, if it exits early
+trap restore_changes_or_fail EXIT    # the slice MemoryMax section 2 lowers, if it exits early
 pam_file
 info "LVE for $U: $(lvectl list-user 2>/dev/null | awk -v u="$U" '$1==u' | head -1)"
 

@@ -276,6 +276,9 @@ restore_one() {    # key ("cg:<file>" or "prop:<unit>:<Property>"); reads the va
 }
 restore_cg() { restore_one "cg:$1"; }
 restore_prop() { restore_one "prop:$1:$2"; }
+# For an EXIT trap: as restore_changes, but a value left changed makes the script exit 1 (a trap's
+# own status is otherwise lost).
+restore_changes_or_fail() { restore_changes || exit 1; }
 # Put back everything still changed, newest first; prints what couldn't be and returns 1 then.
 restore_changes() {
     local i k failed=()

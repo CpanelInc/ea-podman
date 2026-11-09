@@ -23,9 +23,10 @@ cleanup() {
     for c in p04split.$U.80 p04nosplit.$U.81 p04v1split.$U.82; do probe_unit_rm "$c" >/dev/null 2>&1; done
     rm -f "$ETC/containers-nosplit.conf" "$ETC/containers-split.conf"
     systemctl stop 'p04-*' 2>/dev/null; systemctl reset-failed 'p04-*' 2>/dev/null
-    # Only the properties floor() changed, back to their saved values (lib.sh's change_prop).
-    restore_changes
     [ -n "${P4:-}" ] && rm -rf "$P4"
+    # Last: only the properties floor() changed, back to their saved values (lib.sh's change_prop),
+    # each read back; one that can't be put back makes the probe exit 1.
+    restore_changes_or_fail
 }
 trap cleanup EXIT
 # pause.pid is account-writable: read it as the account, and use it only if it is the account's process.
