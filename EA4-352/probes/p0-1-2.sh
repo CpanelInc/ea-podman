@@ -11,8 +11,11 @@ ROOTC=p02root
 # A pristine 1.x storage: the account's own default storage (and DB) is moved aside and restored.
 DS=$HOME_/.local/share/containers
 DSBK=$HOME_/.local/share/containers.p01-backup
-restore_storage() {
-    [ -e "$DSBK" ] || return 0
+# Refuse before any cleanup is armed: a leftover backup belongs to an earlier run, not this one.
+[ -e "$DSBK" ] && { echo "$DSBK exists; restore it first" >&2; exit 1; }
+MOVED=
+restore_storage() {    # only what this run moved aside
+    [ -n "$MOVED" ] || return 0
     as_user_env 120 XDG_RUNTIME_DIR=$RUNDIR -- /usr/bin/podman unshare rm -rf "$DS" 2>/dev/null || rm -rf "$DS"
     mv "$DSBK" "$DS"
 }
@@ -63,7 +66,10 @@ EOF
 }
 
 hdr "create a 1.x container in the account's own session (default storage, systemd manager)"
-[ -e "$DS" ] && { [ ! -e "$DSBK" ] || { echo "$DSBK exists; restore it first" >&2; exit 1; }; mv "$DS" "$DSBK"; }
+if [ -e "$DS" ]; then
+    mv "$DS" "$DSBK" || { echo "could not move $DS aside" >&2; exit 1; }
+    MOVED=1
+fi
 old_session_start || { result setup "could not start user@$UID_"; exit 1; }
 o=$(as_user_old /usr/bin/podman run -d --name "$OLD" -p 127.0.0.1:8095:80 "$IMAGE" 2>&1); rc=$?
 info "rc=$rc $(tail -1 <<<"$o")"
