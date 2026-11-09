@@ -35,14 +35,26 @@ fi
 # What it leaves, and loadtest's scratch dir, are the account's own files. It needs the kit's
 # runtime dir and config, so it runs before they go, and there is no root fallback: if it
 # fails, the failure is listed and the files stay.
+# A second --purge finds nothing left (the storage went with the first, $ETC at its end): that is
+# done, not a failure. Only storage still there without the config to reset it is a failure.
+STORAGE=$HOME_/.local/share/ea-podman/storage
+PURGED=
 if [ "$PURGE" = --purge ]; then
-    if [ -f "$ETC/containers.conf" ] && systemctl start "ea-podman-runtime@$UID_.service" 2>/dev/null; then
-        try "podman system reset (as $U)" as_user /usr/bin/podman system reset --force
+    # As the account, so a planted symlink is just the account's own path.
+    if ! as_acct init test -e "$STORAGE" -o -e "$HOME_/.eapodman-loadtest"; then
+        echo "nothing to purge: $STORAGE and $HOME_/.eapodman-loadtest are already gone"
+    elif as_acct init test -e "$STORAGE" && [ ! -f "$ETC/containers.conf" ]; then
+        failed+=("remove $STORAGE: $ETC is gone, so podman system reset can't run; run ./setup.sh $U, then ./teardown.sh $U --purge")
+    elif as_acct init test -e "$STORAGE" && ! systemctl start "ea-podman-runtime@$UID_.service"; then
+        failed+=("start ea-podman-runtime@$UID_.service for podman system reset; $STORAGE stays")
+    else
+        if as_acct init test -e "$STORAGE"; then
+            try "podman system reset (as $U)" as_user /usr/bin/podman system reset --force
+        fi
         try "remove the test storage and $HOME_/.eapodman-loadtest (as $U)" as_user \
             /bin/sh -c 'rm -rf "$1/.local/share/ea-podman/storage" "$1/.eapodman-loadtest" \
                 && { rmdir "$1/.local/share/ea-podman" 2>/dev/null; true; }' _ "$HOME_"
-    else
-        failed+=("remove the test storage: the kit's runtime is gone; run ./setup.sh $U, then ./teardown.sh $U --purge")
+        PURGED=1
     fi
 fi
 # Not there if setup.sh stopped before installing the template (e.g. on a cgroup v1 host); stopping
@@ -68,8 +80,10 @@ if [ ${#failed[@]} -gt 0 ]; then
     printf '  %s\n' "${failed[@]}" >&2
     exit 1
 fi
-if [ "$PURGE" = --purge ]; then
-    echo "removed, including $HOME_/.local/share/ea-podman/storage"
+if [ -n "$PURGED" ]; then
+    echo "removed, including $STORAGE"
+elif [ "$PURGE" = --purge ]; then
+    echo "removed"
 else
-    echo "removed; $HOME_/.local/share/ea-podman/storage kept (use --purge to delete it)"
+    echo "removed; $STORAGE kept (use --purge to delete it)"
 fi
