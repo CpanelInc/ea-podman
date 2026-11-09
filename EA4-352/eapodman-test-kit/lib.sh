@@ -6,6 +6,9 @@ RUNDIR=/run/ea-podman/user/$UID_
 # F16: root-owned, holds only the root-owned cni symlink into the runtime tmpfs (conf/runtime-mount).
 XDGDIR=/run/ea-podman/xdg/$UID_
 ETC=/etc/eapodman-test
+CG=/sys/fs/cgroup
+# F17: the cgroup mode decides what a correct layout is (split, and the per-container cgroups, are v2 only).
+CGV=1; [ "$(stat -fc %T $CG)" = cgroup2fs ] && CGV=2
 
 # T0.6: one nproc source for the unit's LimitNPROC and the create-time --ulimit pin.
 NPROC=$(systemctl show -p DefaultLimitNPROC --value)
@@ -85,6 +88,9 @@ WantedBy=multi-user.target
 UNIT
 }
 
+# The cgroup path systemd sees a PID in (v2's 0:: line, v1's name=systemd line).
+cgroup_of() { grep -E '^0::|name=systemd' "/proc/$1/cgroup" 2>/dev/null | head -1 | cut -d: -f3; }
+
 # Before signalling a PID that came from systemd or podman: it must be an integer above 1 and
 # have the expected comm (`kill 0` would hit our own process group; a stale PID may be reused).
 # Optional third argument: a cgroup path fragment the PID must be in.
@@ -102,3 +108,4 @@ check() {    # description, then a command that succeeds when the check passes
     local what=$1; shift
     if "$@"; then echo "  PASS  $what"; else echo "  FAIL  $what"; FAILS=$((FAILS + 1)); fi
 }
+skip() { echo "  SKIP  $*"; }

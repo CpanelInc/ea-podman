@@ -6,8 +6,6 @@ U=${U:-eapodtest}
 KIT=${KIT:-/root/eapodman-test-kit}
 . "$KIT/lib.sh"
 PROBE=${PROBE:-$(basename "$0" .sh)}
-CG=/sys/fs/cgroup
-CGV=1; [ "$(stat -fc %T $CG)" = cgroup2fs ] && CGV=2
 SDV=$(systemctl --version | awk 'NR==1{print $2}')
 PODV=$(podman --version | awk '{print $3}')
 OSID=$(. /etc/os-release; echo "$ID-$VERSION_ID")

@@ -1,6 +1,6 @@
 # eapodman-test-kit
 
-A hand-built version of the layout in `../PLAN.md` for one account. It sets up `eapodman.slice`, the account's `eapodman-<uid>.slice`, the anchor unit and three container units, then tests them. Run every script as root. On cgroup v1, `setup.sh` leaves `cgroups = "split"` out of the pinned config (F17), and the per-container limit checks in `verify.sh` and `loadtest.sh` fail there by design. `<cpuser>` must have subuid/subgid ranges.
+A hand-built version of the layout in `../PLAN.md` for one account. It sets up `eapodman.slice`, the account's `eapodman-<uid>.slice`, the anchor unit and three container units, then tests them. Run every script as root. On cgroup v1, `setup.sh` leaves `cgroups = "split"` out of the pinned config (F17). `verify.sh` then skips the per-container cgroup checks, says why, and checks the v1 layout instead (each container runs in its unit's cgroup); `loadtest.sh` needs the per-container cgroups and stops there. `<cpuser>` must have subuid/subgid ranges.
 
 ## Run order
 
@@ -12,7 +12,7 @@ A hand-built version of the layout in `../PLAN.md` for one account. It sets up `
 ./teardown.sh <cpuser> --purge  # remove everything, including the test storage
 ```
 
-`verify.sh` and `lifecycle.sh` exit non-zero if a check fails.
+`verify.sh` and `lifecycle.sh` exit non-zero if a check fails. `verify.sh` also fails if it finds fewer than the three container units, rather than passing with nothing checked.
 
 **Run `lifecycle.sh` last, just before teardown.** Its tests 1 and 3 kill conmon. That leaves web and worker failed until they are recreated (F15). `loadtest.sh` needs all three units running, so it can't run after `lifecycle.sh`. Until F15 is fixed, expect `lifecycle.sh` to exit 1 with those 2 checks failed. A recovery failure is marked `(known: F15, see PLAN.md)` only when the unit's journal carries F15's own failed-restart line, `container state improper`. (`Failed with result 'signal'` doesn't count: the test's own kill always produces it.) Otherwise it's marked `NEW` and the journal is printed. With both known, the last line says `2 check(s) failed, all known (F15)`. If a known check starts passing, the script says to update `PLAN.md`.
 

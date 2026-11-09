@@ -9,8 +9,6 @@ U=${1:?usage: $0 <cpuser> [image]}
 IMAGE=${2:-docker.io/nginxdemos/hello:plain-text}
 . ./lib.sh
 
-# F17: split is pinned on cgroup v2 only; on v1 it stops containers starting.
-CGV=1; [ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ] && CGV=2
 grep -q "^$U:" /etc/subuid && grep -q "^$U:" /etc/subgid || { echo "$U has no subuid/subgid" >&2; exit 1; }
 if systemctl is-active -q "user@$UID_.service"; then
     echo "WARNING: user@$UID_.service is running; stop the account's 1.x units first" >&2
@@ -47,6 +45,7 @@ case " $ID ${ID_LIKE:-} " in
     *" ubuntu "*|*" debian "*) LOG_DRIVER=journald; EVENTS='events_logger = "journald"' ;;
     *) LOG_DRIVER=k8s-file; EVENTS='events_logger = "file"\nevents_logfile_max_size = "1m"' ;;
 esac
+# F17: split is pinned on cgroup v2 only (lib.sh's CGV); on v1 it stops containers starting.
 PODMAN_MAJOR=$(podman --version | awk '{split($3, v, "."); print v[1]}')
 sed -e "s|@RUNTIME@|$RUNTIME|g" -e "s|@RUNTIME_PATH@|$RUNTIME_PATH|g" -e "s|@CONMON_PATH@|$CONMON_PATH|g" \
     -e "s|@LOG_DRIVER@|$LOG_DRIVER|" -e "s|^@EVENTS@$|$EVENTS|" conf/containers.conf \
