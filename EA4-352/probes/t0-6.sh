@@ -10,10 +10,16 @@ cd "$(dirname "$0")"; PROBE=t0-6; . ./plib.sh
 A=eapodman.slice/eapodman-$UID_.slice
 WEB=ea-podman-web.$U.01.service
 lim() { awk -v k="$2" '$0 ~ "^Max "k {print $(NF-2)"/"$(NF-1)}' "/proc/$1/limits"; }   # soft/hard
-# nproc of a PID that passes lib.sh's safe_target checks; any other is "not-measured", never blank.
-nproc_of() {    # pid, safe_target checks...
-    local pid=$1; shift
-    safe_target "$pid" "$@" 2>/dev/null && lim "$pid" processes || echo not-measured
+# nproc of a PID that passes lib.sh's safe_target checks, into NPROC_OF; one that doesn't, or
+# whose limits can't be read, is "not-measured" and makes the probe inconclusive (not a blank).
+# Runs in the probe's shell (no $(...)) so the inconclusive count survives.
+NOT_MEASURED=()
+nproc_of() {    # label, pid, safe_target checks...
+    local label=$1 pid=$2 why; shift 2
+    if why=$(safe_target "$pid" "$@" 2>&1) && NPROC_OF=$(lim "$pid" processes 2>/dev/null) && [ -n "$NPROC_OF" ]; then
+        return 0
+    fi
+    NPROC_OF=not-measured; NOT_MEASURED+=("$label (${why:-no limits for PID $pid})")
 }
 
 basic() {
@@ -44,7 +50,12 @@ hdr "nproc as 2.0 runs it (kit: unit LimitNPROC=infinity, create through the run
 m=$(systemctl show -p MainPID --value $WEB)
 c=$(as_user /usr/bin/podman inspect --format '{{.State.Pid}}' web.$U.01 2>/dev/null | tail -1)
 p=$(acct_pid "$RUNDIR/libpod/tmp/pause.pid")
-result nproc_2x "conmon=$(nproc_of "$m" --comm conmon --cgroup "/$WEB") container_init=$(nproc_of "$c" --uid "$UID_" --cgroup "/$WEB/") pause=$(nproc_of "$p" --uid "$UID_" --cgroup "/eapodman-$UID_.slice/") runner=$(as_user /bin/sh -c 'echo $(ulimit -Su)/$(ulimit -Hu)' 2>/dev/null)"
+NOT_MEASURED=()
+nproc_of conmon "$m" --comm conmon --cgroup "/$WEB"; n_conmon=$NPROC_OF
+nproc_of container_init "$c" --uid "$UID_" --cgroup "/$WEB/"; n_init=$NPROC_OF
+nproc_of pause "$p" --uid "$UID_" --cgroup "/eapodman-$UID_.slice/"; n_pause=$NPROC_OF
+[ ${#NOT_MEASURED[@]} = 0 ] || inconclusive nproc_2x_pids "not measured: ${NOT_MEASURED[*]}"
+result nproc_2x "conmon=$n_conmon container_init=$n_init pause=$n_pause runner=$(as_user /bin/sh -c 'echo $(ulimit -Su)/$(ulimit -Hu)' 2>/dev/null)"
 result container_spec_nproc "$(as_user /usr/bin/podman inspect --format '{{range .HostConfig.Ulimits}}{{if eq .Name "RLIMIT_NPROC"}}{{.Soft}}/{{.Hard}}{{end}}{{end}}' web.$U.01 2>/dev/null | tail -1)"
 
 hdr "1.x parity: the account's own user@ and logind's /run/user/<uid>"
