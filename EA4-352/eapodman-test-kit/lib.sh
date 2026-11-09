@@ -1,7 +1,11 @@
 # Shared by the kit's scripts. Source it after setting U (the cpuser); run as root.
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 UID_=$(id -u "$U") || exit 1
-GID_=$(id -g "$U"); HOME_=$(getent passwd "$U" | cut -d: -f6)
+GID_=$(id -g "$U") && [ -n "$GID_" ] || { echo "no group for $U" >&2; exit 1; }
+HOME_=$(getent passwd "$U" | cut -d: -f6)
+# Everything run as the account uses it as its working directory, and paths are built under it.
+case $HOME_ in /?*) ;; *) echo "$U has no usable home directory ('$HOME_')" >&2; exit 1 ;; esac
+[ -d "$HOME_" ] || { echo "$U's home $HOME_ is not a directory" >&2; exit 1; }
 RUNDIR=/run/ea-podman/user/$UID_
 # F16: root-owned, holds only the root-owned cni symlink into the runtime tmpfs (conf/runtime-mount).
 XDGDIR=/run/ea-podman/xdg/$UID_
