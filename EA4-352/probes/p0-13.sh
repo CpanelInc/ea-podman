@@ -11,11 +11,12 @@ cd "$(dirname "$0")"; . ./plib.sh
 C=web.$U.01
 UNITCG=eapodman.slice/eapodman-$UID_.slice/ea-podman-$C.service
 TAG=$$
+TD=$(mktemp -d /tmp/p13.XXXXXX) || exit 1
 cleanup() {
     pkill -9 -u "$U" -f "sleep 4$TAG" 2>/dev/null; sleep 1
     for d in $CG/$UNITCG/p13exec $CG/*/$UNITCG/p13exec; do [ -d "$d" ] && rmdir "$d" 2>/dev/null; done
 }
-trap cleanup EXIT
+trap 'cleanup; rm -rf "$TD"' EXIT
 
 # Where a held exec'd `sleep 4<TAG><n>` sits, from the host: "<cgroup path>" or "".
 where() { local p; p=$(pgrep -f "^sleep 4$TAG$1\$" | head -1); [ -n "$p" ] && grep -E '^0::|name=systemd' "/proc/$p/cgroup" | head -1 | cut -d: -f3; }
@@ -34,7 +35,7 @@ classify() {    # cgroup path -> words
 # Run a held exec in the background with the given launcher, then report.
 probe_exec() {    # key, n, launcher...
     local key=$1 n=$2; shift 2
-    local of=/tmp/p13-$TAG-$n.out
+    local of=$TD/$n.out
     # Through a pipe: with SELinux, PID 1 may not write a /tmp file handed over by --pipe.
     ( "$@" /usr/bin/podman exec "$C" sleep 4$TAG$n 2>&1; echo "rc=$?" ) | cat >"$of" &
     local bg=$!

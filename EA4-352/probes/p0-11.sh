@@ -20,7 +20,8 @@ runner() {    # timeout, then argv; prints systemd-run's own stderr too (no --qu
 }
 leftovers() { pgrep -u "$U" -f "sleep 3$TAG" | tr '\n' ' '; }
 cleanup() { pkill -9 -u "$U" -f "sleep 3$TAG" 2>/dev/null; pkill -9 -u "$U" -f "p011-escape-$$" 2>/dev/null; }
-trap 'cleanup; rm -f /tmp/p011-*-$$.sh' EXIT
+TD=$(mktemp -d /tmp/p011.XXXXXX) || exit 1; chmod 0755 "$TD"    # root's; the runner only reads it
+trap 'cleanup; rm -rf "$TD"' EXIT
 
 hdr "exit reporting"
 for cmd in "true" "sh -c 'exit 7'" "sleep 30"; do
@@ -50,7 +51,7 @@ t0=$(date +%s)
 acct_pids() { pgrep -u "$U" | sort; }
 before_pids=$(acct_pids)
 # A file, not sh -c: systemd-run expands $ in its command line.
-sf=/tmp/p011-reap-$$.sh; printf '%s\n' "$script" >"$sf"; chmod 0755 "$sf"
+sf=$TD/reap.sh; printf '%s\n' "$script" >"$sf"; chmod 0755 "$sf"
 out=$(runner 6 /bin/sh "$sf" 2>&1); rc=$?; rm -f "$sf"
 t=$(( $(date +%s) - t0 ))
 info "$out"
@@ -84,10 +85,10 @@ wait
 EOF
 )
 t0=$(date +%s)
-sf=/tmp/p011-esc-$$.sh; printf '%s\n' "$esc" >"$sf"; chmod 0755 "$sf"
+sf=$TD/esc.sh; printf '%s\n' "$esc" >"$sf"; chmod 0755 "$sf"
 # A pipe (SELinux stops PID 1 writing to a file passed with --pipe), read with a deadline: an
 # escaped child keeps the pipe open (v1), so a reader that waits for EOF would hang.
-rcf=/tmp/p011-esc-$$.rc
+rcf=$TD/esc.rc
 out=$( { runner 5 /bin/sh "$sf" 2>&1; echo $? >"$rcf"; } | timeout 30 cat ); rc=$(cat "$rcf"); rm -f "$sf" "$rcf"
 t=$(( $(date +%s) - t0 ))
 info "$out"

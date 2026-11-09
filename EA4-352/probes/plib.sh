@@ -47,6 +47,9 @@ user_build_ctx() {
 user_rm() { as_user_env 60 -- /bin/rm -rf "$1"; }
 # Run a shell snippet as the account, for paths it controls: user_sh '<script>' <args...> ($1...)
 user_sh() { local s=$1; shift; as_user_env 60 -- /bin/sh -c "$s" sh "$@"; }
+# Run a command as the account (no unit): for reading files it can write, so a planted symlink
+# can't make root read, say, /etc/shadow into a log. as_acct <argv...>
+as_acct() { setpriv --reuid="$UID_" --regid="$GID_" --init-groups "$@"; }
 # A fresh root-owned file at a fixed path in a sticky /tmp or /var/tmp: O_EXCL after the rm, so a
 # planted symlink makes it fail instead of being followed. new_tmp <path>
 new_tmp() { rm -f "$1" && ( set -C; : >"$1" ); }

@@ -25,7 +25,7 @@ cleanup() {
     rm -f "$ETC/containers-nosplit.conf" "$ETC/containers-split.conf"
     systemctl stop 'p04-*' 2>/dev/null; systemctl reset-failed 'p04-*' 2>/dev/null
     systemctl set-property --runtime "user-$UID_.slice" MemoryLow= 2>/dev/null
-    rm -rf /var/tmp/p04
+    [ -n "${P4:-}" ] && rm -rf "$P4"
 }
 trap cleanup EXIT
 
@@ -121,17 +121,17 @@ if [ $P = MemoryMin ]; then
     systemctl set-property --runtime "eapodman-$UID_.slice" MemoryMin=400M
 fi
 if command -v cagefsctl >/dev/null; then info "CloudLinux: page cache isn't charged to the reader's cgroup (F13); measuring anyway"; fi
-mkdir -p /var/tmp/p04; chmod 0755 /var/tmp/p04
+P4=$(mktemp -d /var/tmp/p04.XXXXXX) || exit 1; chmod 0755 "$P4"
 # Each holder's file is read once (page cache charged to the reader's cgroup), then it sleeps.
-for f in acct user none; do dd if=/dev/urandom of=/var/tmp/p04/$f bs=1M count=300 status=none; done
-chmod 0644 /var/tmp/p04/*
+for f in acct user none; do dd if=/dev/urandom of="$P4/$f" bs=1M count=300 status=none; done
+chmod 0644 "$P4"/*
 big=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 * 3 / 2 ))
-dd if=/dev/zero of=/var/tmp/p04/big bs=1M count=$big status=none
+dd if=/dev/zero of="$P4/big" bs=1M count=$big status=none
 sync; echo 1 >/proc/sys/vm/drop_caches
 systemctl set-property --runtime "user-$UID_.slice" $P=400M
-systemd-run --quiet --unit=p04-hold-acct --slice="eapodman-$UID_.slice" --uid="$UID_" -p $P=400M sh -c 'cat /var/tmp/p04/acct >/dev/null; exec sleep 600'
-systemd-run --quiet --unit=p04-hold-user --slice="user-$UID_.slice" --uid="$UID_" -p $P=400M sh -c 'cat /var/tmp/p04/user >/dev/null; exec sleep 600'
-systemd-run --quiet --unit=p04-hold-none --slice=system.slice --uid="$UID_" sh -c 'cat /var/tmp/p04/none >/dev/null; exec sleep 600'
+systemd-run --quiet --unit=p04-hold-acct --slice="eapodman-$UID_.slice" --uid="$UID_" -p $P=400M sh -c "cat $P4/acct >/dev/null; exec sleep 600"
+systemd-run --quiet --unit=p04-hold-user --slice="user-$UID_.slice" --uid="$UID_" -p $P=400M sh -c "cat $P4/user >/dev/null; exec sleep 600"
+systemd-run --quiet --unit=p04-hold-none --slice=system.slice --uid="$UID_" sh -c "cat $P4/none >/dev/null; exec sleep 600"
 sleep 8
 file_of() {    # unit -> MiB of page cache charged to its cgroup
     local cg; cg=$(systemctl show -p ControlGroup --value "$1")
@@ -142,7 +142,7 @@ declare -A b a
 for h in acct user none; do b[$h]=$(file_of p04-hold-$h); done
 info "floors ($P): eapodman.slice $(systemctl show -p $P --value eapodman.slice), eapodman-$UID_.slice $(systemctl show -p $P --value eapodman-$UID_.slice), user.slice $(systemctl show -p $P --value user.slice), user-$UID_.slice $(systemctl show -p $P --value user-$UID_.slice)"
 # Pressure: stream a file 1.5x RAM, twice, from system.slice.
-systemd-run --quiet --wait --unit=p04-pressure --slice=system.slice sh -c 'cat /var/tmp/p04/big >/dev/null; cat /var/tmp/p04/big >/dev/null'
+systemd-run --quiet --wait --unit=p04-pressure --slice=system.slice sh -c "cat $P4/big >/dev/null; cat $P4/big >/dev/null"
 for h in acct user none; do a[$h]=$(file_of p04-hold-$h); done
 for h in acct user none; do result "pagecache_${h}_MiB" "${b[$h]} -> ${a[$h]}"; done
 if [ "${b[acct]:-0}" -lt 100 ]; then result floor_verdict "n/a: page cache not charged to the reader (before=${b[acct]})"
@@ -155,7 +155,7 @@ systemctl stop p04-hold-acct p04-hold-user p04-hold-none 2>/dev/null
 rm -rf /run/systemd/system.control/eapodman.slice.d "/run/systemd/system.control/eapodman-$UID_.slice.d" \
     "/run/systemd/system.control/user-$UID_.slice.d"
 systemctl daemon-reload
-rm -rf /var/tmp/p04
+rm -rf "$P4"; P4=
 }
 
 cpu() {

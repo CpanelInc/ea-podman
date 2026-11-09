@@ -116,8 +116,8 @@ done
 
 swap() {
 hdr "--memory-swap with a real swap device (temporary 1G swap file)"
-SW=/var/tmp/t06.swap
-cleanup_swap() { swapoff $SW 2>/dev/null; rm -f $SW; for c in t06s1.$U.88 t06s2.$U.89; do probe_unit_rm $c >/dev/null 2>&1; done; }
+SW=$(mktemp /var/tmp/t06.swap.XXXXXX) || exit 1    # not a fixed name: dd would follow a planted symlink
+cleanup_swap() { swapoff "$SW" 2>/dev/null; rm -f "$SW"; for c in t06s1.$U.88 t06s2.$U.89; do probe_unit_rm $c >/dev/null 2>&1; done; }
 trap cleanup_swap EXIT
 dd if=/dev/zero of=$SW bs=1M count=1024 status=none && chmod 600 $SW && mkswap $SW >/dev/null
 command -v chcon >/dev/null && selinuxenabled 2>/dev/null && chcon -t swapfile_t $SW

@@ -8,20 +8,22 @@
 set -uo pipefail
 cd "$(dirname "$0")"; PROBE=f17; . ./plib.sh
 ARG=systemd.unified_cgroup_hierarchy
+# Kept across the reboot in a root-only dir: a fixed name in /var/tmp could be a planted symlink.
+ST=/var/lib/ea4-352/f17-orig-cgv
 case ${1:-} in
 flip)
-    echo $CGV >/var/tmp/f17-orig-cgv
+    mkdir -p -m 0700 "${ST%/*}" && echo $CGV >"$ST" || { result flipped_from "FAILS: could not write $ST"; exit 1; }
     if [ $CGV = 2 ]; then grubby --update-kernel=ALL --remove-args="$ARG=1" --args="$ARG=0"
     else grubby --update-kernel=ALL --args="$ARG=1"; fi
     result flipped_from "v$CGV"
     ;;
 restore)
-    if [ "$(cat /var/tmp/f17-orig-cgv)" = 2 ]; then grubby --update-kernel=ALL --remove-args="$ARG=0" --args="$ARG=1"
+    if [ "$(cat $ST)" = 2 ]; then grubby --update-kernel=ALL --remove-args="$ARG=0" --args="$ARG=1"
     else grubby --update-kernel=ALL --remove-args="$ARG=1 $ARG=0"; fi
-    result restored_to "v$(cat /var/tmp/f17-orig-cgv)"
+    result restored_to "v$(cat $ST)"
     ;;
 check)
-    result host "now v$CGV (created on v$(cat /var/tmp/f17-orig-cgv))"
+    result host "now v$CGV (created on v$(cat $ST))"
     sleep 15
     for n in web.$U.01 api.$U.02 worker.$U.03; do
         result "boot_${n%%.*}" "$(systemctl is-active "ea-podman-$n.service")"

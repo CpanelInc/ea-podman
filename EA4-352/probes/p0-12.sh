@@ -8,9 +8,9 @@
 set -uo pipefail
 cd "$(dirname "$0")"; . ./plib.sh
 PIN=/sys/fs/bpf/eapodman_userns_guard
-B=/var/tmp/p012-build
+B=$(mktemp -d /var/tmp/p012-build.XXXXXX) || exit 1
 detach() { rm -rf "$PIN"; }
-trap 'detach; probe_unit_rm p012.$U.86 >/dev/null 2>&1' EXIT
+trap 'detach; probe_unit_rm p012.$U.86 >/dev/null 2>&1; rm -rf "$B"' EXIT
 
 hook=$(grep -c ' bpf_lsm_userns_create$' /proc/kallsyms)
 lsm=$(cat /sys/kernel/security/lsm)
@@ -20,7 +20,7 @@ result bpf_in_lsm_list "$(grep -qw bpf <<<"${lsm//,/ }" && echo yes || echo "no 
 command -v clang >/dev/null && command -v bpftool >/dev/null || { result supported "unknown (no clang/bpftool)"; exit 0; }
 
 hdr "build and load"
-mkdir -p "$B"; cp p0-12/userns_guard.bpf.c "$B/"
+cp p0-12/userns_guard.bpf.c "$B/"
 bpftool btf dump file /sys/kernel/btf/vmlinux format c >"$B/vmlinux.h"
 cgid=$(stat -c %i "$CG/eapodman.slice")
 info "eapodman.slice cgroup id $cgid"
