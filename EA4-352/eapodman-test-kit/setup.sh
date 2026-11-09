@@ -47,14 +47,19 @@ case " $ID ${ID_LIKE:-} " in
     *) LOG_DRIVER=k8s-file; EVENTS='events_logger = "file"\nevents_logfile_max_size = "1m"' ;;
 esac
 # F17: split is pinned on cgroup v2 only (lib.sh's CGV); on v1 it stops containers starting.
-PODMAN_MAJOR=$(podman --version | awk '{split($3, v, "."); print v[1]}')
 sed -e "s|@RUNTIME@|$RUNTIME|g" -e "s|@RUNTIME_PATH@|$RUNTIME_PATH|g" -e "s|@CONMON_PATH@|$CONMON_PATH|g" \
     -e "s|@LOG_DRIVER@|$LOG_DRIVER|" -e "s|^@EVENTS@$|$EVENTS|" conf/containers.conf \
-    | { if [ "$CGV" = 2 ]; then cat; else grep -v '^cgroups = "split"$'; fi; } \
-    | { if [ "$PODMAN_MAJOR" -ge 4 ]; then cat; else grep -v '^default_mounts_file'; fi; } >$ETC/containers.conf
+    | { if [ "$CGV" = 2 ]; then cat; else grep -v '^cgroups = "split"$'; fi; } >$ETC/containers.conf
 chmod 0644 $ETC/containers.conf
 install -m 0644 conf/storage.conf conf/registries.conf $ETC/
-install -m 0644 /dev/null $ETC/mounts.conf
+# F25: the only mounts.conf any podman call uses (--default-mounts-file): a root-owned copy of the
+# one podman would take from the distro (EL and CloudLinux: /run/secrets), or empty (Ubuntu).
+if src=$(distro_mounts_conf); then
+    { echo "# rendered by eapodman-test-kit/setup.sh from $src"; cat "$src"; } >"$MOUNTS_CONF.new"
+else
+    echo "# rendered by eapodman-test-kit/setup.sh: the distro has no mounts.conf" >"$MOUNTS_CONF.new"
+fi
+chmod 0644 "$MOUNTS_CONF.new" && mv -f "$MOUNTS_CONF.new" "$MOUNTS_CONF"
 install -m 0755 conf/runtime-mount $ETC/
 
 install -m 0644 systemd/eapodman.slice systemd/ea-podman-runtime@.service /etc/systemd/system/

@@ -99,6 +99,7 @@ import json, sys
 c = json.load(open(sys.argv[1]))
 print("ENV " + " ".join(e for e in c["process"]["env"] if e.startswith("P08_")))
 print("MOUNT " + " ".join(m.get("source", "?") + "->" + m["destination"] for m in c.get("mounts", []) if m["destination"] == "/run/p08-mark"))
+print("DESTS " + " ".join(m["destination"] for m in c.get("mounts", [])))
 ' "$spec" 2>&1); rc=$?
 if [ -z "$spec" ] || [ $rc != 0 ]; then
     inconclusive user_env_and_dropins_ignored "couldn't read the container's OCI spec '$spec' (rc=$rc): $(tail -1 <<<"$o")"
@@ -112,7 +113,23 @@ else
         src=${mnt%%->*}; mark=$(as_user /usr/bin/podman unshare head -c 64 "$src" 2>&1 | tail -1)
         result user_mounts_conf_ignored "NO: $mnt (content '$mark'; the hostile file holds 'hostile')"
     fi
+    # F25, A2: the pinned file is the distro's, so its entries must still be there (EL: /run/secrets).
+    dests=" $(sed -n 's/^DESTS //p' <<<"$o") "; want=$(grep -v '^#' "$MOUNTS_CONF" | grep . | cut -d: -f2)
+    missing=; for d in $want; do [[ $dests == *" $d "* ]] || missing+=" $d"; done
+    if [ -z "$want" ]; then result distro_mounts_kept "n/a (the distro has none)"
+    else result distro_mounts_kept "$([ -z "$missing" ] && echo "yes ($(echo $want))" || echo "NO, missing:$missing")"; fi
 fi
+
+# A build's RUN steps get mounts.conf entries too: the plugin builds through the runner.
+ctx=$HOME_/.p08-build
+user_build_ctx "$ctx" '[ -e /run/p08-mark ] && echo P08-BUILD-MOUNTED || echo P08-BUILD-ABSENT'
+o=$(as_user /usr/bin/podman build --no-cache -t localhost/p08:latest "$ctx" 2>&1); rc=$?
+as_user /usr/bin/podman rmi -f localhost/p08:latest >/dev/null 2>&1; user_rm "$ctx"
+case $rc:$(grep -x 'P08-BUILD-[A-Z]*' <<<"$o" | tail -1) in
+    0:P08-BUILD-ABSENT) result user_mounts_conf_ignored_by_build yes ;;
+    0:P08-BUILD-MOUNTED) result user_mounts_conf_ignored_by_build NO ;;
+    *) inconclusive user_mounts_conf_ignored_by_build "podman build failed (rc=$rc): $(tail -1 <<<"$o")" ;;
+esac
 ld=$(as_user /usr/bin/podman inspect --format '{{.HostConfig.LogConfig.Type}}' p08.$U.60 2>/dev/null)
 result log_driver "$ld (user conf says none)"
 [ -e "$HOME_/p08-hostile-storage" ] && result hostile_graphroot_touched YES || result hostile_graphroot_touched no

@@ -65,6 +65,12 @@ check "conmon is the one pinned in $ETC/containers.conf" grep -qF "conmon_path =
 check "cgroup manager is cgroupfs" test "$mgr" = cgroupfs
 check "graphroot is the fresh ea-podman storage" test "$graph" = "$HOME_/.local/share/ea-podman/storage"
 check "runroot is in the runtime tmpfs" test "$run" = "$RUNDIR/containers"
+# F25: the pinned mounts.conf is root's, and holds the distro's entries (or none).
+pinned_mounts() { grep -v '^#' "$MOUNTS_CONF" | grep .; }
+distro_mounts() { local f; f=$(distro_mounts_conf) && grep -v '^#' "$f" | grep .; }
+check "$MOUNTS_CONF is root-owned, 0644" test "$(stat -c '%u %a' "$MOUNTS_CONF" 2>/dev/null)" = "0 644"
+check "$MOUNTS_CONF has the distro's entries ($(distro_mounts_conf || echo none))" \
+    test "$(pinned_mounts)" = "$(distro_mounts)"
 
 echo; echo "== container units (cgroup v$CGV)"
 # setup.sh creates three; an unmatched glob must not pass as "nothing wrong".
@@ -82,7 +88,8 @@ for unit in "${UNITS[@]}"; do
     main=$(systemctl show -p MainPID --value "$u")
     echo "  $u: MainPID $main ($(ps -o comm= -p "$main" 2>/dev/null)), PIDFile $pidfile"
     check "$u PIDFile is derived from the container name" test "$pidfile" = "$(conmon_pidfile "$name")"
-    check "$u ExecStart starts that container" grep -qx "ExecStart=/usr/bin/podman --cgroup-manager=cgroupfs start $name" "$unit"
+    check "$u ExecStart starts that container, with the pinned mounts.conf (F25)" \
+        grep -qx "ExecStart=${PODMAN[*]} --cgroup-manager=cgroupfs start $name" "$unit"
     check "$u MainPID is conmon" test "$(ps -o comm= -p "$main" 2>/dev/null)" = conmon
     # v2: <unit>/runtime (cgroups = "split"); v1: the unit's cgroup itself.
     in_unit() { case $(cgroup_of "$1") in "/eapodman.slice/$slice/$u"|"/eapodman.slice/$slice/$u/"*) return 0;; esac; return 1; }

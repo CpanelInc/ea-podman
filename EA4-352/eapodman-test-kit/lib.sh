@@ -14,6 +14,23 @@ CG=/sys/fs/cgroup
 # F17: the cgroup mode decides what a correct layout is (split, and the per-container cgroups, are v2 only).
 CGV=1; [ "$(stat -fc %T $CG)" = cgroup2fs ] && CGV=2
 
+# F25: podman applies the first mounts.conf that exists: the account's own
+# ~/.config/containers/mounts.conf (found through $HOME, not XDG_CONFIG_HOME), then
+# /etc/containers, then /usr/share/containers. containers.conf's default_mounts_file is never read.
+# Only podman's global --default-mounts-file decides it, for a unit's start and a build's RUN steps
+# alike (podman 3.4, 4.9 and 5.8). So every podman call with the pinned env carries it, and setup.sh
+# renders the file, root-owned, from the distro's own (1.x parity: EL's /run/secrets stays).
+MOUNTS_CONF=$ETC/mounts.conf
+PODMAN=(/usr/bin/podman "--default-mounts-file=$MOUNTS_CONF")
+# The distro's mounts.conf podman would use without the account's file, or nothing.
+distro_mounts_conf() {
+    local f
+    for f in /etc/containers/mounts.conf /usr/share/containers/mounts.conf; do
+        [ -e "$f" ] && { echo "$f"; return 0; }
+    done
+    return 1
+}
+
 # T0.6: one nproc source for the unit's LimitNPROC and the create-time --ulimit pin.
 NPROC=$(systemctl show -p DefaultLimitNPROC --value)
 
@@ -37,7 +54,8 @@ podman_env() {
 # as its first argument so that a caller that needs otherwise says so: init (the account's groups)
 # or clear (none).
 
-# The plan's run_as_user_in_slice: a transient unit in the account's slice. Options, then argv:
+# The plan's run_as_user_in_slice: a transient unit in the account's slice. With podman_env, an
+# argv starting with /usr/bin/podman gets --default-mounts-file (F25). Options, then argv:
 #   -t SECS        RuntimeMaxSec (default 600)
 #   -c CONF        containers.conf for this call only (default: the pinned one)
 #   -E             no podman_env: only the -e assignments (if any)
@@ -59,6 +77,7 @@ acct_unit() {
     if [ -n "$pinned" ]; then local PODMAN_ENV; podman_env "$conf"; envs=("${PODMAN_ENV[@]}")
     elif [ -n "$conf" ]; then echo "acct_unit: -c needs podman_env (no -E)" >&2; return 2; fi
     envs+=("${extra[@]}")
+    [ -n "$pinned" ] && [ "${1:-}" = /usr/bin/podman ] && set -- "${PODMAN[@]}" "${@:2}"
     seq=$((seq + 1))
     systemd-run $quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
         --unit="eapodman-run-$UID_-$name-$$-$seq" --pipe --wait --collect \
@@ -149,12 +168,12 @@ CPUWeight=$cpuweight
 LimitNPROC=$NPROC
 ${env_lines}Environment=PODMAN_SYSTEMD_UNIT=%n
 PIDFile=$pidfile
-ExecStart=/usr/bin/podman --cgroup-manager=cgroupfs start $name
-ExecStop=/usr/bin/podman --cgroup-manager=cgroupfs stop -t 10 $name
+ExecStart=${PODMAN[*]} --cgroup-manager=cgroupfs start $name
+ExecStop=${PODMAN[*]} --cgroup-manager=cgroupfs stop -t 10 $name
 # As in 1.x's generated units. It does not recover a container whose conmon was SIGKILLed:
 # podman 4.4 leaves it "running" (without this) or "stopping" (with it), every restart's
 # \`podman start\` fails, and only \`podman rm -f\` + recreate gets it back (./lifecycle.sh 1 and 3).
-ExecStopPost=/usr/bin/podman --cgroup-manager=cgroupfs stop -t 10 $name
+ExecStopPost=${PODMAN[*]} --cgroup-manager=cgroupfs stop -t 10 $name
 Restart=on-failure
 RestartSec=5
 ${success_exit}TimeoutStartSec=90

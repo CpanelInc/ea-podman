@@ -1,5 +1,5 @@
 host ea4-352-u22 os=ubuntu-22.04 kernel=5.15.0-203-generic cgroup=v2 systemd=249 podman=3.4.4
-probe p0-8.sh=15419e83e542 plib.sh=fd17d062fc15 lib.sh=a7f0c6e05931
+probe p0-8.sh=cec124fd7c5d plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
 
 ### podman info under podman_env, with a hostile ~/.config/containers
   cgroupfs|overlay|/home/eapodtest/.local/share/ea-podman/storage|journald|Error: template: info:1:101: executing "info" at <.Host.NetworkBackend>: can't evaluate field NetworkBackend in type *define.HostInfo
@@ -9,13 +9,15 @@ RESULT p0-8.network_backend Error: template: info:1:101: executing "info" at <.H
 RESULT p0-8.pinned_conf_warnings none
 
 ### create + start a container (policy.json, registries.conf, mounts.conf, drop-ins, env)
-  create rc=0: bed37a7d104a6e2dda6b5e0b6ebec911125969fef6959d059714507b3be18611
+  create rc=0: 84c66d44519d9c4adc7ab8055c8e05e9c3cdaa25e55bf42690b60b4f9263ecc1
 RESULT p0-8.user_policy_json_ignored yes
-RESULT p0-8.start_from_plain_runner FAILS: Error: unable to start container "bed37a7d104a6e2dda6b5e0b6ebec911125969fef6959d059714507b3be18611": mkdir /sys/fs/cgroup/eapodman.slice/eapodman-1000.slice/eapodman-run-1000-test-20592-2.service/supervisor: permission denied
+RESULT p0-8.start_from_plain_runner FAILS: Error: unable to start container "84c66d44519d9c4adc7ab8055c8e05e9c3cdaa25e55bf42690b60b4f9263ecc1": mkdir /sys/fs/cgroup/eapodman.slice/eapodman-1000.slice/eapodman-run-1000-test-25817-2.service/supervisor: permission denied
   start rc=0: 
 RESULT p0-8.start_with_pinned_xdg_config_home works
 RESULT p0-8.user_env_and_dropins_ignored yes
-RESULT p0-8.user_mounts_conf_ignored NO: /run/ea-podman/user/1000/containers/overlay-containers/bed37a7d104a6e2dda6b5e0b6ebec911125969fef6959d059714507b3be18611/userdata/run/p08-mark->/run/p08-mark (content 'hostile'; the hostile file holds 'hostile')
+RESULT p0-8.user_mounts_conf_ignored yes
+RESULT p0-8.distro_mounts_kept n/a (the distro has none)
+RESULT p0-8.user_mounts_conf_ignored_by_build yes
 RESULT p0-8.log_driver journald (user conf says none)
 RESULT p0-8.hostile_graphroot_touched no
 
