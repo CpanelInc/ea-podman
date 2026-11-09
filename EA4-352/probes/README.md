@@ -29,7 +29,7 @@ git log --format=%h -- EA4-352/probes/p0-4.sh | while read -r c; do
     echo "$c $(git show "$c:EA4-352/probes/p0-4.sh" | sha256sum | cut -c1-12)"; done
 ```
 
-A result the probe couldn't measure (a command failed, a file couldn't be read, a PID didn't pass `safe_target`) is printed as `RESULT <probe>.<key> INCONCLUSIVE: <why>`, never as a verdict, and the probe then exits 1.
+A result the probe couldn't measure (a command failed, a file couldn't be read, a PID didn't pass `safe_target`) is printed as `RESULT <probe>.<key> INCONCLUSIVE: <why>`, never as a verdict, and the probe then exits 1. A probe that couldn't put back what it changed (a slice property, the account's own `~/.config/containers` in `p0-8.sh`) says so and exits 1 too.
 
 Logs from before 2026-11-09 have no second line and come from earlier revisions of the scripts; some don't match the scripts at HEAD (for example `results/ea4-352-el9/p0-4-cpu.log` names a variable `p0-4.sh` no longer has).
 

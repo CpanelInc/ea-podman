@@ -14,10 +14,17 @@ if [ -e "$UC" ] || [ -L "$UC" ]; then
 fi
 ST=
 cleanup() {    # UC is always this run's hostile config; BK, if any, is what this run moved aside
-    user_sh 'rm -rf "$1"; if [ -e "$2" ] || [ -L "$2" ]; then mv "$2" "$1"; fi' "$UC" "$BK"
+    local restored=yes
+    user_sh 'rm -rf "$1"; if [ -e "$2" ] || [ -L "$2" ]; then mv "$2" "$1"; fi' "$UC" "$BK" || restored=no
+    # The account's real config must not be left only in the backup.
+    as_acct init test -e "$BK" -o -L "$BK" && restored=no
     [ -n "$ST" ] && rm -rf "$ST"
     probe_unit_rm p08.$U.60
     rm -f /tmp/p08-host-mark
+    if [ $restored = no ]; then
+        echo "$PROBE: $U's own ~/.config/containers was NOT restored; it is still at $BK" >&2
+        exit 1
+    fi
 }
 trap cleanup EXIT
 
