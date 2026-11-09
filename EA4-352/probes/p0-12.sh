@@ -12,8 +12,12 @@ B=$(mktemp -d /var/tmp/p012-build.XXXXXX) || exit 1
 detach() { rm -rf "$PIN"; }
 trap 'detach; probe_unit_rm p012.$U.86 >/dev/null 2>&1; rm -rf "$B"' EXIT
 
-hook=$(grep -c ' bpf_lsm_userns_create$' /proc/kallsyms)
-lsm=$(cat /sys/kernel/security/lsm)
+# "Not supported" is a verdict only when both were read: grep -c exits 1 for no match, 2 when it
+# couldn't read kallsyms; the LSM list is never empty on a kernel that has securityfs mounted.
+hook=$(grep -c ' bpf_lsm_userns_create$' /proc/kallsyms); rc=$?
+[ $rc -le 1 ] && [ -n "$hook" ] || { inconclusive userns_create_hook "couldn't read /proc/kallsyms (grep rc=$rc)"; probe_exit; }
+lsm=$(cat /sys/kernel/security/lsm 2>&1) && [ -n "$lsm" ] \
+    || { inconclusive bpf_in_lsm_list "couldn't read /sys/kernel/security/lsm: ${lsm:-empty}"; probe_exit; }
 result userns_create_hook "$([ "$hook" -gt 0 ] && echo yes || echo no)"
 result bpf_in_lsm_list "$(grep -qw bpf <<<"${lsm//,/ }" && echo yes || echo "no ($lsm)")"
 [ "$hook" -gt 0 ] && grep -qw bpf <<<"${lsm//,/ }" || { result supported no; exit 0; }
@@ -74,3 +78,4 @@ o=$(systemd-run --quiet --wait --pipe --collect --uid="$UID_" --slice="user-$UID
 o=$(unshare -U true 2>&1); result root_unshare "$(ok $? "$o")"
 info "counters: $(counters)"
 rm -rf /tmp/p012-store-"$UID_" /tmp/p012-"$UID_" 2>/dev/null
+probe_exit
