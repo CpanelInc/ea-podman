@@ -29,6 +29,8 @@ git log --format=%h -- EA4-352/probes/p0-4.sh | while read -r c; do
     echo "$c $(git show "$c:EA4-352/probes/p0-4.sh" | sha256sum | cut -c1-12)"; done
 ```
 
+A result the probe couldn't measure (a command failed, a file couldn't be read, a PID didn't pass `safe_target`) is printed as `RESULT <probe>.<key> INCONCLUSIVE: <why>`, never as a verdict, and the probe then exits 1.
+
 Logs from before 2026-11-09 have no second line and come from earlier revisions of the scripts; some don't match the scripts at HEAD (for example `results/ea4-352-el9/p0-4-cpu.log` names a variable `p0-4.sh` no longer has).
 
 These change the host: `p0-6.sh` writes `/etc/pam.d/ea-podman`, `f17-switch.sh` edits the kernel command line, `t0-6.sh units` and `t0-6.sh swap` add and then remove dummy units and a swap file, `t0-8.sh` adds and then removes test containers, units and timers, and `p0-1-2.sh`, `p0-13.sh` and `f15-1x.sh` start the account's `user@` (on CloudLinux through a `/run/systemd/system` copy). Run them only on test VMs.

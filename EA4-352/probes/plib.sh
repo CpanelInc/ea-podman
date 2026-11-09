@@ -12,6 +12,17 @@ OSID=$(. /etc/os-release; echo "$ID-$VERSION_ID")
 [ -e /etc/cloudlinux-release ] && OSID="cloudlinux-$(sed 's/[^0-9.]//g' /etc/cloudlinux-release)"
 
 result() { printf 'RESULT %s.%s %s\n' "$PROBE" "$1" "${*:2}"; }
+# A check that couldn't be made (a command failed, a file couldn't be read, a PID didn't check
+# out) is never turned into a verdict: inconclusive <key> <why> prints
+#   RESULT <probe>.<key> INCONCLUSIVE: <why>
+# and probe_exit, every probe's last line, then exits 1. Call it in the probe's own shell, not
+# inside $(...), or the count is lost.
+INCONCLUSIVE=0
+inconclusive() { result "$1" "INCONCLUSIVE: ${*:2}"; INCONCLUSIVE=$((INCONCLUSIVE + 1)); }
+probe_exit() {
+    [ "$INCONCLUSIVE" = 0 ] || { echo "$PROBE: $INCONCLUSIVE result(s) INCONCLUSIVE; see above" >&2; exit 1; }
+    exit 0
+}
 hdr()    { printf '\n### %s\n' "$*"; }
 info()   { printf '  %s\n' "$*"; }
 

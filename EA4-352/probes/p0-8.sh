@@ -65,6 +65,8 @@ grep -q 'Failed to decode the keys' <<<"$out" && result pinned_conf_warnings "$(
     || result pinned_conf_warnings none
 
 hdr "create + start a container (policy.json, registries.conf, mounts.conf, drop-ins, env)"
+# Missing, it would list as empty both times and pass as "unchanged".
+[ -d "$XDGDIR" ] || { inconclusive xdg_config_home_unchanged "$XDGDIR doesn't exist"; probe_exit; }
 before=$(cd "$XDGDIR" && find . -mindepth 1 -printf '%y %p -> %l\n' | sort)
 cr=$(probe_create p08.$U.60 -p 127.0.0.1:8090:80 "$IMAGE" 2>&1); rc=$?
 info "create rc=$rc: $(tail -1 <<<"$cr")"
@@ -74,10 +76,29 @@ result start_from_plain_runner "$([ $src = 0 ] && echo works || echo "FAILS: $(t
 st=$(probe_unit_start p08.$U.60 2>&1); src=$?
 info "start rc=$src: $(tail -1 <<<"$st")"
 result start_with_pinned_xdg_config_home "$([ $src = 0 ] && echo works || echo "FAILS: $(tail -1 <<<"$st")")"
-envs=$(as_user /usr/bin/podman exec p08.$U.60 env 2>&1 | grep '^P08_' | tr '\n' ' ')
-result user_env_and_dropins_ignored "$([ -z "$envs" ] && echo yes || echo "NO: $envs")"
-mnt=$(as_user /usr/bin/podman exec p08.$U.60 cat /run/p08-mark 2>/dev/null)
-result user_mounts_conf_ignored "$([ -z "$mnt" ] && echo yes || echo NO)"
+# From the OCI spec the runtime started the container with, not from `podman exec`: exec from
+# the runner fails on v2 (F14), and a failed exec prints no P08_ variable and no mark either.
+# The spec is in the account's storage, so the account reads it.
+spec=$(as_user /usr/bin/podman inspect --format '{{.OCIConfigPath}}' p08.$U.60 2>/dev/null | tail -1)
+o=$(as_acct init python3 -I -c '
+import json, sys
+c = json.load(open(sys.argv[1]))
+print("ENV " + " ".join(e for e in c["process"]["env"] if e.startswith("P08_")))
+print("MOUNT " + " ".join(m.get("source", "?") + "->" + m["destination"] for m in c.get("mounts", []) if m["destination"] == "/run/p08-mark"))
+' "$spec" 2>&1); rc=$?
+if [ -z "$spec" ] || [ $rc != 0 ]; then
+    inconclusive user_env_and_dropins_ignored "couldn't read the container's OCI spec '$spec' (rc=$rc): $(tail -1 <<<"$o")"
+    inconclusive user_mounts_conf_ignored "couldn't read the container's OCI spec '$spec'"
+else
+    envs=$(sed -n 's/^ENV //p' <<<"$o"); mnt=$(sed -n 's/^MOUNT //p' <<<"$o")
+    result user_env_and_dropins_ignored "$([ -z "$envs" ] && echo yes || echo "NO: $envs")"
+    if [ -z "$mnt" ]; then result user_mounts_conf_ignored yes
+    else
+        # podman copies a mounts.conf source into the container's userdata; the marker says whose it was.
+        src=${mnt%%->*}; mark=$(as_user /usr/bin/podman unshare head -c 64 "$src" 2>&1 | tail -1)
+        result user_mounts_conf_ignored "NO: $mnt (content '$mark'; the hostile file holds 'hostile')"
+    fi
+fi
 ld=$(as_user /usr/bin/podman inspect --format '{{.HostConfig.LogConfig.Type}}' p08.$U.60 2>/dev/null)
 result log_driver "$ld (user conf says none)"
 [ -e "$HOME_/p08-hostile-storage" ] && result hostile_graphroot_touched YES || result hostile_graphroot_touched no
@@ -97,3 +118,4 @@ if command -v strace >/dev/null; then
 else
     result opens_under_home_config "not checked (no strace)"
 fi
+probe_exit
