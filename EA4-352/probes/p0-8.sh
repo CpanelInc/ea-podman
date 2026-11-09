@@ -6,8 +6,12 @@ set -uo pipefail
 cd "$(dirname "$0")"; . ./plib.sh
 UC=$HOME_/.config/containers
 BK=$HOME_/.config/containers.p08-backup
-[ -e "$UC" ] && mv "$UC" "$BK"
-cleanup() {
+# Refuse before any cleanup is armed: a leftover backup belongs to an earlier run, not this one.
+[ -e "$BK" ] && { echo "$BK exists; restore it first" >&2; exit 1; }
+if [ -e "$UC" ]; then
+    mv "$UC" "$BK" || { echo "could not move $UC aside" >&2; exit 1; }
+fi
+cleanup() {    # UC is always this run's hostile config; BK, if any, is what this run moved aside
     rm -rf "$UC"; [ -e "$BK" ] && mv "$BK" "$UC"
     probe_unit_rm p08.$U.60
     rm -f /tmp/p08-host-mark
