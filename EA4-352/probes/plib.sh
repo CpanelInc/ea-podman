@@ -15,26 +15,17 @@ result() { printf 'RESULT %s.%s %s\n' "$PROBE" "$1" "${*:2}"; }
 hdr()    { printf '\n### %s\n' "$*"; }
 info()   { printf '  %s\n' "$*"; }
 
-# Like lib.sh's as_user, but with the caller's own environment instead of podman_env, and an
-# optional RuntimeMaxSec: as_user_env <timeout> <env-assignments...> -- <argv...>
+# The runners are lib.sh's acct_unit; these only name the probes' common shapes.
+# With the caller's own environment instead of podman_env, and a RuntimeMaxSec: as_user_env <timeout> <env-assignments...> -- <argv...>
 as_user_env() {
-    local tmo=$1; shift
-    local envs=()
-    while [ "$1" != -- ]; do envs+=(--setenv="$1"); shift; done; shift
-    seq=$((seq + 1))
-    systemd-run --quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
-        --unit="eapodman-run-$UID_-probe-$$-$seq" --pipe --wait --collect \
-        -p RuntimeMaxSec="$tmo" -p WorkingDirectory="$HOME_" "${envs[@]}" "$@" </dev/null
+    local tmo=$1 envs=(); shift
+    while [ "$1" != -- ]; do envs+=(-e "$1"); shift; done; shift
+    acct_unit -n probe -t "$tmo" -E "${envs[@]}" -- "$@"
 }
 
-# Like lib.sh's as_user, but the transient gets Delegate=yes. With split pinned (v2), podman
-# start/run creates sub-cgroups of the caller's cgroup, which a plain runner unit doesn't allow.
-as_user_deleg() {
-    seq=$((seq + 1))
-    systemd-run --quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
-        --unit="eapodman-run-$UID_-probe-$$-$seq" --pipe --wait --collect -p Delegate=yes \
-        -p RuntimeMaxSec=600 -p WorkingDirectory="$HOME_" "${ENVS[@]}" "$@" </dev/null
-}
+# With Delegate=yes. With split pinned (v2), podman start/run creates sub-cgroups of the caller's
+# cgroup, which a plain runner unit doesn't allow.
+as_user_deleg() { acct_unit -n probe -p Delegate=yes -- "$@"; }
 
 # A build context in the account's home, written by the account itself: root writing (or chowning)
 # a path the account controls would follow a planted symlink. user_build_ctx <dir> <RUN command>
@@ -45,9 +36,8 @@ user_build_ctx() {
 user_rm() { as_user_env 60 -- /bin/rm -rf "$1"; }
 # Run a shell snippet as the account, for paths it controls: user_sh '<script>' <args...> ($1...)
 user_sh() { local s=$1; shift; as_user_env 60 -- /bin/sh -c "$s" sh "$@"; }
-# Run a command as the account (no unit): for reading files it can write, so a planted symlink
-# can't make root read, say, /etc/shadow into a log. as_acct <argv...>
-as_acct() { setpriv --reuid="$UID_" --regid="$GID_" --init-groups "$@"; }
+# For reading files the account can write, so a planted symlink can't make root read, say,
+# /etc/shadow into a log: lib.sh's as_acct init <argv...> (no unit).
 # A fresh root-owned file at a fixed path in a sticky /tmp or /var/tmp: O_EXCL after the rm, so a
 # planted symlink makes it fail instead of being followed. new_tmp <path>
 new_tmp() { rm -f "$1" && ( set -C; : >"$1" ); }

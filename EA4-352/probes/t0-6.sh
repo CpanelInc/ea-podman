@@ -72,14 +72,14 @@ if [ $CGV = 2 ]; then target=$(ls -d "$CG/$A/$WEB"/libpod-payload-* | head -1); 
 else target="$CG/pids/$A/$WEB"; cur=$(cat "$CG/pids/$A/pids.current"); fi
 old=$(systemctl show -p TasksMax --value "eapodman-$UID_.slice")
 systemctl set-property --runtime "eapodman-$UID_.slice" TasksMax=$((cur + 100))
-got=$(sh -c 'echo $$ >"$1/cgroup.procs" && exec setpriv --reuid="$2" --regid="$3" --clear-groups python3 -c "
+got=$(as_acct_in_cgroup "$target" init python3 -c '
 import os, signal, time
 kids = []
 try:
     for i in range(400):
         pid = os.fork()
         if pid == 0:
-            os.execv(\"/bin/sleep\", [\"sleep\", \"600\"])
+            os.execv("/bin/sleep", ["sleep", "600"])
         kids.append(pid)
 except OSError as e:
     pass
@@ -88,7 +88,7 @@ for k in kids:
     os.kill(k, signal.SIGKILL)
 for k in kids:
     os.waitpid(k, 0)
-"' _ "$target" "$UID_" "$GID_" 2>&1 | tail -1)
+' 2>&1 | tail -1)
 rm -rf "/run/systemd/system.control/eapodman-$UID_.slice.d"; systemctl daemon-reload   # drop the runtime override
 result fork_storm "slice had $cur tasks, TasksMax set to $((cur + 100)); forks that succeeded: $got of 400"
 }
@@ -128,7 +128,7 @@ for spec in "t06s1.$U.88|256m|256m" "t06s2.$U.89|256m|768m"; do
     probe_create "$c" --memory=$mem --memory-swap=$sw "$IMAGE" >/dev/null 2>&1 && probe_unit_start "$c" >/dev/null 2>&1
     pl=$(ls -d "$CG/$A/ea-podman-$c.service"/libpod-payload-* 2>/dev/null | head -1)
     [ -n "$pl" ] || { result "$c" "no payload cgroup"; continue; }
-    sh -c 'echo $$ >"$1/cgroup.procs" && exec setpriv --reuid="$2" --regid="$3" --clear-groups python3 -c "b=bytearray(400*1024*1024); import time; time.sleep(1)"' _ "$pl" "$UID_" "$GID_" >/dev/null 2>&1; rc=$?
+    as_acct_in_cgroup "$pl" init python3 -c 'b=bytearray(400*1024*1024); import time; time.sleep(1)' >/dev/null 2>&1; rc=$?
     result "memory_${mem}_swap_${sw}" "swap.max=$(cat $pl/memory.swap.max) alloc400M rc=$rc swap.peak=$(cat $pl/memory.swap.peak 2>/dev/null || echo n/a) oom_kill=$(awk '/oom_kill /{print $2}' $pl/memory.events)"
     probe_unit_rm "$c" >/dev/null 2>&1
 done

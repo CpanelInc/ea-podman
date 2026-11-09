@@ -57,10 +57,11 @@ place() {    # pid, container, leaf, [scope unit the PID must be in]
 # The account's own process on a pty (40x120), in a scope under user-<uid>.slice like an SSH
 # login: it writes its PID, waits for root's go, then execs <cmd>. acct_session <n> <cmd>
 acct_session() {
-    local n=$1 cmd=$2
+    local n=$1 cmd=$2 ACCT_ARGV
     rm -f "$D/pid$n" "$D/go$n"
+    acct_argv init
     systemd-run --quiet --scope --slice="user-$UID_.slice" --unit="t08-acct-$TAG-$n" -- \
-        setpriv --reuid="$UID_" --regid="$GID_" --init-groups \
+        "${ACCT_ARGV[@]}" \
         env -i PATH=/usr/bin:/bin HOME="$HOME_" python3 -I "$R/t08pty.py" "$D/out$n" \
         "cd $HOME_; echo \$\$ >$D/pid$n; while [ ! -e $D/go$n ]; do sleep 0.2; done; exec $cmd" </dev/null >/dev/null 2>&1 &
     local i; for i in $(seq 50); do [ -s "$D/pid$n" ] && break; sleep 0.2; done
@@ -70,7 +71,7 @@ exec_cmd() {    # container, n: the `ea-podman bash` exec, holding a `sleep 4<TA
     echo "env -i PATH=/usr/bin:/bin HOME=$HOME_ $(envs)/usr/bin/podman exec -it $1 sh -c 'tty; stty size; exec sleep 4$TAG$2'"
 }
 # D is the account's dir: root reads and writes in it only as the account, so planted symlinks are harmless.
-acct() { setpriv --reuid="$UID_" --regid="$GID_" --init-groups "$@"; }
+acct() { as_acct init "$@"; }
 go() { acct touch "$D/go$1"; }
 held() { pgrep -f "^sleep 4$TAG$1\$" | head -1; }
 out() { acct cat "$D/out$1" 2>/dev/null | tr -d '\r' | grep -v '^$' | grep -v 'level=warning' | tail -4 | paste -sd'|' -; }
@@ -159,9 +160,10 @@ bash_mode() {
 }
 
 hc_helper() {    # the timer service's ExecStart, as root
-    local c=$1 r
+    local c=$1 r ACCT_ARGV
     r=$(place $$ "$c" ea-podman-health) || { echo "t0-8 hc-helper: $r" >&2; exit 125; }
-    cd "$HOME_" && exec setpriv --reuid="$UID_" --regid="$GID_" --init-groups \
+    acct_argv init
+    cd "$HOME_" && exec "${ACCT_ARGV[@]}" \
         env -i PATH=/usr/bin:/bin HOME="$HOME_" "${PINNED[@]}" DISABLE_HC_SYSTEMD=true /usr/bin/podman healthcheck run "$c"
 }
 
@@ -259,13 +261,14 @@ EOF
 }
 
 ptrace_mode() {
-    local W=web.$U.01 m c t pid o rc
+    local W=web.$U.01 m c t pid o rc ACCT_ARGV
+    acct_argv init
     result ptrace_scope "$(sysctl -n kernel.yama.ptrace_scope 2>/dev/null || echo 'no Yama')"
     m=$(systemctl show -p MainPID --value "ea-podman-$W.service")
     c=$(as_user /usr/bin/podman inspect --format '{{.State.Pid}}' $W 2>/dev/null | tail -1)
     for t in "conmon:$m" "container_init:$c"; do
         pid=${t#*:}
-        o=$(systemd-run --quiet --scope --slice="user-$UID_.slice" -- setpriv --reuid="$UID_" --regid="$GID_" --init-groups \
+        o=$(systemd-run --quiet --scope --slice="user-$UID_.slice" -- "${ACCT_ARGV[@]}" \
             timeout 3 strace -p "$pid" -e trace=none -o /dev/null 2>&1); rc=$?
         result "attach_${t%%:*}" "$([ $rc = 124 ] && echo "attached (pid $pid)" || echo "denied rc=$rc: $(tail -1 <<<"$o")")"
     done

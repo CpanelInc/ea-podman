@@ -33,7 +33,7 @@ EOF
 post)
     result booted_after_pre "$([ "$(cut -d. -f1 /proc/uptime)" -lt $(( $(date +%s) - $(cat /var/tmp/p0-10-reboot-at) )) ] && echo yes || echo NO)"
     sleep 20   # let enabled units settle
-    result canary_ran "$([ -e "$MARK" ] && echo "YES: $(as_acct cat "$MARK")" || echo no)"
+    result canary_ran "$([ -e "$MARK" ] && echo "YES: $(as_acct init cat "$MARK")" || echo no)"
     result user_manager "$(systemctl is-active "user@$UID_.service")"
     result user_manager_units "$(systemctl list-units --all --no-legend 'user@*' | wc -l)"
     result runtime_carveouts "$(ls /run/systemd/system/user@* 2>/dev/null | wc -l)"

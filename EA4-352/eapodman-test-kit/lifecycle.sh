@@ -126,7 +126,7 @@ fi
 # it only as the account, and only digits come back; nothing else from it is ever printed.
 acct_pid() {    # file
     local v
-    v=$(cd / && setpriv --reuid="$UID_" --regid="$GID_" --clear-groups head -c 32 -- "$1" 2>/dev/null </dev/null | tr -d '\n')
+    v=$(as_acct init head -c 32 -- "$1" 2>/dev/null | tr -d '\n')
     case $v in ''|*[!0-9]*) return 1;; esac
     echo "$v"
 }

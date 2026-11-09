@@ -61,9 +61,8 @@ in_unit_subtree() {    # argv... as the account from <unit>/p13exec, placed ther
             d=$CG/$h/$UNITCG/p13exec; mkdir -p "$d"; echo $BASHPID >"$d/cgroup.procs"
         done
     fi
-    cd "$HOME_" && exec setpriv --reuid="$UID_" --regid="$GID_" --init-groups env -i PATH=/usr/bin:/bin HOME="$HOME_" \
-        XDG_RUNTIME_DIR="$RUNDIR" CONTAINERS_CONF="$ETC/containers.conf" CONTAINERS_STORAGE_CONF="$ETC/storage.conf" \
-        CONTAINERS_REGISTRIES_CONF="$ETC/registries.conf" XDG_CONFIG_HOME="$XDGDIR" "$@"
+    local ACCT_ARGV; acct_argv init
+    cd "$HOME_" && exec "${ACCT_ARGV[@]}" env -i PATH=/usr/bin:/bin HOME="$HOME_" "${PINNED[@]}" "$@"
 }
 runtime=$(sed -n 's/^runtime = "\(.*\)"/\1/p' "$ETC/containers.conf")
 result oci_runtime "$runtime $($runtime --version 2>/dev/null | head -1 | awk '{print $NF}')"

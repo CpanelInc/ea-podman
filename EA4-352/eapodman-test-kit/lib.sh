@@ -13,6 +13,7 @@ CGV=1; [ "$(stat -fc %T $CG)" = cgroup2fs ] && CGV=2
 # T0.6: one nproc source for the unit's LimitNPROC and the create-time --ulimit pin.
 NPROC=$(systemctl show -p DefaultLimitNPROC --value)
 
+# ---------------------------------------------------------------- running as the account
 # The plan's podman_env($uid): sets PODMAN_ENV to the pinned assignments. The only variation a
 # caller can ask for is a different containers.conf; the units carry the same values.
 # podman_env [containers.conf]
@@ -25,19 +26,72 @@ podman_env() {
         XDG_CONFIG_HOME=$XDGDIR
     )
 }
-# systemd-run's form of the pinned env. Read-only: a caller that wants another containers.conf
-# asks as_user -c for that one call, instead of changing what every later call gets.
-podman_env; ENVS=("${PODMAN_ENV[@]/#/--setenv=}"); readonly ENVS
 
-# The plan's run_as_user_in_slice, by hand: as_user [-c containers.conf] <argv...>
+# Every "run this as the account" goes through acct_unit (a transient unit) or as_acct (no unit).
+# Both give the account its own supplementary groups (NSS), as the product's units get them from
+# User=: a probe measures what the account can do, never more or less. as_acct takes the groups
+# as its first argument so that a caller that needs otherwise says so: init (the account's groups)
+# or clear (none).
+
+# The plan's run_as_user_in_slice: a transient unit in the account's slice. Options, then argv:
+#   -t SECS        RuntimeMaxSec (default 600)
+#   -c CONF        containers.conf for this call only (default: the pinned one)
+#   -E             no podman_env: only the -e assignments (if any)
+#   -e K=V         an environment assignment (added to podman_env, or with -E the only ones)
+#   -p PROP=VAL    an extra unit property (e.g. -p Delegate=yes)
+#   -n NAME        the unit name's middle part (default "test"; probes pass "probe")
+#   -v             keep systemd-run's own messages (no --quiet)
 seq=0
-as_user() {
-    local envs=("${ENVS[@]}") PODMAN_ENV
-    if [ "${1:-}" = -c ]; then podman_env "$2"; envs=("${PODMAN_ENV[@]/#/--setenv=}"); shift 2; fi
+acct_unit() {
+    local tmo=600 conf= name=test quiet=--quiet pinned=1 extra=() envs=() props=() OPTIND=1 opt
+    while getopts t:c:Ee:p:n:v opt; do
+        case $opt in
+        t) tmo=$OPTARG ;; c) conf=$OPTARG ;; E) pinned= ;; e) extra+=("$OPTARG") ;;
+        p) props+=(-p "$OPTARG") ;; n) name=$OPTARG ;; v) quiet= ;;
+        *) echo "acct_unit: bad option" >&2; return 2 ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    if [ -n "$pinned" ]; then local PODMAN_ENV; podman_env "$conf"; envs=("${PODMAN_ENV[@]}")
+    elif [ -n "$conf" ]; then echo "acct_unit: -c needs podman_env (no -E)" >&2; return 2; fi
+    envs+=("${extra[@]}")
     seq=$((seq + 1))
-    systemd-run --quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
-        --unit="eapodman-run-$UID_-test-$$-$seq" --pipe --wait --collect \
-        -p RuntimeMaxSec=600 -p WorkingDirectory="$HOME_" "${envs[@]}" "$@" </dev/null
+    systemd-run $quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
+        --unit="eapodman-run-$UID_-$name-$$-$seq" --pipe --wait --collect \
+        -p RuntimeMaxSec="$tmo" -p WorkingDirectory="$HOME_" "${props[@]}" \
+        "${envs[@]/#/--setenv=}" "$@" </dev/null
+}
+# The common case, with podman_env: as_user [-c containers.conf] <argv...>
+as_user() {
+    if [ "${1:-}" = -c ]; then acct_unit -c "$2" -- "${@:3}"; else acct_unit -- "$@"; fi
+}
+
+# setpriv's prefix for the account: acct_argv <init|clear> sets ACCT_ARGV.
+acct_argv() {
+    case ${1:-} in
+    init)  ACCT_ARGV=(setpriv --reuid="$UID_" --regid="$GID_" --init-groups) ;;
+    clear) ACCT_ARGV=(setpriv --reuid="$UID_" --regid="$GID_" --clear-groups) ;;
+    *) echo "groups must be init or clear, not '${1:-}'" >&2; return 2 ;;
+    esac
+}
+# A command as the account, without a unit: for root's reads and writes in paths the account
+# controls, where a planted symlink must not be followed with root's rights. From /, stdin closed.
+# as_acct <init|clear> <argv...>
+as_acct() {
+    local ACCT_ARGV; acct_argv "$1" || return; shift
+    (cd / && exec "${ACCT_ARGV[@]}" "$@" </dev/null)
+}
+# Root moves itself into cgroup <dir>, then becomes the account and execs argv (the load tests'
+# way into a container's cgroup). as_acct_in_cgroup <dir> <init|clear> <argv...>
+# acct_cgroup_argv sets ACCT_ARGV to the same prefix, for a caller that backgrounds it and needs
+# $! to be the command itself (sh execs into it).
+acct_cgroup_argv() {    # dir, init|clear
+    acct_argv "$2" || return
+    ACCT_ARGV=(sh -c 'echo $$ >"$1/cgroup.procs" && shift && exec "$@"' _ "$1" "${ACCT_ARGV[@]}")
+}
+as_acct_in_cgroup() {
+    local ACCT_ARGV; acct_cgroup_argv "$1" "$2" || return; shift 2
+    "${ACCT_ARGV[@]}" "$@"
 }
 
 # Root chooses the PID file path from the container name and passes it to `podman create

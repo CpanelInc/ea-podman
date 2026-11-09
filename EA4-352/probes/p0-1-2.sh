@@ -12,7 +12,7 @@ ROOTC=p02root
 DS=$HOME_/.local/share/containers
 DSBK=$HOME_/.local/share/containers.p01-backup
 # Refuse before any cleanup is armed: a leftover backup belongs to an earlier run, not this one.
-as_acct test -e "$DSBK" && { echo "$DSBK exists; restore it first" >&2; exit 1; }
+as_acct init test -e "$DSBK" && { echo "$DSBK exists; restore it first" >&2; exit 1; }
 # DS and DSBK are in the account's home, so every move and removal there runs as the account: as
 # root, a symlink planted on any component (e.g. ~/.local/share -> /var/lib) would aim them at the
 # host. There is no root fallback; a failed restore is reported and the backup is kept.
@@ -79,7 +79,7 @@ EOF
 }
 
 hdr "create a 1.x container in the account's own session (default storage, systemd manager)"
-if as_acct test -e "$DS"; then
+if as_acct init test -e "$DS"; then
     user_sh 'mv "$1" "$2"' "$DS" "$DSBK" || { echo "could not move $DS aside" >&2; exit 1; }
     MOVED=1
 fi

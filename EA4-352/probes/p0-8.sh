@@ -91,9 +91,8 @@ result cni_dir_used "$([ -n "$(ls -A "$RUNDIR/cni" 2>/dev/null)" ] && echo "yes 
 
 hdr "what podman opened under the account's ~/.config while it ran (strace, if present)"
 if command -v strace >/dev/null; then
-    tr_out=$(systemd-run --quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" --pipe --wait --collect \
-        -p WorkingDirectory="$HOME_" "${ENVS[@]}" /usr/bin/strace -f -qq -e trace=open,openat,stat,newfstatat,access,statx \
-        -o /dev/stderr /usr/bin/podman ps -a </dev/null 2>&1 >/dev/null | grep -o "\"$HOME_/\.config[^\"]*\"" | sort -u | tr '\n' ' ')
+    tr_out=$(as_user /usr/bin/strace -f -qq -e trace=open,openat,stat,newfstatat,access,statx \
+        -o /dev/stderr /usr/bin/podman ps -a 2>&1 >/dev/null | grep -o "\"$HOME_/\.config[^\"]*\"" | sort -u | tr '\n' ' ')
     result opens_under_home_config "${tr_out:-none}"
 else
     result opens_under_home_config "not checked (no strace)"

@@ -12,11 +12,7 @@ cd "$(dirname "$0")"; . ./plib.sh
 TAG=$$
 runner() {    # timeout, then argv; prints systemd-run's own stderr too (no --quiet)
     local tmo=$1; shift
-    seq=$((seq + 1))
-    systemd-run --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
-        --unit="eapodman-run-$UID_-p011-$$-$seq" --pipe --wait --collect \
-        -p RuntimeMaxSec="$tmo" -p TimeoutStopSec=10 -p KillMode=control-group \
-        -p WorkingDirectory="$HOME_" "${ENVS[@]}" "$@" </dev/null
+    acct_unit -v -n p011 -t "$tmo" -p TimeoutStopSec=10 -p KillMode=control-group -- "$@"
 }
 leftovers() { pgrep -u "$U" -f "sleep 3$TAG" | tr '\n' ' '; }
 cleanup() { pkill -9 -u "$U" -f "sleep 3$TAG" 2>/dev/null; pkill -9 -u "$U" -f "p011-escape-$$" 2>/dev/null; }

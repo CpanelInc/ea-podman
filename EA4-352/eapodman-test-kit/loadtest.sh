@@ -14,9 +14,9 @@
 set -uo pipefail
 U=${1:?usage: $0 <cpuser> [cpu|mem|all]}
 WHAT=${2:-all}
-[ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
-UID_=$(id -u "$U"); GID_=$(id -g "$U"); HOME_=$(getent passwd "$U" | cut -d: -f6)
-A=/sys/fs/cgroup/eapodman.slice/eapodman-$UID_.slice
+cd "$(dirname "$0")"
+. ./lib.sh
+A=$CG/eapodman.slice/eapodman-$UID_.slice
 NAMES=("web.$U.01" "api.$U.02" "worker.$U.03")
 SCRATCH=$HOME_/.eapodman-loadtest
 [ -d "$A" ] || { echo "not set up; run ./setup.sh $U first" >&2; exit 1; }
@@ -42,23 +42,23 @@ payload() {
 }
 # Account-side file work on $SCRATCH, which sits in the account's home: as root, a symlink the
 # account planted there (the dir itself or a parent) would aim mkdir/chown/rm at anything on the host.
-as_account() { (cd / && setpriv --reuid="$UID_" --regid="$GID_" --clear-groups "$@" </dev/null); }
+as_account() { as_acct init "$@"; }
 stat_of() { awk -v k="$2" '$1 == k { print $2 }' "$1"; }
 mib()     { echo $(( $1 / 1048576 )); }
 
 # Run a command as the account inside container $1's payload cgroup. Foreground;
 # returns the command's exit status (137 when the OOM killer takes it).
-ENTER='echo $$ >"$1/cgroup.procs" && shift && exec setpriv --reuid="$UID_" --regid="$GID_" --clear-groups "$@"'
 in_container() {
     local p; p=$(payload "$1") || return 125; shift
-    sh -c "$ENTER" _ "$p" "$@" </dev/null
+    as_acct_in_cgroup "$p" init "$@" </dev/null
 }
 # Same, in the background. sh execs into the command, so the PID in BG is the load itself.
 # Dies if the load isn't still running a second later (setpriv failure, unwritable cgroup.procs).
 BG=(); declare -A BGBY
 in_container_bg() {
     local c=$1 p pid; p=$(payload "$c") || exit 1; shift
-    sh -c "$ENTER" _ "$p" "$@" </dev/null >/dev/null 2>&1 &
+    local ACCT_ARGV; acct_cgroup_argv "$p" init || exit 1
+    "${ACCT_ARGV[@]}" "$@" </dev/null >/dev/null 2>&1 &
     pid=$!; BG+=("$pid"); BGBY[$c]+=" $pid"
     sleep 1
     kill -0 "$pid" 2>/dev/null || { echo "background load '$*' in $c died at once" >&2; exit 1; }
@@ -73,8 +73,6 @@ bg_alive() {
 stop_bg() { [ ${#BG[@]} -gt 0 ] && kill -CONT "${BG[@]}" 2>/dev/null; [ ${#BG[@]} -gt 0 ] && kill "${BG[@]}" 2>/dev/null; wait 2>/dev/null; BG=(); BGBY=(); }
 # Pause or resume one container's background loads (SIGSTOP/SIGCONT; they stay "alive").
 bg_signal() { local sig=$1 n; shift; for n in "$@"; do kill "-$sig" ${BGBY[$n]} 2>/dev/null; done; }
-export UID_ GID_
-
 # Every container must have its payload cgroup before anything is measured.
 for n in "${NAMES[@]}"; do payload "$n" >/dev/null || exit 1; done
 
