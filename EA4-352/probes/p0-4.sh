@@ -28,11 +28,11 @@ cleanup() {
     # each read back; one that can't be put back makes the probe exit 1.
     restore_changes_or_fail
 }
-trap cleanup EXIT
 # pause.pid is account-writable: read it as the account, and use it only if it is the account's process.
 pause_pid() {
     local p; p=$(acct_pid "$RUNDIR/libpod/tmp/pause.pid") && safe_target "$p" --uid "$UID_" && echo "$p"
 }
+trap cleanup EXIT
 
 basic() {
 hdr "1. placement"
@@ -116,6 +116,13 @@ floor() {
 # FLOOR=low (default) protects with MemoryLow=; FLOOR=min with MemoryMin= (hard), set on both slices too.
 local P=MemoryLow; [ "${FLOOR:-low}" = min ] && P=MemoryMin
 hdr "8. memory floors ($P) under pressure from outside the slices"
+# Runs whether or not a verdict was reached, so `all` goes on to cpu() with nothing left changed.
+floor_end() {
+    systemctl stop p04-hold-acct p04-hold-user p04-hold-none 2>/dev/null
+    systemctl reset-failed 'p04-hold-*' 2>/dev/null
+    restore_changes || exit 1
+    rm -rf "$P4"; P4=
+}
 if [ $P = MemoryMin ]; then
     change_prop eapodman.slice MemoryMin 400M || exit 1
     change_prop "eapodman-$UID_.slice" MemoryMin 400M || exit 1
@@ -129,30 +136,42 @@ big=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 * 3 / 2 ))
 dd if=/dev/zero of="$P4/big" bs=1M count=$big status=none
 sync; echo 1 >/proc/sys/vm/drop_caches
 change_prop "user-$UID_.slice" $P 400M || exit 1
-systemd-run --quiet --unit=p04-hold-acct --slice="eapodman-$UID_.slice" --uid="$UID_" -p $P=400M sh -c "cat $P4/acct >/dev/null; exec sleep 600"
-systemd-run --quiet --unit=p04-hold-user --slice="user-$UID_.slice" --uid="$UID_" -p $P=400M sh -c "cat $P4/user >/dev/null; exec sleep 600"
-systemd-run --quiet --unit=p04-hold-none --slice=system.slice --uid="$UID_" sh -c "cat $P4/none >/dev/null; exec sleep 600"
+# The three holders, or no verdict: a missing one would compare nothing with something.
+hold() {    # name, slice, [extra systemd-run args]
+    local h=$1 slice=$2; shift 2
+    systemd-run --quiet --unit="p04-hold-$h" --slice="$slice" --uid="$UID_" "$@" \
+        sh -c "cat $P4/$h >/dev/null; exec sleep 600"
+}
+hold acct "eapodman-$UID_.slice" -p $P=400M && hold user "user-$UID_.slice" -p $P=400M && hold none system.slice \
+    || { inconclusive floor_verdict "a holder unit didn't start"; floor_end; return; }
 sleep 8
-file_of() {    # unit -> MiB of page cache charged to its cgroup
-    local cg; cg=$(systemctl show -p ControlGroup --value "$1")
-    if [ $CGV = 2 ]; then awk '$1=="file"{print int($2/1048576)}' "$CG$cg/memory.stat"
-    else awk '$1=="total_cache"{print int($2/1048576)}' "$CG/memory$cg/memory.stat"; fi
+file_of() {    # unit -> MiB of page cache charged to its cgroup; fails unless it read a number
+    local cg v; cg=$(systemctl show -p ControlGroup --value "$1") && [ -n "$cg" ] || return 1
+    if [ $CGV = 2 ]; then v=$(awk '$1=="file"{print int($2/1048576)}' "$CG$cg/memory.stat")
+    else v=$(awk '$1=="total_cache"{print int($2/1048576)}' "$CG/memory$cg/memory.stat"); fi
+    case $v in ''|*[!0-9]*) return 1;; esac
+    echo "$v"
 }
 declare -A b a
-for h in acct user none; do b[$h]=$(file_of p04-hold-$h); done
+for h in acct user none; do
+    b[$h]=$(file_of p04-hold-$h) || { inconclusive floor_verdict "couldn't read p04-hold-$h's page cache before"; floor_end; return; }
+done
 info "floors ($P): eapodman.slice $(systemctl show -p $P --value eapodman.slice), eapodman-$UID_.slice $(systemctl show -p $P --value eapodman-$UID_.slice), user.slice $(systemctl show -p $P --value user.slice), user-$UID_.slice $(systemctl show -p $P --value user-$UID_.slice)"
 # Pressure: stream a file 1.5x RAM, twice, from system.slice.
 systemd-run --quiet --wait --unit=p04-pressure --slice=system.slice sh -c "cat $P4/big >/dev/null; cat $P4/big >/dev/null"
-for h in acct user none; do a[$h]=$(file_of p04-hold-$h); done
+for h in acct user none; do
+    systemctl is-active -q "p04-hold-$h" && a[$h]=$(file_of p04-hold-$h) \
+        || { inconclusive floor_verdict "p04-hold-$h died or its page cache couldn't be read after the pressure"; floor_end; return; }
+done
 for h in acct user none; do result "pagecache_${h}_MiB" "${b[$h]} -> ${a[$h]}"; done
-if [ "${b[acct]:-0}" -lt 100 ]; then result floor_verdict "n/a: page cache not charged to the reader (before=${b[acct]})"
+if [ "${b[acct]}" -lt 100 ]; then result floor_verdict "n/a: page cache not charged to the reader (before=${b[acct]})"
+elif [ "${b[user]}" = 0 ] || [ "${b[none]}" = 0 ]; then
+    inconclusive floor_verdict "a comparison holder had no page cache before (user=${b[user]} none=${b[none]})"
 else
     keep() { echo $(( ${a[$1]} * 100 / ${b[$1]} )); }
     result floor_verdict "kept: account slice $(keep acct)%, user-<uid>.slice $(keep user)%, no floor $(keep none)%"
 fi
-systemctl stop p04-hold-acct p04-hold-user p04-hold-none 2>/dev/null
-restore_changes || exit 1
-rm -rf "$P4"; P4=
+floor_end
 }
 
 cpu() {
@@ -187,3 +206,4 @@ case $WHAT in
     basic) basic ;; floor) floor ;; cpu) cpu ;;
     all) basic; floor; cpu ;;
 esac
+probe_exit
