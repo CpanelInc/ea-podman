@@ -1,0 +1,4 @@
+host ea4-352-cl9 os=cloudlinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+RESULT t0-8.ptrace_scope 0
+RESULT t0-8.attach_conmon attached (pid 10241)
+RESULT t0-8.attach_container_init attached (pid 10243)

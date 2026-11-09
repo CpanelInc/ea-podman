@@ -1,0 +1,4 @@
+host ea4-352-u22 os=ubuntu-22.04 kernel=5.15.0-203-generic cgroup=v2 systemd=249 podman=3.4.4
+RESULT t0-8.ptrace_scope 1
+RESULT t0-8.attach_conmon attached (pid 11768)
+RESULT t0-8.attach_container_init attached (pid 11771)

@@ -1,0 +1,4 @@
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v2 systemd=239 podman=4.9.4-rhel
+RESULT t0-8.ptrace_scope 0
+RESULT t0-8.attach_conmon attached (pid 865)
+RESULT t0-8.attach_container_init attached (pid 909)

@@ -1,0 +1,20 @@
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v2 systemd=239 podman=4.9.4-rhel
+
+### baseline: the account's own exec -it, not moved (as 2.0 is planned)
+RESULT t0-8.exec_not_moved works; exec'd process in /user.slice/user-1000.slice/t08-acct-1377-0.scope
+
+### root moves the account's waiting process into <unit>/ea-podman-exec, then it runs exec -it
+RESULT t0-8.place_1 moved to /eapodman.slice/eapodman-1000.slice/ea-podman-t08x.eapodtest.80.service/ea-podman-exec
+RESULT t0-8.exec_moved works; exec'd process in /eapodman.slice/eapodman-1000.slice/ea-podman-t08x.eapodtest.80.service/libpod-payload-dee2b97faad22b5a0e0dc64cf50b01b825de77bbae4fb479921e199672cdcbd6
+RESULT t0-8.exec_moved_client podman client (moved pid 1581) in /eapodman.slice/eapodman-1000.slice/ea-podman-t08x.eapodtest.80.service/ea-podman-exec
+RESULT t0-8.leaf_procs conmonx1 podmanx1
+RESULT t0-8.exec_moved_tty /dev/pts/0|40 120
+
+### unit stop with that session live
+RESULT t0-8.stop_with_session stop took 1s, unit=inactive/success, client alive=no, exec'd process alive=no, unit cgroup left=0
+RESULT t0-8.restart_after active
+
+### the account froze <unit>/ea-podman-exec before root's step
+RESULT t0-8.hostile_leaf account mkdir+freeze: 1
+RESULT t0-8.hostile_place root step: moved to /eapodman.slice/eapodman-1000.slice/ea-podman-t08x.eapodtest.80.service/ea-podman-exec in 8 ms; account's process state=S frozen=1; exec ran=no
+RESULT t0-8.hostile_thaw after the account thaws it: exec ran=yes

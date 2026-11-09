@@ -1,0 +1,22 @@
+host ea4-352-cl8-cgv1 os=cloudlinux-8.10 kernel=4.18.0-553.177.1.lve.1.el8.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+
+### a container with a healthcheck, from the unit as planned (no user manager)
+RESULT t0-8.planned_unit unit=active/success container=running
+RESULT t0-8.planned_journal time="2026-11-09T08:51:47-05:00" level=error msg="unable to get systemd connection to add healthchecks: lstat /run/ea-podman/user/1001/systemd: no such file or directory"|time="2026-11-09T08:51:47-05:00" level=error msg="unable to get systemd connection to start healthchecks: lstat /run/ea-podman/user/1001/systemd: no such file or directory"
+
+### the same with Environment=DISABLE_HC_SYSTEMD=true on the unit
+RESULT t0-8.no_scheduler after 25s with a 10s interval: t08h.eapodtest.81 status=starting streak=0 runs=0; t08f.eapodtest.82 status=starting streak=0 runs=0
+RESULT t0-8.timers system timers for the container: 0
+RESULT t0-8.unit_journal 
+
+### podman healthcheck run, by hand
+RESULT t0-8.run_from_runner rc=0 
+RESULT t0-8.run_from_unit_leaf rc=0 ; now status=healthy streak=0 runs=2
+
+### a root timer per container whose service places itself in <unit>/ea-podman-health
+RESULT t0-8.timer_t08h.eapodtest.81 status=healthy streak=0 runs=5; service Result=success ExecMainStatus=0
+RESULT t0-8.timer_t08f.eapodtest.82 status=unhealthy streak=4 runs=4; service Result=success ExecMainStatus=1
+RESULT t0-8.timer_journal 
+
+### a check that outlives the service's TimeoutStartSec=5 (the process left the service's cgroup)
+RESULT t0-8.deadline start returned after 5s Result=timeout; helper podman alive=no; in-container sleep 30 alive=no

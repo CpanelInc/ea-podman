@@ -16,9 +16,10 @@ Scripts for the Phase 0 probes in `../PLAN.md`. They were run on the VMs in `../
 | `p0-12.sh` | P0-12: loads a **test-only** BPF-LSM program (`p0-12/userns_guard.bpf.c`) and detaches it on exit. Needs clang, bpftool and libbpf headers |
 | `p0-13.sh` | P0-13: `podman exec` placement, including 1.x parity |
 | `t0-6.sh basic\|units\|swap` | T0.6:<br>• `basic`: host defaults (nproc, tasks, logind's runtime dir), 1.x parity, runtime-dir use, exit codes without the journal, and a fork storm against the slice's `TasksMax`<br>• `units`: `daemon-reload` cost against the number of units<br>• `swap`: `--memory-swap` with a temporary swap file |
+| `t0-8.sh bash\|health\|ptrace` | T0.8 (F20, F24):<br>• `bash`: the account's own process on a pty, moved by root into `<unit>/ea-podman-exec`, runs `podman exec -it`; a unit stop with the session live; a leaf the account froze first<br>• `health`: health checks with no user manager, with `DISABLE_HC_SYSTEMD=true`, and from a root timer whose helper places itself in `<unit>/ea-podman-health`<br>• `ptrace`: can the account attach to its own conmon and container init |
 | `f15-1x.sh` | F15 / T0.4: SIGKILL a 1.x container's conmon under the account's own `user@`, with 1.x's generated unit (unmasked hosts) |
 | `f17-switch.sh flip\|check\|restore` | F17: a real cgroup v1 ↔ v2 switch on EL8 (reboot after `flip` and after `restore`) |
 
-`results/<vm>/` holds the logs from the 2026-11-06 run. The `kit-*.log` files there are the kit's own scripts.
+`results/<vm>/` holds the logs from the 2026-11-06 run, and the `t0-8-*.log` files from 2026-11-09. The `kit-*.log` files there are the kit's own scripts.
 
-These change the host: `p0-6.sh` writes `/etc/pam.d/ea-podman`, `f17-switch.sh` edits the kernel command line, `t0-6.sh units` and `t0-6.sh swap` add and then remove dummy units and a swap file, and `p0-1-2.sh`, `p0-13.sh` and `f15-1x.sh` start the account's `user@` (on CloudLinux through a `/run/systemd/system` copy). Run them only on test VMs.
+These change the host: `p0-6.sh` writes `/etc/pam.d/ea-podman`, `f17-switch.sh` edits the kernel command line, `t0-6.sh units` and `t0-6.sh swap` add and then remove dummy units and a swap file, `t0-8.sh` adds and then removes test containers, units and timers, and `p0-1-2.sh`, `p0-13.sh` and `f15-1x.sh` start the account's `user@` (on CloudLinux through a `/run/systemd/system` copy). Run them only on test VMs.
