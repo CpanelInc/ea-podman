@@ -89,7 +89,7 @@ That gives those accounts back exactly what CLOS-4517 removed.
   - code running inside the account's containers can still create namespaces. The rule stops the account's shell, cron and CGI processes, not its container workloads;
   - it bounds where namespaces are created, not whether the account can get code into `eapodman.slice`. An account with a running container always can: its own shell can ptrace its conmon and container processes on all 9, including Ubuntu with `kernel.yama.ptrace_scope=1`, because it owns their user namespace (T0.8);
   - enabled only after `migration/complete`, because 1.x containers run under `user@`;
-  - needs a kernel with the `userns_create` LSM hook and `lsm=bpf` (P0-12). EL8's 4.18 has neither.
+  - needs a kernel with the `userns_create` LSM hook and `lsm=bpf` (P0-12). EL8's and CL8's 4.18 have `bpf` active but no hook; Ubuntu 22.04's 5.15 has neither (P0-12 re-run, 2026-11-09).
 - **F12: per-container limits need `--cgroups=split`** (EA4-352 comment 1801665). With cgroupfs and `Delegate=yes` alone, podman doesn't place the container in a sub-cgroup of the unit, so `--memory` is not enforced. Fix: pin `cgroups = "split"` on cgroup v2 only (Phase 1, F17), and refuse start args that override it (Phase 3b).
 - **F13: relative limits need matching values on the container unit.** `--memory`, `--memory-swap`, `--cpus` and `--pids-limit` are hard caps on the container's own cgroup, so split alone makes them work. `--memory-reservation` and `--cpu-shares` are not:
   - `--memory-reservation` becomes `memory.low`, which only protects up to what every ancestor is protected for. The chain is container → `ea-podman-<name>.service` → `eapodman-<uid>.slice` → `eapodman.slice`. The unit's own `memory.low` belongs to systemd (`MemoryLow=`, default 0), not to the delegated subtree. So on EL8 (4.18, no `memory_recursiveprot`) the reservation does nothing, and on newer kernels (`memory_recursiveprot`) the unit only gets a usage-weighted share of the slice's unclaimed floor, not a guaranteed amount;
@@ -286,6 +286,19 @@ That gives those accounts back exactly what CLOS-4517 removed.
     - a check that outlives `TimeoutStartSec` is still killed, because systemd signals the service's main PID even after it has left the service's cgroup. On v2 the check's own process in the container runs to its end; podman's `--health-timeout` bounds it.
   - **Cost:** one podman run per container with a check, per interval (Web Apps: 60s).
 
+- **F25: podman takes the account's own `mounts.conf`, and never reads `default_mounts_file`** (PR #43 review, 2026-11-09; P0-8 re-run). Rootless podman applies the first `mounts.conf` that exists: the account's `$HOME/.config/containers/mounts.conf` (found through `$HOME`, so the pinned `XDG_CONFIG_HOME` doesn't cover it), then `/etc/containers/mounts.conf`, then `/usr/share/containers/mounts.conf`. `containers.conf`'s `default_mounts_file` is never read. On all 9 (podman 3.4.4, 4.9.3, 4.9.4 and 5.8.2):
+  - the account's file reached its containers at the unit's start, and the RUN steps of a `podman build` from the runner (the plugin's builds);
+  - podman reads each entry's source as the account and copies it into the container, so the account can put any host file its uid can read into its own containers. On CL8, CL9 and CL10 that included a file in the host's `/tmp`, outside the cage: for CageFS and jailshell accounts it goes around the home-directory check EA4-343 puts on `-v`;
+  - the first P0-8 run reported "ignored" because its check used `podman exec`, which fails from the runner on v2 (F20); the probe now reads the container's OCI spec.
+
+  **Decision (A2): every podman call names root's `mounts.conf`.** podman's global `--default-mounts-file=<file>` is the one thing that decides it. With it, only that file applies, for a unit's start and a build alike (podman 3.4, 4.9 and 5.8).
+  - **The file:** root renders `/opt/cpanel/ea-podman/etc/mounts.conf` (root:root 0644) from the first of `/etc/containers/mounts.conf` and `/usr/share/containers/mounts.conf`, or empty when there is neither. So a container gets the distro's mounts, as in 1.x (EL and CloudLinux: `/usr/share/rhel/secrets:/run/secrets`; Ubuntu: none), and nothing of the account's. It is re-rendered together with `containers.conf` (the same three callers and marker check).
+  - **The flag:** the unit's `ExecStart`, `ExecStop` and `ExecStopPost`, and every podman argv the runner, the admin module and the migration run, carry `--default-mounts-file=` that file, next to `podman_env`.
+  - **`default_mounts_file` is dropped** from `containers.conf`: it does nothing, and podman 3.4 warns on it.
+  - **Not chosen:** a `HOME` the account can't write (`rootless_storage_path` is `$HOME`-relative, so the container doesn't start, and podman's other `$HOME` uses would need their own probe), and accepting it (leaves the CageFS/jailshell gap open).
+  - **Risk:** the flag is hidden (not in `podman --help`), so a podman update could drop it. The hostile-config live test (Tests) is its canary.
+  - **Measured with the kit** (`lib.sh`'s `PODMAN`): p0-8 reports the account's file ignored by a unit's start and by a build, and the distro's entries kept, on all 9.
+
 ## Phase 0: spikes (gate everything)
 
 Run each probe on these hosts:
@@ -417,10 +430,11 @@ Run each probe on these hosts:
   - **Containers:** a caged account's containers run from system units on CL8, CL9 and CL10, including after a reboot.
   - **From inside the cage:** there is no `systemctl` and no `podman`. `/run/ea-podman` and the unit files aren't visible. The account's own conmon is visible only where `/proc` has no `hidepid` (CL10). The ports are reachable.
   - **Not run:** the CLI admin fallback (needs ea-podman 2.0).
-- **P0-8: the account's config is fully ignored; F16's layout works on every podman version.**
-  - **Hostile `~/.config/containers` ignored on all 9** (podman 3.4.4, 4.9.3, 4.9.4 and 5.8.2; CNI and netavark). It held `containers.conf` (cgroup manager, events logger, env, log driver), a `containers.conf.d` drop-in, `storage.conf` (vfs, another graphroot), `registries.conf`, a reject-all `policy.json` and `mounts.conf`. strace shows no opens under `~/.config`.
+- **P0-8: the account's config is ignored except its `mounts.conf` (F25); F16's layout works on every podman version.**
+  - **Hostile `~/.config/containers` ignored on all 9** (podman 3.4.4, 4.9.3, 4.9.4 and 5.8.2; CNI and netavark). It held `containers.conf` (cgroup manager, events logger, env, log driver), a `containers.conf.d` drop-in, `storage.conf` (vfs, another graphroot), `registries.conf`, a reject-all `policy.json` and `mounts.conf`. strace shows no opens under `~/.config` while `podman ps` runs.
+  - **Except `mounts.conf` (F25, corrected 2026-11-09):** it reaches the container on all 9, even with `default_mounts_file` pinned. This run first said "ignored" because its check used `podman exec`, which fails from the runner on v2 (F20); three hosts' logs had said "NO" all along. With F25's `--default-mounts-file` it is ignored on all 9, by builds too.
   - **`XDG_CONFIG_HOME`:** nothing new appears there. Only `cni/net.d` (and `cni.lock` or the conflist) is written through the symlink: on the CNI hosts, and also on CL9 and Ubuntu 24.04.
-  - **podman 3.4.4** doesn't know `default_mounts_file` and warns on every call (`Failed to decode the keys ["containers.default_mounts_file"]`). Leave it out on 3.4; `mounts.conf` is under `XDG_CONFIG_HOME` there and isn't read anyway.
+  - **podman 3.4.4** doesn't know `default_mounts_file` and warns on every call (`Failed to decode the keys ["containers.default_mounts_file"]`). No podman version reads it (F25), so 2.0 drops it everywhere.
   - **F22** was found here.
 - **P0-9: confirmed.** On CL8, CL9 and CL10 the account's `systemctl show` on the system unit gets `Access denied` even outside the cage, and inside it there is no `systemctl`. Other hosts allow it. STATUS goes through admin.
 - **P0-10:**
@@ -432,9 +446,9 @@ Run each probe on these hosts:
   - **Escape on v2:** the account can't move a runner process into its delegated container cgroup (`EACCES`, or `EIO` on Ubuntu).
   - **Escape on v1** (EL8, CL8): it can move a child into the unit's `name=systemd` cgroup, which `Delegate` chowns to it, but not into `memory`/`pids`/`cpu`. `--wait` still returns at the deadline. The moved child survives, still in the runner's stale `pids`/`memory` cgroups, until that container unit stops. It also **keeps the `--pipe` stdout open**, so a reader that waits for EOF hangs. The runner must stop reading when `systemd-run` exits.
   - **SELinux** (EL): PID 1 may not write to a `/tmp` file passed as stdout through `--pipe`; `systemd-run` fails with `Connection timed out` or `Remote peer disconnected`. Use pipes, as 4.2a already says.
-- **P0-12: supported on EL10, CL10 and Ubuntu 24.04. Not on EL9 or CL9.**
-  - **The hook:** `userns_create` exists on EL10 and CL10 (6.12) and Ubuntu 24.04 (6.8). Ubuntu 22.04's 5.15 has it too (not tested). EL9 and CL9 (5.14) don't.
-  - **`bpf` in the LSM list:** active by default on EL and CloudLinux. Ubuntu needs `lsm=…,bpf` and a reboot.
+- **P0-12: supported on EL10, CL10 and Ubuntu 24.04. Not on EL8, CL8, EL9, CL9 or Ubuntu 22.04.**
+  - **The hook:** `userns_create` exists on EL10 and CL10 (6.12) and Ubuntu 24.04 (6.8). EL8 and CL8 (4.18), EL9 and CL9 (5.14) and Ubuntu 22.04 (5.15) don't (the last three measured on the 2026-11-09 re-run; this said 22.04 had it, untested).
+  - **`bpf` in the LSM list:** active by default on EL and CloudLinux, EL8 and CL8 included. Ubuntu needs `lsm=…,bpf` and a reboot (22.04's default list: `lockdown,capability,landlock,yama,apparmor`).
   - **The test program** (`probes/p0-12/userns_guard.bpf.c`, loaded with `bpftool prog loadall … autoattach`) denies non-root userns creation outside `eapodman.slice`.
   - **Still worked:** the runner's `podman unshare`, unit restarts, an anchor restart after the pause process was killed, create and start, a `podman build` in a delegated runner, and a nested userns inside a container.
   - **Denied** on all three: `unshare -U` from a `system.slice` (cron-like) job and from `user-<uid>.slice`. From the account's login shell, `unshare -U` and raw `podman run` were denied on EL10 and Ubuntu 24.04. CL10's caged shell has neither binary. Root is unaffected.
@@ -454,16 +468,17 @@ Run each probe on these hosts:
 - Load it with the guarded sibling-require used for `subids.pm` (`util.pm:92-100`).
 
 **Pinned config, root:root 0644 under `/opt/cpanel/ea-podman/etc/`:**
-- `containers.conf`: `cgroup_manager="cgroupfs"`, `cgroups="split"` **on cgroup v2 only** (F12, F17), `events_logger` and `log_driver` as each distro's own podman uses them (T0.6, 1.x parity): `"file"` with `events_logfile_max_size = "1m"` and `log_driver = "k8s-file"` on EL and CloudLinux, `"journald"` for both on Ubuntu. Also explicit `runtime` and `conmon_path`, `hooks_dir=[]`, and `default_mounts_file` pointed at an empty root-owned file, so the account's `~/.config/containers/mounts.conf` can't add mounts. `default_mounts_file` is left out on podman 3.4, which doesn't know it (T0.2). The events file lives in the capped runtime tmpfs (F8).
+- `containers.conf`: `cgroup_manager="cgroupfs"`, `cgroups="split"` **on cgroup v2 only** (F12, F17), `events_logger` and `log_driver` as each distro's own podman uses them (T0.6, 1.x parity): `"file"` with `events_logfile_max_size = "1m"` and `log_driver = "k8s-file"` on EL and CloudLinux, `"journald"` for both on Ubuntu. Also explicit `runtime` and `conmon_path`, and `hooks_dir=[]`. No `default_mounts_file`: podman never reads it (F25).
+- `mounts.conf` (F25): root's copy of the distro's (`/etc/containers/mounts.conf`, else `/usr/share/containers/mounts.conf`, else empty), re-rendered with `containers.conf`. Every podman command line names it with `--default-mounts-file`, so the account's `~/.config/containers/mounts.conf` is never used. The events file lives in the capped runtime tmpfs (F8).
 - **`containers.conf` follows the host's cgroup version (F17).**
   - **How it is rendered:** root renders it from fixed text in code. The `cgroups = "split"` line is present only when `/sys/fs/cgroup/cgroup.controllers` exists, and a marker line records the version it was rendered for.
   - **Atomic rewrite:** a tmp file, fsync, then rename, so a podman reading it mid-change sees the old or the new file, never half of one.
   - **When it is checked:** the package scriptlets, `ensure_runtime`, and the anchor's root helper (below) each re-render it when the marker doesn't match the host. A cgroup switch needs a reboot, and every container unit `Requires=` its anchor, so after a switch the first container start re-renders the file first.
   - **Old containers keep their mode:** the mode is fixed at create, so containers created under the other version keep it until they are recreated (F17). The registry records `cgroup_v` (below), and root's cgroup check names them, with `ea-podman upgrade --force <name>` as the remedy (T0.5; never an automatic recreate).
 - `storage.conf`: `rootless_storage_path` = `~/.local/share/ea-podman/storage`.
-- `old-storage.conf` and `old-containers.conf`, for the migration only (4.2a): the 1.x graphroot (`~/.local/share/containers/storage`) with the same pinned runtime, conmon, hooks and mounts settings. The migration never runs podman under the account's own `containers.conf`.
+- `old-storage.conf` and `old-containers.conf`, for the migration only (4.2a): the 1.x graphroot (`~/.local/share/containers/storage`) with the same pinned runtime, conmon and hooks, and the same `--default-mounts-file` (F25). The migration never runs podman under the account's own `containers.conf`.
 - A registries reference.
-- Every podman invocation gets `CONTAINERS_CONF` / `CONTAINERS_STORAGE_CONF` / `CONTAINERS_REGISTRIES_CONF` pointing at these files, through a new `podman_env($uid)`. That covers the units, the CLI, the admin module and the plugin. `podman_env` also clears `CONTAINERS_CONF_OVERRIDE`, sets `DISABLE_HC_SYSTEMD=true` (F24), and sets `XDG_CONFIG_HOME` to the root-owned per-account directory `/run/ea-podman/xdg/<uid>` (root:root 0755).
+- Every podman invocation gets `CONTAINERS_CONF` / `CONTAINERS_STORAGE_CONF` / `CONTAINERS_REGISTRIES_CONF` pointing at these files, through a new `podman_env($uid)`. That covers the units, the CLI, the admin module and the plugin. Every podman command line also carries `--default-mounts-file` (F25). `podman_env` also clears `CONTAINERS_CONF_OVERRIDE`, sets `DISABLE_HC_SYSTEMD=true` (F24), and sets `XDG_CONFIG_HOME` to the root-owned per-account directory `/run/ea-podman/xdg/<uid>` (root:root 0755).
   - **Nothing account-controlled is read from it.** It holds nothing but a root-owned symlink `cni` → `/run/ea-podman/user/<uid>/cni`, so neither `containers.conf.d` drop-ins nor the account's `policy.json` or `registries.d` are read.
   - **Why the symlink:** rootless CNI (podman 3.4, and EL8's 4.x default) must be able to create `$XDG_CONFIG_HOME/cni`. The symlink lets it, and its writes land in the capped runtime tmpfs (F16, F8).
   - P0-8 confirms this per podman version.
@@ -1210,7 +1225,7 @@ On the plugin side:
 4. **Admin only acts on the caller's own registered containers.** It refuses unregistered names, other users' containers, and units whose marker uid doesn't match. Live test: user B gets "No such container" for A's containers on every action.
 5. **No user path writes under `/etc`, and root never writes into home.** Migration test with a planted `~/.config/systemd/user` symlink pointing at `/etc`.
 6. **After migration, no `user@<uid>` runs for container accounts, and no ea-podman linger or carveout remains.** The canary unit never runs, including after a reboot (P0-10).
-7. **Every podman invocation uses the pinned `CONTAINERS_*`, including the migration's runs against old storage.** A hostile `~/.config/containers/containers.conf` (`runtime=~/evil`, `hooks_dir`), `containers.conf.d/` drop-in, `mounts.conf` or `CONTAINERS_CONF_OVERRIDE` never takes effect. Neither does a `policy.json` or `registries.d` the account writes anywhere it can: `XDG_CONFIG_HOME` is root-owned and holds only the `cni` symlink (F16).
+7. **Every podman invocation uses the pinned `CONTAINERS_*`, including the migration's runs against old storage.** A hostile `~/.config/containers/containers.conf` (`runtime=~/evil`, `hooks_dir`), `containers.conf.d/` drop-in or `CONTAINERS_CONF_OVERRIDE` never takes effect. Neither does the account's `mounts.conf`, for a container or a build: every podman call names root's with `--default-mounts-file` (F25). Neither does a `policy.json` or `registries.d` the account writes anywhere it can: `XDG_CONFIG_HOME` is root-owned and holds only the `cni` symlink (F16).
 8. **Account removal leaves no unit and no runtime dir.** A new account that reuses the uid starts nothing.
 9. **`ea-podman.json` `start_args` only reach `podman create` run as the user.** `units.pm` never reads that file.
 10. **Slice properties are only ever set by root, from the whitelist, on a slice name derived from `getpwnam`.** No admin action sets them. Test: invalid property names or values and a caller-supplied slice name are refused, and the admin module exposes no action that reaches `set_slice_properties`.
@@ -1250,6 +1265,7 @@ On the plugin side:
   - the slice runner: lint, injection and label cases (in `t/SOURCES-units.t`), and `_as_cpuser` routing
   - the pinned-config renderer (F17): split only on v2, the marker, the atomic rewrite from each of its three callers, and root's check naming containers whose `cgroup_v` differs from the host's
   - the per-account `XDG_CONFIG_HOME` (F16): root-owned, holding only the `cni` symlink, and replaced if the account has planted anything there
+  - the pinned `mounts.conf` (F25): rendered from the distro's (or empty), root-owned, re-rendered with `containers.conf`; every podman argv the units, the runner, the admin module and the migration build carries `--default-mounts-file`, and `containers.conf` has no `default_mounts_file`
 - **Live, rework:** cagefs, normal, jailshell, memcached16 (both), ea4-315, ea4-325, ea4-338, cpanel-57396, cpanel-57608, and `ea4-360-userns-cgroup-live.t`.
   - In `ea4-360-userns-cgroup-live.t`, the UAPI cases move to the admin path (Phase 3b).
   - Its "no cgroup advice on CloudLinux 8" case stays until EA4-365.
@@ -1258,6 +1274,7 @@ On the plugin side:
   - `system-units-migration-live.t` (see 4.7)
   - `clos7971-canary-live.t`
   - `bpf-lsm-userns-live.t` (P0-12; runs only on kernels with the hook)
+  - a hostile-config case (invariant 7): the account's `containers.conf`, drop-ins, `mounts.conf` and `CONTAINERS_CONF_OVERRIDE` take no effect on install, start or a plugin build, while the distro's `mounts.conf` entries do (F25). It is also the canary for `--default-mounts-file`, which podman doesn't document.
   - a `--memory` enforcement case in the normal live test, plus `--memory-swap`, `--cpus`, `--memory-reservation` and `--cpu-shares` cases that check the container cgroup, the unit and both slices (F13).
   - a cgroup v1 case (F17): a container starts without split, and is named by root's check after the host moves to v2 and reboots.
   - CloudLinux on cgroup v2 (EA4-358 comment 1805194): bring-up, stop, restart, and the unit keeping track of conmon and the container, in the configuration F18 settles on.
@@ -1314,7 +1331,8 @@ On the plugin side:
 - **Resolved (T0.8): starting containers outside a unit (F22).** No 2.0 path does, so the runner keeps no `Delegate=`.
 - **The SELinux `netns` step (F19)** goes into Phase 1's anchor helper, and the SELinux targets go into the live matrix.
 - **Resolved (T0.4): Ubuntu 22.04 conmon kill (F15).** Part of F15's decision: `ea-podman restart` restores the port.
-- **Resolved (T0.6): podman 3.4 and `default_mounts_file`.** The pinned `containers.conf` leaves the key out on podman 3.4 (the kit does; no warnings on Ubuntu 22.04).
+- **Superseded by F25: podman 3.4 and `default_mounts_file`.** T0.6 left the key out on podman 3.4 only. No podman version reads it, so 2.0 drops it everywhere and passes `--default-mounts-file` instead.
+- **Open (EA4-392): re-running the kit's `setup.sh` can stall PID 1's answers to the runner** (EL8, EL9 and EL10; not seen on CloudLinux or Ubuntu). The first `systemd-run --uid … --slice=eapodman-<uid>.slice` after its reload, `set-property` and anchor start times out, and on EL9/EL10 the bus stays unusable for every transient unit and login session until `systemctl daemon-reexec`. The same steps run one by one don't trigger it. `ensure_runtime` and the package scriptlets run a similar sequence before the runner, so EA4-392 has to say whether the product can hit it before T1-A relies on that sequence.
 - **Resolved (T0.6): `events_logger` (P0-5).**
   - **What 1.x used:** EL and CloudLinux's podman used `file` (the vendor `containers.conf`), not journald. Pinning journald would have regressed `podman events` there.
   - **The pin:** `file` with `events_logfile_max_size = "1m"` and `log_driver = "k8s-file"` on EL and CloudLinux; `journald` for both on Ubuntu.
