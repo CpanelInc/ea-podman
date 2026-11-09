@@ -17,7 +17,7 @@ SELF=$(readlink -f "$0")
 R= D=    # R: root's private dir (mktemp) holding the pty helper; D=$R/u: the account's files
 X=t08x.$U.80 H=t08h.$U.81 F=t08f.$U.82 S=t08s.$U.83 P=t08p.$U.84
 
-cgof() { grep -E '^0::|name=systemd' "/proc/$1/cgroup" 2>/dev/null | head -1 | cut -d: -f3; }
+cgof() { cgroup_of "$1"; }
 unit_cg() { systemctl show -p ControlGroup --value "ea-podman-$1.service"; }    # from systemd, never from the account
 envs() { printf '%s ' "${PINNED[@]}"; }
 
@@ -25,14 +25,9 @@ envs() { printf '%s ' "${PINNED[@]}"; }
 # kernel puts it in the session scope root itself just created, owned by the account and running
 # the pty's sh: any other PID (a host service, another user's process) is refused. The account
 # can't move processes into that root-owned scope, so whatever is in it is the account's own.
-# scope_pid <pid> <scope unit>
+# lib.sh's safe_target does the checking; prints the refusal on stdout. scope_pid <pid> <scope unit>
 scope_pid() {
-    local scg
-    case $1 in ''|0|1|*[!0-9]*) echo "refusing PID '$1'"; return 1;; esac
-    scg=$(systemctl show -p ControlGroup --value "$2"); [ -n "$scg" ] || { echo "refusing PID $1: $2 is gone"; return 1; }
-    [ "$(cgof "$1")" = "$scg" ] || { echo "refusing PID $1: in '$(cgof "$1")', not $2"; return 1; }
-    [ "$(stat -c %u "/proc/$1" 2>/dev/null)" = "$UID_" ] || { echo "refusing PID $1: not uid $UID_"; return 1; }
-    [ "$(ps -o comm= -p "$1" 2>/dev/null)" = sh ] || { echo "refusing PID $1: comm '$(ps -o comm= -p "$1" 2>/dev/null)', not sh"; return 1; }
+    safe_target "$1" --cgroup-is "$(systemctl show -p ControlGroup --value "$2")" --uid "$UID_" --comm sh 2>&1
 }
 
 # Root's placement step: move <pid> into <unit>/<leaf> (v2 only; on v1 exec already lands in the
@@ -46,9 +41,8 @@ place() {    # pid, container, leaf, [scope unit the PID must be in]
     d=$CG$cg/$3
     mkdir "$d" 2>/dev/null || [ -d "$d" ] || { echo "mkdir $d failed"; return 1; }
     echo "$1" 2>&1 >"$d/cgroup.procs" || { echo "write to $d/cgroup.procs failed"; return 1; }
-    if [ -n "${4:-}" ] && { [ "$(stat -c %u "/proc/$1" 2>/dev/null)" != "$UID_" ] \
-            || [ "$(ps -o comm= -p "$1" 2>/dev/null)" != sh ]; }; then
-        echo "PID $1 changed hands during the move (now uid $(stat -c %u "/proc/$1" 2>/dev/null), comm $(ps -o comm= -p "$1" 2>/dev/null))"
+    if [ -n "${4:-}" ] && ! r=$(safe_target "$1" --uid "$UID_" --comm sh --cgroup-is "$cg/$3" 2>&1); then
+        echo "PID $1 changed hands during the move: $r"
         return 1
     fi
     echo "moved to $cg/$3"
@@ -65,7 +59,7 @@ acct_session() {
         env -i PATH=/usr/bin:/bin HOME="$HOME_" python3 -I "$R/t08pty.py" "$D/out$n" \
         "cd $HOME_; echo \$\$ >$D/pid$n; while [ ! -e $D/go$n ]; do sleep 0.2; done; exec $cmd" </dev/null >/dev/null 2>&1 &
     local i; for i in $(seq 50); do [ -s "$D/pid$n" ] && break; sleep 0.2; done
-    acct cat "$D/pid$n" 2>/dev/null
+    acct_pid "$D/pid$n"    # only a claim: place() checks it with scope_pid
 }
 exec_cmd() {    # container, n: the `ea-podman bash` exec, holding a `sleep 4<TAG><n>` in the container
     echo "env -i PATH=/usr/bin:/bin HOME=$HOME_ $(envs)/usr/bin/podman exec -it $1 sh -c 'tty; stty size; exec sleep 4$TAG$2'"

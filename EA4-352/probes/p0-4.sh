@@ -18,7 +18,6 @@ WHAT=${1:-all}
 A=eapodman.slice/eapodman-$UID_.slice
 NAMES=(web.$U.01 api.$U.02 worker.$U.03)
 for n in "${NAMES[@]}"; do systemctl is-active -q "ea-podman-$n.service" || { echo "ea-podman-$n.service not active" >&2; exit 1; }; done
-cgline() { grep -E '^0::|name=systemd' "/proc/$1/cgroup" 2>/dev/null | head -1 | cut -d: -f3; }
 v1path() { grep -E ":$2:" "/proc/$1/cgroup" 2>/dev/null | cut -d: -f3; }   # pid, controller list (v1)
 cleanup() {
     for c in p04split.$U.80 p04nosplit.$U.81 p04v1split.$U.82; do probe_unit_rm "$c" >/dev/null 2>&1; done
@@ -28,6 +27,10 @@ cleanup() {
     [ -n "${P4:-}" ] && rm -rf "$P4"
 }
 trap cleanup EXIT
+# pause.pid is account-writable: read it as the account, and use it only if it is the account's process.
+pause_pid() {
+    local p; p=$(acct_pid "$RUNDIR/libpod/tmp/pause.pid") && safe_target "$p" --uid "$UID_" && echo "$p"
+}
 
 basic() {
 hdr "1. placement"
@@ -35,10 +38,10 @@ for n in web.$U.01; do
     u=ea-podman-$n.service
     m=$(systemctl show -p MainPID --value "$u")
     c=$(as_user /usr/bin/podman inspect --format '{{.State.Pid}}' "$n" 2>/dev/null | tail -1)
-    p=$(cat "$RUNDIR/libpod/tmp/pause.pid" 2>/dev/null)
-    result conmon_cgroup "$(cgline "$m")"
-    result container_cgroup "$(cgline "$c")"
-    result pause_cgroup "$(cgline "$p")"
+    p=$(pause_pid)
+    result conmon_cgroup "$(cgroup_of "$m")"
+    result container_cgroup "$(cgroup_of "$c")"
+    result pause_cgroup "$(cgroup_of "$p")"
     if [ $CGV = 1 ]; then
         for ctl in memory pids cpu,cpuacct; do
             result "v1_${ctl/,/_}_conmon" "$(v1path "$m" "$ctl")"
@@ -52,7 +55,7 @@ systemctl stop "ea-podman-web.$U.01.service"; sleep 2
 ok=yes
 for n in api.$U.02 worker.$U.03; do systemctl is-active -q "ea-podman-$n.service" || ok="no ($n inactive)"; done
 curl -fsS -o /dev/null http://127.0.0.1:8082/ && curl -fsS -o /dev/null http://127.0.0.1:8083/ || ok="no (a port stopped serving)"
-pp=$(cat "$RUNDIR/libpod/tmp/pause.pid" 2>/dev/null); kill -0 "$pp" 2>/dev/null || ok="no (pause process gone)"
+pause_pid >/dev/null || ok="no (pause process gone)"
 result stop_one_unit_others_unaffected "$ok"
 systemctl start "ea-podman-web.$U.01.service"
 
@@ -92,7 +95,7 @@ for spec in "p04split.$U.80|split|nosplit" "p04nosplit.$U.81|nosplit|split"; do
     rec=$(as_user -c "$ETC/containers-$cc.conf" /usr/bin/podman inspect --format '{{.HostConfig.Cgroups}}' "$c" 2>/dev/null | tail -1)
     if probe_unit_start -c "$ETC/containers-$sc.conf" "$c" 2>/dev/null; then
         cp=$(as_user /usr/bin/podman inspect --format '{{.State.Pid}}' "$c" 2>/dev/null | tail -1)
-        where=$(cgline "$cp")
+        where=$(cgroup_of "$cp")
         if [ $CGV = 2 ]; then
             mm=$(cat "$CG$where/memory.max" 2>/dev/null)
             case $where in */libpod-payload-*) mode=split ;; *) mode=no-split ;; esac

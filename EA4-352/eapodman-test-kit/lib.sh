@@ -161,19 +161,55 @@ WantedBy=multi-user.target
 UNIT
 }
 
+# ---------------------------------------------------------------- PIDs
 # The cgroup path systemd sees a PID in (v2's 0:: line, v1's name=systemd line).
 cgroup_of() { grep -E '^0::|name=systemd' "/proc/$1/cgroup" 2>/dev/null | head -1 | cut -d: -f3; }
 
-# Before signalling a PID that came from systemd or podman: it must be an integer above 1 and
-# have the expected comm (`kill 0` would hit our own process group; a stale PID may be reused).
-# Optional third argument: a cgroup path fragment the PID must be in.
-safe_target() {    # pid, expected comm, [cgroup fragment]
-    case $1 in ''|0|1|*[!0-9]*) echo "refusing to signal PID '$1'" >&2; return 1;; esac
-    [ -n "$2" ] || { echo "refusing to signal PID $1: no expected comm (has it exited?)" >&2; return 1; }
-    [ "$(ps -o comm= -p "$1" 2>/dev/null)" = "$2" ] \
-        || { echo "PID $1 is '$(ps -o comm= -p "$1" 2>/dev/null)', not '$2'" >&2; return 1; }
-    [ -z "${3:-}" ] || grep -qF "$3" "/proc/$1/cgroup" \
-        || { echo "PID $1 is not in a cgroup matching $3" >&2; return 1; }
+# A PID file the account can write (anything under $RUNDIR or $HOME_) can be a symlink to
+# /etc/shadow, or hold any number. Root reads it only as the account, and only digits come back;
+# nothing else from it is ever printed. What comes back is still only the account's claim: pass it
+# to safe_target with --uid and a cgroup check before acting on it. acct_pid <file>
+acct_pid() {
+    local v
+    v=$(as_acct init head -c 32 -- "$1" 2>/dev/null | tr -d '\n')
+    case $v in ''|*[!0-9]*) return 1;; esac
+    echo "$v"
+}
+
+# Before root signals, moves or reports on a PID: it must be an integer above 1 (`kill 0` hits our
+# own process group, `kill -1` everything) and pass every check the caller names, at least one:
+#   --comm C       its comm is C (a stale PID may have been reused)
+#   --uid N        it runs as uid N
+#   --cgroup F     its /proc/<pid>/cgroup contains the fragment F
+#   --cgroup-is P  cgroup_of is exactly P (e.g. a scope root itself created)
+# A PID from systemd (MainPID) needs --comm; one from acct_pid also needs --uid and a cgroup check.
+# Refusals go to stderr; non-zero means "don't touch it". safe_target <pid> <checks...>
+safe_target() {
+    local pid=$1 n=0 got; shift
+    case $pid in ''|0|1|*[!0-9]*) echo "refusing PID '$pid'" >&2; return 1;; esac
+    while [ $# -gt 0 ]; do
+        [ $# -ge 2 ] || { echo "safe_target: $1 needs a value" >&2; return 2; }
+        n=$((n + 1))
+        case $1 in
+        --comm)
+            [ -n "$2" ] || { echo "refusing PID $pid: no expected comm (has it exited?)" >&2; return 1; }
+            got=$(ps -o comm= -p "$pid" 2>/dev/null)
+            [ "$got" = "$2" ] || { echo "refusing PID $pid: comm '$got', not '$2'" >&2; return 1; } ;;
+        --uid)
+            got=$(stat -c %u "/proc/$pid" 2>/dev/null)
+            [ "$got" = "$2" ] || { echo "refusing PID $pid: uid '$got', not $2" >&2; return 1; } ;;
+        --cgroup)
+            grep -qF -- "$2" "/proc/$pid/cgroup" 2>/dev/null \
+                || { echo "refusing PID $pid: not in a cgroup matching $2" >&2; return 1; } ;;
+        --cgroup-is)
+            [ -n "$2" ] || { echo "refusing PID $pid: no expected cgroup (is the unit gone?)" >&2; return 1; }
+            got=$(cgroup_of "$pid")
+            [ "$got" = "$2" ] || { echo "refusing PID $pid: in '$got', not $2" >&2; return 1; } ;;
+        *) echo "safe_target: unknown check $1" >&2; return 2 ;;
+        esac
+        shift 2
+    done
+    [ $n -gt 0 ] || { echo "refusing PID $pid: no check given" >&2; return 1; }
 }
 
 FAILS=0

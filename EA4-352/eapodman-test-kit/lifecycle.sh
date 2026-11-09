@@ -101,7 +101,7 @@ trap cleanup EXIT
 
 echo "== 1. SIGKILL conmon of worker.$U.03"
 n=worker.$U.03; main=$(prop "$n" MainPID); nr=$(prop "$n" NRestarts); t=$(cursor) || exit 1
-if safe_target "$main" conmon "/ea-podman-$n.service"; then
+if safe_target "$main" --comm conmon --cgroup "/ea-podman-$n.service"; then
     kill -KILL "$main"
     f15_check "$t" "ea-podman-$n.service" "worker comes back through Restart=" recovered "$n" "$main" "$nr"
     journal_since "$t" "ea-podman-$n.service"
@@ -114,7 +114,7 @@ n=api.$U.02; main=$(prop "$n" MainPID); nr=$(prop "$n" NRestarts); t=$(cursor) |
 init=$(as_user /usr/bin/podman container inspect --format '{{.State.Pid}}' "$n")
 echo "  container init PID $init ($(comm "$init"))"
 # The init's comm depends on the image, so check the PID is in the container's payload cgroup instead.
-if safe_target "$init" "$(comm "$init")" "/ea-podman-$n.service/libpod-payload-"; then
+if safe_target "$init" --cgroup "/ea-podman-$n.service/libpod-payload-"; then
     kill -KILL "$init"
     check "api comes back through Restart=" recovered "$n" "$main" "$nr"
     journal_since "$t" "ea-podman-$n.service"
@@ -122,20 +122,11 @@ else
     check "api's container init is a process in its payload cgroup (test 2 not run)" false
 fi
 
-# A PID file in the runtime tmpfs is the account's: it can be a symlink to /etc/shadow. Root reads
-# it only as the account, and only digits come back; nothing else from it is ever printed.
-acct_pid() {    # file
-    local v
-    v=$(as_acct init head -c 32 -- "$1" 2>/dev/null | tr -d '\n')
-    case $v in ''|*[!0-9]*) return 1;; esac
-    echo "$v"
-}
-
 echo; echo "== 3. account writes root PID $DECOY into web.$U.01's conmon.pid, then conmon dies"
 n=web.$U.01; main=$(prop "$n" MainPID); nr=$(prop "$n" NRestarts); t=$(cursor) || exit 1
 pidfile=$(prop "$n" PIDFile)
 # The test only means something if the hostile PID really is in the file when conmon dies.
-if ! safe_target "$main" conmon "/ea-podman-$n.service"; then
+if ! safe_target "$main" --comm conmon --cgroup "/ea-podman-$n.service"; then
     check "web's MainPID is a conmon inside its unit (test 3 not run)" false
 elif ! as_user /bin/sh -c 'echo "$1" >"$2"' _ "$DECOY" "$pidfile" || [ "$(acct_pid "$pidfile")" != "$DECOY" ]; then
     check "the account wrote $DECOY into $pidfile (test 3 not run; it holds $(acct_pid "$pidfile" || echo 'no PID'))" false

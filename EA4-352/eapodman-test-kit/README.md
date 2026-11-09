@@ -26,7 +26,7 @@ Run the kit once at a time per account. Two runs against the same account share 
 
 ## Guards
 
-- No script signals a PID it hasn't checked: it must be an integer above 1, with the expected comm, inside the expected cgroup (`safe_target` in `lib.sh`).
+- No script signals, moves or reports on a PID it hasn't checked with `safe_target` in `lib.sh` (also used by the probes): an integer above 1 that passes every check the caller names (`--comm`, `--uid`, `--cgroup`, `--cgroup-is`). A PID from a file the account can write is read only through `acct_pid` (as the account, digits only) and is only a claim, so it also needs `--uid` and a cgroup check.
 - Everything run as the account goes through `lib.sh`: `acct_unit`/`as_user` (a transient unit in the account's slice) or `as_acct <init|clear>` (no unit; `as_acct_in_cgroup` to enter a container's cgroup first). All of them give the account its own supplementary groups, as the product's `User=` units get them; `as_acct` takes the choice as an argument so a caller that needs `clear` has to say so.
 - The container unit has one template, `container_unit` in `lib.sh`. A caller varies it only through its options (`-c` containers.conf, `-s` an extra `[Service]` line), never by editing its output, and `as_user -c` / `probe_create -c` use another containers.conf for that call only.
 - A test whose setup didn't happen fails instead of passing vacuously. For example, the hostile PID must be in `conmon.pid` before conmon is killed, systemd must log its refusal, and the background loads must still be running when measured.

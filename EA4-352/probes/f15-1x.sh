@@ -20,8 +20,9 @@ as_user_old /bin/sh -c "mkdir -p ~/.config/systemd/user && cd ~/.config/systemd/
 u=container-$C.service
 show() { as_user_old systemctl --user show -p "$1" --value $u 2>/dev/null; }
 m=$(show MainPID); c=$(as_user_old /usr/bin/podman inspect --format '{{.State.Pid}}' $C 2>/dev/null | tail -1)
-result before "active=$(show ActiveState) conmon=$m in $(cgline() { grep -E '^0::' /proc/$1/cgroup | cut -d: -f3; }; cgline $m) container in $(grep -E '^0::' /proc/$c/cgroup | cut -d: -f3)"
-safe_target "$m" conmon || exit 1
+result before "active=$(show ActiveState) conmon=$m in $(cgroup_of "$m") container in $(cgroup_of "$c")"
+# The account's own user manager reported this PID: it must be the account's conmon.
+safe_target "$m" --comm conmon --uid "$UID_" || exit 1
 kill -9 "$m"
 sleep 30
 c2=$(as_user_old /usr/bin/podman inspect --format '{{.State.Status}} pid={{.State.Pid}}' $C 2>/dev/null | tail -1)

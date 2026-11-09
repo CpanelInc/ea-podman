@@ -47,12 +47,12 @@ o=$(as_user /usr/bin/podman unshare /bin/true 2>&1); result runner_podman_unshar
 for n in web.$U.01 api.$U.02 worker.$U.03; do systemctl restart "ea-podman-$n.service"; done
 sleep 3; o=$(for p in 8081 8082 8083; do curl -s -m3 -o /dev/null -w '%{http_code} ' http://127.0.0.1:$p/; done)
 result units_restart "$o"
-# pause.pid is account-writable: signal it as root only if it is a real PID owned by the account.
-pp=$(cat "$RUNDIR/libpod/tmp/pause.pid" 2>/dev/null)
-if [[ "$pp" =~ ^[1-9][0-9]*$ ]] && [ "$pp" -gt 1 ] && [ "$(stat -c %u "/proc/$pp" 2>/dev/null)" = "$UID_" ]; then
+# pause.pid is account-writable: read it as the account, and signal it as root only if it is the
+# account's process in the account's slice.
+if pp=$(acct_pid "$RUNDIR/libpod/tmp/pause.pid") && r=$(safe_target "$pp" --uid "$UID_" --cgroup "/eapodman-$UID_.slice/" 2>&1); then
     kill -9 "$pp"; sleep 1
 else
-    info "pause.pid '$pp' is not a process of $U; not killing it"
+    info "pause.pid is not a process of $U in its slice (${r:-no PID in it}); not killing it"
 fi
 for n in web.$U.01 api.$U.02 worker.$U.03; do systemctl stop "ea-podman-$n.service"; done
 systemctl restart "ea-podman-runtime@$UID_.service"; rc=$?

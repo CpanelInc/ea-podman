@@ -10,6 +10,11 @@ cd "$(dirname "$0")"; PROBE=t0-6; . ./plib.sh
 A=eapodman.slice/eapodman-$UID_.slice
 WEB=ea-podman-web.$U.01.service
 lim() { awk -v k="$2" '$0 ~ "^Max "k {print $(NF-2)"/"$(NF-1)}' "/proc/$1/limits"; }   # soft/hard
+# nproc of a PID that passes lib.sh's safe_target checks; any other is "not-measured", never blank.
+nproc_of() {    # pid, safe_target checks...
+    local pid=$1; shift
+    safe_target "$pid" "$@" 2>/dev/null && lim "$pid" processes || echo not-measured
+}
 
 basic() {
 hdr "host"
@@ -37,8 +42,8 @@ result eapodman_slice_tasks_max "$(systemctl show -p TasksMax --value eapodman.s
 hdr "nproc as 2.0 runs it (kit: unit LimitNPROC=infinity, create through the runner)"
 m=$(systemctl show -p MainPID --value $WEB)
 c=$(as_user /usr/bin/podman inspect --format '{{.State.Pid}}' web.$U.01 2>/dev/null | tail -1)
-p=$(cat "$RUNDIR/libpod/tmp/pause.pid" 2>/dev/null)
-result nproc_2x "conmon=$(lim $m processes) container_init=$(lim $c processes) pause=$(lim $p processes) runner=$(as_user /bin/sh -c 'echo $(ulimit -Su)/$(ulimit -Hu)' 2>/dev/null)"
+p=$(acct_pid "$RUNDIR/libpod/tmp/pause.pid")
+result nproc_2x "conmon=$(nproc_of "$m" --comm conmon --cgroup "/$WEB") container_init=$(nproc_of "$c" --uid "$UID_" --cgroup "/$WEB/") pause=$(nproc_of "$p" --uid "$UID_" --cgroup "/eapodman-$UID_.slice/") runner=$(as_user /bin/sh -c 'echo $(ulimit -Su)/$(ulimit -Hu)' 2>/dev/null)"
 result container_spec_nproc "$(as_user /usr/bin/podman inspect --format '{{range .HostConfig.Ulimits}}{{if eq .Name "RLIMIT_NPROC"}}{{.Soft}}/{{.Hard}}{{end}}{{end}}' web.$U.01 2>/dev/null | tail -1)"
 
 hdr "1.x parity: the account's own user@ and logind's /run/user/<uid>"
