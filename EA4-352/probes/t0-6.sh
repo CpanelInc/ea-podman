@@ -74,11 +74,25 @@ result wait_and_inspect_exit_code "wait=$w inspect=$x (want 4)"
 as_user /usr/bin/podman rm -f t06w >/dev/null 2>&1
 
 hdr "the account slice's TasksMax under a fork storm (LimitNPROC infinity on the unit)"
-if [ $CGV = 2 ]; then target=$(ls -d "$CG/$A/$WEB"/libpod-payload-* | head -1); cur=$(cat "$CG/$A/pids.current")
-else target="$CG/pids/$A/$WEB"; cur=$(cat "$CG/pids/$A/pids.current"); fi
+# The storm only counts if it ran inside the container's cgroup: an unmatched glob or a failed
+# cgroup.procs write would otherwise fork outside the slice's limit and report a number anyway.
+if [ $CGV = 2 ]; then
+    targets=("$CG/$A/$WEB"/libpod-payload-*); cur=$(cat "$CG/$A/pids.current")
+    want="0::${targets[0]#$CG}"
+else
+    targets=("$CG/pids/$A/$WEB"); cur=$(cat "$CG/pids/$A/pids.current")
+    want=":pids:${targets[0]#$CG/pids}"
+fi
+target=${targets[0]}
+if [ ${#targets[@]} != 1 ] || [ ! -d "$target" ] || [ -z "$cur" ]; then
+    inconclusive fork_storm "no single cgroup to run it in (${targets[*]}) or no pids.current ($cur)"
+    return
+fi
 change_prop "eapodman-$UID_.slice" TasksMax $((cur + 100)) || exit 1
-got=$(as_acct_in_cgroup "$target" init python3 -c '
+# Prints its own cgroup lines first, then the count.
+out=$(as_acct_in_cgroup "$target" init python3 -c '
 import os, signal, time
+print(open("/proc/self/cgroup").read().replace("\n", ";"))
 kids = []
 try:
     for i in range(400):
@@ -93,9 +107,16 @@ for k in kids:
     os.kill(k, signal.SIGKILL)
 for k in kids:
     os.waitpid(k, 0)
-' 2>&1 | tail -1)
+' 2>&1); rc=$?
 restore_prop "eapodman-$UID_.slice" TasksMax || exit 1
-result fork_storm "slice had $cur tasks, TasksMax set to $((cur + 100)); forks that succeeded: $got of 400"
+got=$(tail -1 <<<"$out")
+if [ $rc != 0 ] || [[ $got = *[!0-9]* ]] || [ -z "$got" ]; then
+    inconclusive fork_storm "the forker failed (rc=$rc): $got"
+elif [[ ";$(head -1 <<<"$out")" != *"$want;"* ]]; then
+    inconclusive fork_storm "the forker ran in $(head -1 <<<"$out"), not $want"
+else
+    result fork_storm "slice had $cur tasks, TasksMax set to $((cur + 100)); forks that succeeded: $got of 400"
+fi
 }
 
 units() {
@@ -140,3 +161,4 @@ done
 }
 
 case ${1:-basic} in basic) basic ;; units) units ;; swap) swap ;; esac
+probe_exit
