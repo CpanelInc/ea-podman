@@ -1,5 +1,5 @@
 host ea4-352-el10 os=almalinux-10.2 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
-probe p0-12.sh=6fae554c1489 plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+probe p0-12.sh=22e81d1f726a plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
 RESULT p0-12.userns_create_hook yes
 RESULT p0-12.bpf_in_lsm_list yes
 
@@ -24,4 +24,4 @@ RESULT p0-12.user_slice_unshare denied (unshare: unshare failed: Operation not p
 RESULT p0-12.root_unshare works
   counters: allowed=3 denied=4
 RESULT p0-12.allowed_by_program yes (+3)
-RESULT p0-12.denials_by_program yes (+4)
+RESULT p0-12.denials_by_program yes (+4 for 4 denied)
