@@ -14,7 +14,7 @@ cd "$(dirname "$0")"; PROBE=t0-8
 . ./plib.sh
 TAG=$$
 SELF=$(readlink -f "$0")
-D=/tmp/t08-$TAG
+R= D=    # R: root's private dir (mktemp) holding the pty helper; D=$R/u: the account's files
 X=t08x.$U.80 H=t08h.$U.81 F=t08f.$U.82 S=t08s.$U.83 P=t08p.$U.84
 
 cgof() { grep -E '^0::|name=systemd' "/proc/$1/cgroup" 2>/dev/null | head -1 | cut -d: -f3; }
@@ -40,20 +40,24 @@ acct_session() {
     rm -f "$D/pid$n" "$D/go$n"
     systemd-run --quiet --scope --slice="user-$UID_.slice" --unit="t08-acct-$TAG-$n" -- \
         setpriv --reuid="$UID_" --regid="$GID_" --init-groups \
-        env -i PATH=/usr/bin:/bin HOME="$HOME_" python3 -I "$D/t08pty.py" "$D/out$n" \
+        env -i PATH=/usr/bin:/bin HOME="$HOME_" python3 -I "$R/t08pty.py" "$D/out$n" \
         "cd $HOME_; echo \$\$ >$D/pid$n; while [ ! -e $D/go$n ]; do sleep 0.2; done; exec $cmd" </dev/null >/dev/null 2>&1 &
     local i; for i in $(seq 50); do [ -s "$D/pid$n" ] && break; sleep 0.2; done
-    cat "$D/pid$n" 2>/dev/null
+    acct cat "$D/pid$n" 2>/dev/null
 }
 exec_cmd() {    # container, n: the `ea-podman bash` exec, holding a `sleep 4<TAG><n>` in the container
     echo "env -i PATH=/usr/bin:/bin HOME=$HOME_ $(envs)/usr/bin/podman exec -it $1 sh -c 'tty; stty size; exec sleep 4$TAG$2'"
 }
+# D is the account's dir: root reads and writes in it only as the account, so planted symlinks are harmless.
+acct() { setpriv --reuid="$UID_" --regid="$GID_" --init-groups "$@"; }
+go() { acct touch "$D/go$1"; }
 held() { pgrep -f "^sleep 4$TAG$1\$" | head -1; }
-out() { tr -d '\r' <"$D/out$1" 2>/dev/null | grep -v '^$' | grep -v 'level=warning' | tail -4 | paste -sd'|' -; }
+out() { acct cat "$D/out$1" 2>/dev/null | tr -d '\r' | grep -v '^$' | grep -v 'level=warning' | tail -4 | paste -sd'|' -; }
 
 setup_d() {
-    mkdir -p "$D"; chown "$UID_:$GID_" "$D"
-    cat >"$D/t08pty.py" <<'PY'
+    R=$(mktemp -d /tmp/t08-$TAG.XXXXXX) || exit 1; chmod 0755 "$R"
+    D=$R/u; mkdir "$D"; chown "$UID_:$GID_" "$D"    # new, in a dir only root can write
+    cat >"$R/t08pty.py" <<'PY'
 import fcntl, os, pty, select, struct, sys, termios
 of, cmd = sys.argv[1], sys.argv[2]
 pid, fd = pty.fork()
@@ -85,16 +89,16 @@ PY
 bash_mode() {
     local p cg i t0 t1 r
     cleanup() {
-        pkill -9 -f "sleep 4$TAG" 2>/dev/null; pkill -9 -u "$U" -f "$D/t08pty.py" 2>/dev/null; sleep 1
+        pkill -9 -f "sleep 4$TAG" 2>/dev/null; pkill -9 -u "$U" -f "$R/t08pty.py" 2>/dev/null; sleep 1
         [ $CGV = 2 ] && [ -n "$(unit_cg $X)" ] && echo 0 >"$CG$(unit_cg $X)/ea-podman-exec/cgroup.freeze" 2>/dev/null
-        probe_unit_rm $X >/dev/null 2>&1; rm -rf "$D"
+        probe_unit_rm $X >/dev/null 2>&1; [ -n "$R" ] && rm -rf "$R"
     }
     trap cleanup EXIT
     setup_d
     probe_create $X "$IMAGE" >/dev/null 2>&1 && probe_unit_start $X >/dev/null 2>&1 || { result setup "container $X did not start"; return 1; }
 
     hdr "baseline: the account's own exec -it, not moved (as 2.0 is planned)"
-    p=$(acct_session 0 "$(exec_cmd $X 0)"); touch "$D/go0"; sleep 4
+    p=$(acct_session 0 "$(exec_cmd $X 0)"); go 0; sleep 4
     if [ -n "$(held 0)" ]; then result exec_not_moved "works; exec'd process in $(cgof "$(held 0)")"
     else result exec_not_moved "FAILS: $(out 0)"; fi
     pkill -9 -f "sleep 4${TAG}0" 2>/dev/null
@@ -102,7 +106,7 @@ bash_mode() {
     hdr "root moves the account's waiting process into <unit>/ea-podman-exec, then it runs exec -it"
     p=$(acct_session 1 "$(exec_cmd $X 1)")
     result place_1 "$(place "$p" $X ea-podman-exec)"
-    touch "$D/go1"; sleep 4
+    go 1; sleep 4
     if [ -n "$(held 1)" ]; then
         result exec_moved "works; exec'd process in $(cgof "$(held 1)")"
         result exec_moved_client "podman client (moved pid $p) in $(cgof "$p")"
@@ -126,7 +130,7 @@ bash_mode() {
         result hostile_leaf "account mkdir+freeze: $(cat $CG$cg/ea-podman-exec/cgroup.freeze 2>/dev/null || echo 'not created')"
         p=$(acct_session 2 "$(exec_cmd $X 2)")
         t0=$(date +%s%N); r=$(place "$p" $X ea-podman-exec); t1=$(date +%s%N)
-        touch "$D/go2"; sleep 4
+        go 2; sleep 4
         result hostile_place "root step: $r in $(( (t1 - t0) / 1000000 )) ms; account's process state=$(awk '/^State/{print $2}' /proc/$p/status 2>/dev/null) frozen=$(awk '/^frozen/{print $2}' $CG$cg/ea-podman-exec/cgroup.events); exec ran=$([ -n "$(held 2)" ] && echo yes || echo no)"
         echo 0 >"$CG$cg/ea-podman-exec/cgroup.freeze"; sleep 3
         result hostile_thaw "after the account thaws it: exec ran=$([ -n "$(held 2)" ] && echo yes || echo no)"

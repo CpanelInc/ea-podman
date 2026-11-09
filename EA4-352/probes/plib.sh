@@ -45,6 +45,11 @@ user_build_ctx() {
         sh "$1" "$IMAGE" "$2"
 }
 user_rm() { as_user_env 60 -- /bin/rm -rf "$1"; }
+# Run a shell snippet as the account, for paths it controls: user_sh '<script>' <args...> ($1...)
+user_sh() { local s=$1; shift; as_user_env 60 -- /bin/sh -c "$s" sh "$@"; }
+# A fresh root-owned file at a fixed path in a sticky /tmp or /var/tmp: O_EXCL after the rm, so a
+# planted symlink makes it fail instead of being followed. new_tmp <path>
+new_tmp() { rm -f "$1" && ( set -C; : >"$1" ); }
 
 # A probe container with its own unit, from the kit's template: probe_create <name> <podman create flags...>
 # then probe_unit_start <name>; probe_unit_rm <name> removes both.

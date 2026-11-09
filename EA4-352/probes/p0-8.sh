@@ -7,21 +7,26 @@ cd "$(dirname "$0")"; . ./plib.sh
 UC=$HOME_/.config/containers
 BK=$HOME_/.config/containers.p08-backup
 # Refuse before any cleanup is armed: a leftover backup belongs to an earlier run, not this one.
-[ -e "$BK" ] && { echo "$BK exists; restore it first" >&2; exit 1; }
-if [ -e "$UC" ]; then
-    mv "$UC" "$BK" || { echo "could not move $UC aside" >&2; exit 1; }
+# The account owns these paths, so the account moves, writes and removes them, never root.
+if [ -e "$BK" ] || [ -L "$BK" ]; then echo "$BK exists; restore it first" >&2; exit 1; fi
+if [ -e "$UC" ] || [ -L "$UC" ]; then
+    user_sh 'mv "$1" "$2"' "$UC" "$BK" || { echo "could not move $UC aside" >&2; exit 1; }
 fi
+ST=
 cleanup() {    # UC is always this run's hostile config; BK, if any, is what this run moved aside
-    rm -rf "$UC"; [ -e "$BK" ] && mv "$BK" "$UC"
+    user_sh 'rm -rf "$1"; if [ -e "$2" ] || [ -L "$2" ]; then mv "$2" "$1"; fi' "$UC" "$BK"
+    [ -n "$ST" ] && rm -rf "$ST"
     probe_unit_rm p08.$U.60
     rm -f /tmp/p08-host-mark
 }
 trap cleanup EXIT
 
 # Hostile account config: each setting would be visible if podman read it.
-install -d -o "$U" -g "$GID_" "$HOME_/.config" "$UC" "$UC/containers.conf.d" "$UC/registries.d"
+# Written by root in a private staging dir, then copied in by the account.
+ST=$(mktemp -d) || exit 1; mkdir "$ST/containers.conf.d" "$ST/registries.d"
+new_tmp /tmp/p08-host-mark || { result setup "could not create /tmp/p08-host-mark"; exit 1; }
 echo hostile >/tmp/p08-host-mark; chmod 0644 /tmp/p08-host-mark
-cat >"$UC/containers.conf" <<'EOF'
+cat >"$ST/containers.conf" <<'EOF'
 [containers]
 env = ["P08_FROM=user-containers.conf"]
 log_driver = "none"
@@ -29,24 +34,25 @@ log_driver = "none"
 cgroup_manager = "systemd"
 events_logger = "file"
 EOF
-cat >"$UC/containers.conf.d/99-p08.conf" <<'EOF'
+cat >"$ST/containers.conf.d/99-p08.conf" <<'EOF'
 [containers]
 env = ["P08_DROPIN=user-dropin"]
 EOF
-cat >"$UC/storage.conf" <<EOF
+cat >"$ST/storage.conf" <<EOF
 [storage]
 driver = "vfs"
 graphroot = "$HOME_/p08-hostile-storage"
 EOF
-cat >"$UC/registries.conf" <<'EOF'
+cat >"$ST/registries.conf" <<'EOF'
 unqualified-search-registries = ["quay.io"]
 EOF
 # Reject every image: if this were read, a pull or create would fail.
-cat >"$UC/policy.json" <<'EOF'
+cat >"$ST/policy.json" <<'EOF'
 { "default": [ { "type": "reject" } ] }
 EOF
-echo "/tmp/p08-host-mark:/run/p08-mark" >"$UC/mounts.conf"
-chown -R "$U:$GID_" "$UC"
+echo "/tmp/p08-host-mark:/run/p08-mark" >"$ST/mounts.conf"
+chmod -R a+rX "$ST"
+user_sh 'mkdir -p "$1" && cp -R "$2/." "$1/"' "$UC" "$ST" || { result setup "the account could not write $UC"; exit 1; }
 
 hdr "podman info under podman_env, with a hostile ~/.config/containers"
 out=$(as_user /usr/bin/podman info --format '{{.Host.CgroupManager}}|{{.Store.GraphDriverName}}|{{.Store.GraphRoot}}|{{.Host.EventLogger}}|{{.Host.NetworkBackend}}' 2>&1)

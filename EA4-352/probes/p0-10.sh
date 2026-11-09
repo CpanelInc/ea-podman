@@ -11,8 +11,8 @@ MARK=/var/tmp/clos7971-canary-$UID_
 UD=$HOME_/.config/systemd/user
 case ${1:-} in
 pre)
-    install -d -o "$U" -g "$GID_" "$HOME_/.config" "$HOME_/.config/systemd" "$UD" "$UD/default.target.wants"
-    cat >"$UD/clos7971-canary.service" <<EOF
+    # The account writes its own ~/.config; root only builds the text.
+    unit=$(cat <<EOF
 [Unit]
 Description=CLOS-7971 canary (must never run)
 [Service]
@@ -21,12 +21,14 @@ ExecStart=/bin/sh -c 'echo "ran as \$(id) at \$(date) caps \$(grep CapEff /proc/
 [Install]
 WantedBy=default.target
 EOF
-    ln -sf ../clos7971-canary.service "$UD/default.target.wants/clos7971-canary.service"
-    chown -R "$U:$GID_" "$UD"
+)
+    user_sh 'mkdir -p "$1/default.target.wants" && printf "%s\n" "$2" >"$1/clos7971-canary.service" &&
+        ln -sf ../clos7971-canary.service "$1/default.target.wants/clos7971-canary.service"' "$UD" "$unit" \
+        || { result planted "FAILS: the account could not write $UD"; exit 1; }
     rm -f "$MARK"
     result linger "$(ls /var/lib/systemd/linger/ 2>/dev/null | grep -qx "$U" && echo YES || echo no)"
     result planted "$UD/clos7971-canary.service"
-    date +%s >/var/tmp/p0-10-reboot-at
+    new_tmp /var/tmp/p0-10-reboot-at && date +%s >/var/tmp/p0-10-reboot-at
     ;;
 post)
     result booted_after_pre "$([ "$(cut -d. -f1 /proc/uptime)" -lt $(( $(date +%s) - $(cat /var/tmp/p0-10-reboot-at) )) ] && echo yes || echo NO)"
@@ -48,7 +50,8 @@ post)
         result split_after_reboot "$(ls -d "$CG/eapodman.slice/eapodman-$UID_.slice/ea-podman-web.$U.01.service"/libpod-payload-* >/dev/null 2>&1 && echo yes || echo no)"
     fi
     result slice_dropins "$(systemctl show -p MemoryLow -p MemoryMax -p TasksMax --value "eapodman-$UID_.slice" | tr '\n' ' ')"
-    rm -rf "$UD/clos7971-canary.service" "$UD/default.target.wants/clos7971-canary.service" "$MARK" /var/tmp/p0-10-reboot-at
+    user_sh 'rm -f "$1/clos7971-canary.service" "$1/default.target.wants/clos7971-canary.service"' "$UD"
+    rm -f "$MARK" /var/tmp/p0-10-reboot-at
     ;;
 *) echo "usage: $0 pre|post" >&2; exit 2 ;;
 esac
