@@ -1,12 +1,12 @@
 host ea4-352-u24 os=ubuntu-24.04 kernel=6.8.0-149-generic cgroup=v2 systemd=255 podman=4.9.3
-probe p0-12.sh=c47d0157c7f7 plib.sh=fd17d062fc15 lib.sh=a7f0c6e05931
+probe p0-12.sh=6fae554c1489 plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
 RESULT p0-12.userns_create_hook yes
 RESULT p0-12.bpf_in_lsm_list yes
 
 ### build and load
   eapodman.slice cgroup id 88
 RESULT p0-12.load_and_attach works
-  counters: 
+  counters: allowed=0 denied=0
 
 ### must work (inside eapodman.slice)
 RESULT p0-12.runner_podman_unshare works
@@ -22,4 +22,6 @@ RESULT p0-12.ssh_shell_raw_podman_run denied (cannot clone: Operation not permit
 RESULT p0-12.cron_like_system_slice_unshare denied (unshare: unshare failed: Operation not permitted)
 RESULT p0-12.user_slice_unshare denied (unshare: unshare failed: Operation not permitted)
 RESULT p0-12.root_unshare works
-  counters: 
+  counters: allowed=8 denied=4
+RESULT p0-12.allowed_by_program yes (+8)
+RESULT p0-12.denials_by_program yes (+4)
