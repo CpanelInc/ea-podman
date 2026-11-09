@@ -1,4 +1,4 @@
-# ea-podman 2.0 and CloudLinux: three questions (EA4-368 T0.7)
+# ea-podman 2.0 and CloudLinux: four questions (EA4-368 T0.7, EA4-389)
 
 **Context.** ea-podman (cPanel's rootless-podman manager, used by Web Apps) is dropping `systemd --user` in 2.0. That answers CLOS-4517: CageFS masks `user@.service`, and ea-podman 1.x worked around the mask with per-account `user@<uid>` copies. CLOS-7971 shows why that workaround has to go. In 2.0 each container is a root-owned system unit:
 
@@ -8,7 +8,7 @@
 
 We tested this on CloudLinux 8.10 (cgroup v1), 9.8 (cgroup v2) and 10 (v2), all with CageFS 7.6.52. Caged accounts' containers run from these units, including after a reboot. A CLOS-7971-style unit planted in `~/.config/systemd/user` never ran, and no `user@<uid>` existed after the reboot. The design is in [PLAN.md](https://github.com/webpros-cpanel/ea-podman/blob/EA4-352/EA4-352/PLAN.md), and we can share whichever parts help.
 
-None of the questions below blocks 2.0. Your answers decide what we document now and what we build later.
+Questions 1–3 don't block 2.0; your answers decide what we document now and what we build later. Question 4 asks about the one assumption the whole 2.0 design rests on, so it matters most to us.
 
 ## 1. CloudLinux 10 ships `user.max_user_namespaces=0` (CLOS-2616)
 
@@ -50,6 +50,15 @@ On v1, a `PAMName=` process is in the LVE for memory, pids and cpu, and systemd 
 
 - Does this approach cause any problems for CloudLinux customers or tools (`lvestats`, LVE Manager)?
 - Could a future LVE account for a systemd-delegated subtree? For example, `lve<uid>` could charge or limit `eapodman.slice/eapodman-<uid>.slice` without moving processes out of it. That would let a later release have both LVE limits and per-container limits.
+
+## 4. System units that run as a caged account
+
+2.0 rests on one assumption: CageFS keeps allowing a root-owned system unit with `User=<caged account>` and `Delegate=yes` to run that account's podman outside its cage, in the unit's delegated cgroup under `eapodman.slice`. Nothing the account controls starts these units; root writes and starts them, and the account can't add or change one. Today this works on CL8.10, 9.8 and 10 with CageFS 7.6.52, including after a reboot.
+
+We are aware that CLOS-4517 masked `user@.service` because a manager spawned by PID 1 ran account-controlled units outside the cage. 2.0's units are not account-controlled, but we want to be sure they don't fall under the same policy.
+
+- Is CloudLinux planning CageFS or LVE changes that would affect system units running as a caged user outside the cage, or the cgroups systemd delegates to them?
+- Is there anything about this layout you would want changed, or a CageFS setting we should check for, before we ship it?
 
 ## Contacts
 
