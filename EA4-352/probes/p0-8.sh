@@ -32,7 +32,7 @@ env = ["P08_FROM=user-containers.conf"]
 log_driver = "none"
 [engine]
 cgroup_manager = "systemd"
-events_logger = "file"
+events_logger = "none"
 EOF
 cat >"$ST/containers.conf.d/99-p08.conf" <<'EOF'
 [containers]
@@ -58,7 +58,14 @@ hdr "podman info under podman_env, with a hostile ~/.config/containers"
 out=$(as_user /usr/bin/podman info --format '{{.Host.CgroupManager}}|{{.Store.GraphDriverName}}|{{.Store.GraphRoot}}|{{.Host.EventLogger}}|{{.Host.NetworkBackend}}' 2>&1)
 info "$out"
 IFS='|' read -r mgr drv graph evl netbk <<<"$(tail -1 <<<"$out")"
-result user_containers_conf_ignored "$([ "$mgr" = cgroupfs ] && [ "$evl" = journald ] && echo yes || echo "NO (mgr=$mgr events=$evl)")"
+# The hostile values (systemd, none) are ones the pinned conf never uses; compare with what it pins
+# (T0.6: "file" on EL and CloudLinux, "journald" on Ubuntu).
+pinned_evl=$(sed -n 's/^events_logger = "\(.*\)"$/\1/p' "$ETC/containers.conf")
+if [ -z "$mgr" ] || [ -z "$pinned_evl" ]; then
+    inconclusive user_containers_conf_ignored "podman info gave no answer, or $ETC/containers.conf pins no events_logger: $(tail -1 <<<"$out")"
+else
+    result user_containers_conf_ignored "$([ "$mgr" = cgroupfs ] && [ "$evl" = "$pinned_evl" ] && echo yes || echo "NO (mgr=$mgr events=$evl, pinned $pinned_evl)")"
+fi
 result user_storage_conf_ignored "$([ "$drv" = overlay ] && [ "$graph" = "$HOME_/.local/share/ea-podman/storage" ] && echo yes || echo "NO ($drv $graph)")"
 result network_backend "${netbk:-unknown}"
 grep -q 'Failed to decode the keys' <<<"$out" && result pinned_conf_warnings "$(grep -o 'Failed to decode the keys \[[^]]*\]' <<<"$out" | sort -u | tr '\n' ' ')" \
@@ -112,9 +119,19 @@ result cni_dir_used "$([ -n "$(ls -A "$RUNDIR/cni" 2>/dev/null)" ] && echo "yes 
 
 hdr "what podman opened under the account's ~/.config while it ran (strace, if present)"
 if command -v strace >/dev/null; then
-    tr_out=$(as_user /usr/bin/strace -f -qq -e trace=open,openat,stat,newfstatat,access,statx \
-        -o /dev/stderr /usr/bin/podman ps -a 2>&1 >/dev/null | grep -o "\"$HOME_/\.config[^\"]*\"" | sort -u | tr '\n' ' ')
-    result opens_under_home_config "${tr_out:-none}"
+    # strace writes its trace to a file in the account's own runtime dir (it can't open the
+    # runner's /dev/stderr), which the account then reads back and removes.
+    tf=$RUNDIR/p08-strace.$$
+    o=$(as_user /usr/bin/strace -f -qq -e trace=open,openat,stat,newfstatat,access,statx \
+        -o "$tf" /usr/bin/podman ps -a 2>&1 >/dev/null); rc=$?
+    [ $rc = 0 ] && o=$(as_acct init cat "$tf" 2>&1); rc=$?
+    as_acct init rm -f "$tf"
+    if [ $rc != 0 ] || ! grep -q 'openat(' <<<"$o"; then
+        inconclusive opens_under_home_config "strace of podman ps failed (rc=$rc): $(tail -1 <<<"$o")"
+    else
+        tr_out=$(grep -o "\"$HOME_/\.config[^\"]*\"" <<<"$o" | sort -u | tr '\n' ' ')
+        result opens_under_home_config "${tr_out:-none}"
+    fi
 else
     result opens_under_home_config "not checked (no strace)"
 fi
