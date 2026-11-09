@@ -212,6 +212,78 @@ safe_target() {
     [ $n -gt 0 ] || { echo "refusing PID $pid: no check given" >&2; return 1; }
 }
 
+# ---------------------------------------------------------------- temporary changes
+# One contract for every value a script changes for a test: the original is saved before the
+# first change, put back by restore_changes (or restore_one mid-run), and read back. A value that
+# can't be put back is reported, never left silently changed; nothing else is touched.
+#   change_cg [-n] <file> <value>        a cgroup file, written directly (-n: don't read it back,
+#                                        e.g. memory.max, which the kernel page-aligns)
+#   change_prop <unit> <Property> <value>   a systemd runtime property (set-property --runtime)
+declare -A ORIG CHANGED_PROP_DROPIN
+CHANGED=()    # keys, in change order: "cg:<file>" or "prop:<unit>:<Property>"
+
+# Write a cgroup value and read it back; a write the kernel rejects is reported, not ignored.
+set_cg() {    # file, value
+    echo "$2" >"$1" 2>/dev/null && [ "$(cat "$1")" = "$2" ] \
+        || { echo "  could not set $1 to '$2' (now '$(cat "$1" 2>/dev/null)')" >&2; return 1; }
+}
+change_cg() {
+    local nb=; [ "$1" = -n ] && { nb=1; shift; }
+    local f=$1 v=$2 k="cg:$1" o
+    if [ -z "${ORIG[$k]+x}" ]; then
+        o=$(cat "$f" 2>/dev/null) && [ -n "$o" ] || { echo "  could not read $f; not changing it" >&2; return 1; }
+        ORIG[$k]=$o; CHANGED+=("$k")
+    fi
+    if [ -n "$nb" ]; then echo "$v" >"$f" || { echo "  could not set $f to '$v'" >&2; return 1; }
+    else set_cg "$f" "$v"; fi
+}
+change_prop() {
+    local unit=$1 p=$2 v=$3 k="prop:$1:$2" o dropin=/run/systemd/system.control/$1.d/50-$2.conf
+    if [ -z "${ORIG[$k]+x}" ]; then
+        o=$(systemctl show -p "$p" --value "$unit") && [ -n "$o" ] \
+            || { echo "  could not read $unit $p; not changing it" >&2; return 1; }
+        ORIG[$k]=$o; CHANGED+=("$k")
+        # Our own runtime drop-in is removed on restore; someone else's is put back by value.
+        [ -e "$dropin" ] && CHANGED_PROP_DROPIN[$k]=theirs || CHANGED_PROP_DROPIN[$k]=ours
+    fi
+    systemctl set-property --runtime "$unit" "$p=$v" \
+        || { echo "  could not set $unit $p=$v" >&2; return 1; }
+}
+restore_one() {    # key ("cg:<file>" or "prop:<unit>:<Property>"); reads the value back
+    local k=$1 rest unit p dropin
+    [ -n "${ORIG[$k]+x}" ] || return 0
+    case $k in
+    cg:*) set_cg "${k#cg:}" "${ORIG[$k]}" || return 1 ;;
+    prop:*)
+        rest=${k#prop:}; unit=${rest%:*}; p=${rest##*:}
+        dropin=/run/systemd/system.control/$unit.d/50-$p.conf
+        if [ "${CHANGED_PROP_DROPIN[$k]}" = ours ] && [ -e "$dropin" ]; then
+            rm -f "$dropin" || return 1
+            rmdir "${dropin%/*}" 2>/dev/null    # only if that left it empty
+            systemctl daemon-reload || return 1
+        else
+            # An empty value would write `infinity` on systemd 239 (F23): always the saved value.
+            systemctl set-property --runtime "$unit" "$p=${ORIG[$k]}" || return 1
+        fi
+        [ "$(systemctl show -p "$p" --value "$unit")" = "${ORIG[$k]}" ] \
+            || { echo "  $unit $p is '$(systemctl show -p "$p" --value "$unit")' after restore, not '${ORIG[$k]}'" >&2; return 1; } ;;
+    esac
+    unset "ORIG[$k]"
+}
+restore_cg() { restore_one "cg:$1"; }
+restore_prop() { restore_one "prop:$1:$2"; }
+# Put back everything still changed, newest first; prints what couldn't be and returns 1 then.
+restore_changes() {
+    local i k failed=()
+    for ((i = ${#CHANGED[@]} - 1; i >= 0; i--)); do
+        k=${CHANGED[$i]}
+        restore_one "$k" || failed+=("${k#*:}")
+    done
+    CHANGED=()
+    [ ${#failed[@]} = 0 ] || { echo "NOT restored: ${failed[*]}" >&2; return 1; }
+}
+
+# ---------------------------------------------------------------- checks
 FAILS=0
 check() {    # description, then a command that succeeds when the check passes
     local what=$1; shift

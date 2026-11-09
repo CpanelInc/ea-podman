@@ -17,6 +17,7 @@ nproc_of() {    # pid, safe_target checks...
 }
 
 basic() {
+trap restore_changes EXIT    # the slice TasksMax the fork storm lowers
 hdr "host"
 result ram_mib "$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)"
 result cpus "$(nproc)"
@@ -75,8 +76,7 @@ as_user /usr/bin/podman rm -f t06w >/dev/null 2>&1
 hdr "the account slice's TasksMax under a fork storm (LimitNPROC infinity on the unit)"
 if [ $CGV = 2 ]; then target=$(ls -d "$CG/$A/$WEB"/libpod-payload-* | head -1); cur=$(cat "$CG/$A/pids.current")
 else target="$CG/pids/$A/$WEB"; cur=$(cat "$CG/pids/$A/pids.current"); fi
-old=$(systemctl show -p TasksMax --value "eapodman-$UID_.slice")
-systemctl set-property --runtime "eapodman-$UID_.slice" TasksMax=$((cur + 100))
+change_prop "eapodman-$UID_.slice" TasksMax $((cur + 100)) || exit 1
 got=$(as_acct_in_cgroup "$target" init python3 -c '
 import os, signal, time
 kids = []
@@ -94,7 +94,7 @@ for k in kids:
 for k in kids:
     os.waitpid(k, 0)
 ' 2>&1 | tail -1)
-rm -rf "/run/systemd/system.control/eapodman-$UID_.slice.d"; systemctl daemon-reload   # drop the runtime override
+restore_prop "eapodman-$UID_.slice" TasksMax || exit 1
 result fork_storm "slice had $cur tasks, TasksMax set to $((cur + 100)); forks that succeeded: $got of 400"
 }
 

@@ -8,8 +8,8 @@
 # and then drops to the account's uid with setpriv. Only the cgroup matters for the
 # limits, so the load runs from host binaries, outside the container's namespaces.
 #
-# Every temporary cgroup change is a direct write that is put back on exit, and the
-# three units are restarted at the end, which also kills any load left in them.
+# Every temporary cgroup change goes through lib.sh's change_cg: saved, put back on exit and read
+# back. The three units are restarted at the end, which also kills any load left in them.
 # Usage: ./loadtest.sh <cpuser> [cpu|mem|all]
 set -uo pipefail
 U=${1:?usage: $0 <cpuser> [cpu|mem|all]}
@@ -76,29 +76,11 @@ bg_signal() { local sig=$1 n; shift; for n in "$@"; do kill "-$sig" ${BGBY[$n]} 
 # Every container must have its payload cgroup before anything is measured.
 for n in "${NAMES[@]}"; do payload "$n" >/dev/null || exit 1; done
 
-# Originals, put back on exit.
-ORIG_SLICE_CPU=$(cat "$A/cpu.max"); ORIG_SLICE_MEM=$(cat "$A/memory.max")
-declare -A ORIG_W ORIG_L
-for n in "${NAMES[@]}"; do ORIG_W[$n]=$(cat "$(svc "$n")/cpu.weight"); ORIG_L[$n]=$(cat "$(svc "$n")/memory.low"); done
-# Cleanup puts these back, so an empty one would leave a limit changed after the run.
-for v in "$ORIG_SLICE_CPU" "$ORIG_SLICE_MEM" "${ORIG_W[@]}" "${ORIG_L[@]}"; do
-    [ -n "$v" ] || { echo "could not read an original cgroup value under $A; nothing was changed" >&2; exit 1; }
-done
-# Write a cgroup value and read it back; a write the kernel rejects is reported, not ignored.
-set_cg() {    # file, value
-    echo "$2" >"$1" 2>/dev/null && [ "$(cat "$1")" = "$2" ] \
-        || { echo "  could not set $1 to '$2' (now '$(cat "$1" 2>/dev/null)')" >&2; return 1; }
-}
 cleanup() {
     local rc=$? n failed=()
     echo; echo "== cleanup"
     stop_bg
-    set_cg "$A/cpu.max" "$ORIG_SLICE_CPU" || failed+=("slice cpu.max")
-    set_cg "$A/memory.max" "$ORIG_SLICE_MEM" || failed+=("slice memory.max")
-    for n in "${NAMES[@]}"; do
-        set_cg "$(svc "$n")/cpu.weight" "${ORIG_W[$n]}" || failed+=("$n cpu.weight")
-        set_cg "$(svc "$n")/memory.low" "${ORIG_L[$n]}" || failed+=("$n memory.low")
-    done
+    restore_changes || failed+=("the cgroup values above")
     as_account rm -rf "$SCRATCH" || failed+=("remove $SCRATCH")
     for n in "${NAMES[@]}"; do
         systemctl restart "ea-podman-$n.service" || failed+=("restart ea-podman-$n.service")
@@ -107,7 +89,7 @@ cleanup() {
         echo "cleanup INCOMPLETE; not restored: ${failed[*]}" >&2
         exit 1
     fi
-    echo "restored slice cpu.max/memory.max and unit cpu.weight/memory.low; removed $SCRATCH; units restarted"
+    echo "restored every cgroup value changed; removed $SCRATCH; units restarted"
     exit "$rc"
 }
 trap cleanup EXIT
@@ -148,15 +130,15 @@ cpu_test() {
         bg_signal CONT "web.$U.01" "worker.$U.03"
     fi
 
-    set_cg "$A/cpu.max" "100000 100000" || exit 1
+    change_cg "$A/cpu.max" "100000 100000" || exit 1
     cpu_measure "B. account slice squeezed to 1 CPU: unit CPUWeight 100/200/50 decides" 0.29 0.57 0.14
 
-    for n in "${NAMES[@]}"; do set_cg "$(svc "$n")/cpu.weight" 100 || exit 1; done
+    for n in "${NAMES[@]}"; do change_cg "$(svc "$n")/cpu.weight" 100 || exit 1; done
     cpu_measure "C. same, all unit weights 100; container cpu.weight (from --cpu-shares) still $(for n in "${NAMES[@]}"; do printf '%s/' "$(cat "$(payload "$n")/cpu.weight")"; done | sed 's,/$,,')" 0.33 0.33 0.33
 
     stop_bg
-    set_cg "$A/cpu.max" "$ORIG_SLICE_CPU" || exit 1
-    for n in "${NAMES[@]}"; do set_cg "$(svc "$n")/cpu.weight" "${ORIG_W[$n]}" || exit 1; done
+    restore_cg "$A/cpu.max" || exit 1
+    for n in "${NAMES[@]}"; do restore_cg "$(svc "$n")/cpu.weight" || exit 1; done
 }
 
 # ---------------------------------------------------------------- memory
@@ -197,7 +179,7 @@ mem_floor_round() {    # label
         "$(file_mib "$k")" "$(mib "$(cat "$(svc "$k")/memory.low")")" \
         "$(mib "$(stat_of "$(payload "$a")/memory.stat" anon)")"
     # memory.max is page-aligned, so this write isn't read back for an exact match.
-    echo "$target" >"$A/memory.max" || { echo "  could not set slice memory.max to $target" >&2; exit 1; }
+    change_cg -n "$A/memory.max" "$target" || exit 1
     sleep 3
     printf '  slice memory.max -> %sM (250M below usage)\n' "$(mib "$target")"
     printf '  after:  slice %sM; page cache web %sM, worker %sM; api anon %sM; swap.current web/worker/api %s/%s/%s; slice oom_kill %s\n' \
@@ -205,7 +187,7 @@ mem_floor_round() {    # label
         "$(mib "$(stat_of "$(payload "$a")/memory.stat" anon)")" \
         "$(cat "$(payload "$w")/memory.swap.current")" "$(cat "$(payload "$k")/memory.swap.current")" \
         "$(cat "$(payload "$a")/memory.swap.current")" "$(stat_of "$A/memory.events" oom_kill)"
-    set_cg "$A/memory.max" "$ORIG_SLICE_MEM" || exit 1
+    restore_cg "$A/memory.max" || exit 1
 }
 mem_floor_test() {
     local w="web.$U.01" k="worker.$U.03" a="api.$U.02" i
@@ -229,9 +211,9 @@ mem_floor_test() {
         exit 1
     fi
     mem_floor_round "1. unit MemoryLow set (web 256M, worker 64M): reclaim should come from above the floors"
-    set_cg "$(svc "$w")/memory.low" 0 || exit 1; set_cg "$(svc "$k")/memory.low" 0 || exit 1
+    change_cg "$(svc "$w")/memory.low" 0 || exit 1; change_cg "$(svc "$k")/memory.low" 0 || exit 1
     mem_floor_round "2. control, unit MemoryLow 0 (container memory.low unchanged): reclaim spread across both caches"
-    set_cg "$(svc "$w")/memory.low" "${ORIG_L[$w]}" || exit 1; set_cg "$(svc "$k")/memory.low" "${ORIG_L[$k]}" || exit 1
+    restore_cg "$(svc "$w")/memory.low" || exit 1; restore_cg "$(svc "$k")/memory.low" || exit 1
     stop_bg
 }
 

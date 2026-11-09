@@ -38,6 +38,7 @@ EOF
 
 case ${1:-run} in
 run)
+trap restore_changes EXIT    # the slice MemoryMax section 2 lowers, if it exits early
 pam_file
 info "LVE for $U: $(lvectl list-user 2>/dev/null | awk -v u="$U" '$1==u' | head -1)"
 
@@ -58,13 +59,13 @@ systemctl stop p06-plain.service; sleep 1
 result plain_stop_reaches_it "$(kill -0 "$m" 2>/dev/null && echo "NO: pid $m survives" || echo yes)"
 
 hdr "2. memory: does the LVE limit or the slice limit apply? (slice MemoryMax=100M, LVE PMEM default)"
-systemctl set-property --runtime "eapodman-$UID_.slice" MemoryMax=100M
+change_prop "eapodman-$UID_.slice" MemoryMax 100M || exit 1
 systemctl start p06-plain.service; sleep 1
 o=$(systemd-run --quiet --wait --pipe --collect --uid="$UID_" -p PAMName=ea-podman --slice="eapodman-$UID_.slice" \
     python3 -c 'b=bytearray(300*1024*1024); import time; time.sleep(1); print("allocated 300M")' </dev/null 2>&1); rc=$?
 result alloc_300M_under_slice_100M "rc=$rc $(tail -1 <<<"$o")"
 systemctl stop p06-plain.service
-systemctl set-property --runtime "eapodman-$UID_.slice" MemoryMax=2G
+restore_prop "eapodman-$UID_.slice" MemoryMax || exit 1
 
 hdr "3. container unit with PAMName=ea-podman"
 probe_create "$C" -p 127.0.0.1:8096:80 --memory=256m "$IMAGE" >/dev/null 2>&1

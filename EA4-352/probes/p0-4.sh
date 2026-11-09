@@ -23,7 +23,8 @@ cleanup() {
     for c in p04split.$U.80 p04nosplit.$U.81 p04v1split.$U.82; do probe_unit_rm "$c" >/dev/null 2>&1; done
     rm -f "$ETC/containers-nosplit.conf" "$ETC/containers-split.conf"
     systemctl stop 'p04-*' 2>/dev/null; systemctl reset-failed 'p04-*' 2>/dev/null
-    systemctl set-property --runtime "user-$UID_.slice" MemoryLow= 2>/dev/null
+    # Only the properties floor() changed, back to their saved values (lib.sh's change_prop).
+    restore_changes
     [ -n "${P4:-}" ] && rm -rf "$P4"
 }
 trap cleanup EXIT
@@ -115,8 +116,8 @@ floor() {
 local P=MemoryLow; [ "${FLOOR:-low}" = min ] && P=MemoryMin
 hdr "8. memory floors ($P) under pressure from outside the slices"
 if [ $P = MemoryMin ]; then
-    systemctl set-property --runtime eapodman.slice MemoryMin=400M
-    systemctl set-property --runtime "eapodman-$UID_.slice" MemoryMin=400M
+    change_prop eapodman.slice MemoryMin 400M || exit 1
+    change_prop "eapodman-$UID_.slice" MemoryMin 400M || exit 1
 fi
 if command -v cagefsctl >/dev/null; then info "CloudLinux: page cache isn't charged to the reader's cgroup (F13); measuring anyway"; fi
 P4=$(mktemp -d /var/tmp/p04.XXXXXX) || exit 1; chmod 0755 "$P4"
@@ -126,7 +127,7 @@ chmod 0644 "$P4"/*
 big=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 * 3 / 2 ))
 dd if=/dev/zero of="$P4/big" bs=1M count=$big status=none
 sync; echo 1 >/proc/sys/vm/drop_caches
-systemctl set-property --runtime "user-$UID_.slice" $P=400M
+change_prop "user-$UID_.slice" $P 400M || exit 1
 systemd-run --quiet --unit=p04-hold-acct --slice="eapodman-$UID_.slice" --uid="$UID_" -p $P=400M sh -c "cat $P4/acct >/dev/null; exec sleep 600"
 systemd-run --quiet --unit=p04-hold-user --slice="user-$UID_.slice" --uid="$UID_" -p $P=400M sh -c "cat $P4/user >/dev/null; exec sleep 600"
 systemd-run --quiet --unit=p04-hold-none --slice=system.slice --uid="$UID_" sh -c "cat $P4/none >/dev/null; exec sleep 600"
@@ -149,10 +150,7 @@ else
     result floor_verdict "kept: account slice $(keep acct)%, user-<uid>.slice $(keep user)%, no floor $(keep none)%"
 fi
 systemctl stop p04-hold-acct p04-hold-user p04-hold-none 2>/dev/null
-# Remove the runtime drop-ins: an empty `set-property X=` writes `infinity` on systemd 239 (F23).
-rm -rf /run/systemd/system.control/eapodman.slice.d "/run/systemd/system.control/eapodman-$UID_.slice.d" \
-    "/run/systemd/system.control/user-$UID_.slice.d"
-systemctl daemon-reload
+restore_changes || exit 1
 rm -rf "$P4"; P4=
 }
 
