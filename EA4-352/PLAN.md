@@ -1272,11 +1272,12 @@ On the plugin side:
    - the unit suite, including the injection and migration tests;
    - the full live suite;
    - the migration matrix in 4.7, including reboot, kill and concurrent-run cases.
-4. **One coordinated release:** ea-podman 2.0 and the matching Web Apps plugin, locked together by `Requires`/`Conflicts`.
-5. **Remove 1.x from the mirrors** (RPM and Ubuntu). Keep an internal archive copy for tests.
-6. **Release + 6 months at the earliest** (the date is in the release notes and the verb's warning; check adoption telemetry first): a 2.x removes `migrate_units` / `migrate.pm`, `ea-podman-migrate.timer` and `ea-podman-migrate.service` (its scriptlet disables the timer first), and ships the post-removal detector (4.8). This is not a deprecation period; the warning text carries the date.
-7. **Follow-up:** a root-owned graphroot (F4).
-8. **Follow-up:** once P0-12 passes, ship or document a BPF-LSM namespace policy (with CloudLinux / hardening). It is not part of 2.0; 2.0 only makes it possible (F11). To raise with CloudLinux together with CloudLinux 10's default `user.max_user_namespaces=0` (CLOS-2616) and F18 (EA4-389).
+4. **Delete `EA4-352/` in the PR** (the last commit before merge): once Phase 7's docs carry what admins need from this plan, the manual recovery doc (4.7) is under `docs/`, and the kit and probes are in `t/LiveTests`.
+5. **One coordinated release:** ea-podman 2.0 and the matching Web Apps plugin, locked together by `Requires`/`Conflicts`.
+6. **Remove 1.x from the mirrors** (RPM and Ubuntu). Keep an internal archive copy for tests.
+7. **Release + 6 months at the earliest** (the date is in the release notes and the verb's warning; check adoption telemetry first): a 2.x removes `migrate_units` / `migrate.pm`, `ea-podman-migrate.timer` and `ea-podman-migrate.service` (its scriptlet disables the timer first), and ships the post-removal detector (4.8). This is not a deprecation period; the warning text carries the date.
+8. **Follow-up:** a root-owned graphroot (F4).
+9. **Follow-up:** once P0-12 passes, ship or document a BPF-LSM namespace policy (with CloudLinux / hardening). It is not part of 2.0; 2.0 only makes it possible (F11). To raise with CloudLinux together with CloudLinux 10's default `user.max_user_namespaces=0` (CLOS-2616) and F18 (EA4-389).
 
 ## Open items (resolved by the spikes or a quick call)
 
