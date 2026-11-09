@@ -27,6 +27,7 @@ Run the kit once at a time per account. Two runs against the same account share 
 ## Guards
 
 - No script signals a PID it hasn't checked: it must be an integer above 1, with the expected comm, inside the expected cgroup (`safe_target` in `lib.sh`).
+- The container unit has one template, `container_unit` in `lib.sh`. A caller varies it only through its options (`-c` containers.conf, `-s` an extra `[Service]` line), never by editing its output, and `as_user -c` / `probe_create -c` use another containers.conf for that call only.
 - A test whose setup didn't happen fails instead of passing vacuously. For example, the hostile PID must be in `conmon.pid` before conmon is killed, systemd must log its refusal, and the background loads must still be running when measured.
 - `loadtest.sh` stops if a container has no `libpod-payload-*` cgroup (`--cgroups=split` not in effect). It skips the floor test where page cache isn't charged to the containers (F13). Its cleanup reads every restored value back.
 - `teardown.sh` runs every step, lists the ones that failed, and exits 1 if any did.

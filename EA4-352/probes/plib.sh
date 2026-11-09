@@ -54,16 +54,22 @@ new_tmp() { rm -f "$1" && ( set -C; : >"$1" ); }
 
 # A probe container with its own unit, from the kit's template:
 #   probe_create [-c containers.conf] <name> <podman create flags...>
-# then probe_unit_start <name>; probe_unit_rm <name> removes both. -c applies to that call only.
+#   probe_unit_start [container_unit options: -c CONF, -s LINE...] <name>
+# probe_unit_rm <name> removes both. -c applies to that call only; nothing global changes.
 probe_create() {
     local c=(); [ "$1" = -c ] && { c=(-c "$2"); shift 2; }
     local name=$1; shift
     as_user "${c[@]}" /usr/bin/podman create --name "$name" --conmon-pidfile "$(conmon_pidfile "$name")" "$@"
 }
-probe_unit_start() {
-    container_unit "$1" 0 100 143 >"/etc/systemd/system/ea-podman-$1.service"
+probe_unit_write() {    # same arguments as probe_unit_start; writes the unit and reloads
+    local opts=()
+    while [ "${1:-}" = -c ] || [ "${1:-}" = -s ]; do opts+=("$1" "$2"); shift 2; done
+    container_unit "${opts[@]}" "$1" 0 100 143 >"/etc/systemd/system/ea-podman-$1.service" || return
     systemctl daemon-reload
-    systemctl start "ea-podman-$1.service"
+}
+probe_unit_start() {
+    local name=${*: -1}
+    probe_unit_write "$@" && systemctl start "ea-podman-$name.service"
 }
 probe_unit_rm() {
     systemctl stop "ea-podman-$1.service" 2>/dev/null

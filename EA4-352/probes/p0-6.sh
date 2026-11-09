@@ -68,9 +68,7 @@ systemctl set-property --runtime "eapodman-$UID_.slice" MemoryMax=2G
 
 hdr "3. container unit with PAMName=ea-podman"
 probe_create "$C" -p 127.0.0.1:8096:80 --memory=256m "$IMAGE" >/dev/null 2>&1
-container_unit "$C" 0 100 143 | sed 's/^Type=forking$/Type=forking\nPAMName=ea-podman/' >"/etc/systemd/system/ea-podman-$C.service"
-systemctl daemon-reload
-if systemctl start "ea-podman-$C.service" 2>/dev/null; then
+if probe_unit_start -s PAMName=ea-podman "$C" 2>/dev/null; then
     m=$(systemctl show -p MainPID --value "ea-podman-$C.service")
     c=$(as_user /usr/bin/podman inspect --format '{{.State.Pid}}' "$C" 2>/dev/null | tail -1)
     result pam_container_starts yes

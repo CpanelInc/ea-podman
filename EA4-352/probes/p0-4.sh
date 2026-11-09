@@ -90,9 +90,7 @@ for spec in "p04split.$U.80|split|nosplit" "p04nosplit.$U.81|nosplit|split"; do
     IFS='|' read -r c cc sc <<<"$spec"
     probe_create -c "$ETC/containers-$cc.conf" "$c" --memory=64m "$IMAGE" >/dev/null 2>&1 || result "${c%%.*}_create" FAILS
     rec=$(as_user -c "$ETC/containers-$cc.conf" /usr/bin/podman inspect --format '{{.HostConfig.Cgroups}}' "$c" 2>/dev/null | tail -1)
-    container_unit "$c" 0 100 143 | sed "s|CONTAINERS_CONF=.*|CONTAINERS_CONF=$ETC/containers-$sc.conf|" >"/etc/systemd/system/ea-podman-$c.service"
-    systemctl daemon-reload
-    if systemctl start "ea-podman-$c.service" 2>/dev/null; then
+    if probe_unit_start -c "$ETC/containers-$sc.conf" "$c" 2>/dev/null; then
         cp=$(as_user /usr/bin/podman inspect --format '{{.State.Pid}}' "$c" 2>/dev/null | tail -1)
         where=$(cgline "$cp")
         if [ $CGV = 2 ]; then

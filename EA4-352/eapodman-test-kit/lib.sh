@@ -44,16 +44,31 @@ as_user() {
 # --conmon-pidfile`; it never takes it from podman inspect.
 conmon_pidfile() { echo "$RUNDIR/$1.conmon.pid"; }
 
-# The container unit, as setup.sh writes it. Args: name, MemoryLow, CPUWeight, and the
-# SuccessExitStatus value ("" for none; lifecycle.sh test 5 compares the two).
+# The container unit, as setup.sh writes it. Callers vary it only through these options, never by
+# editing its output: what a probe starts is then the template plus what it asked for.
+#   -c CONF   CONTAINERS_CONF for the unit (default: the pinned one)
+#   -s LINE   an extra [Service] line (repeatable), e.g. -s PAMName=ea-podman
+# Then: name, MemoryLow, CPUWeight, and the SuccessExitStatus value ("" for none; lifecycle.sh
+# test 5 compares the two).
 # 143 is there because conmon, the main process, exits with the container's status: a PID 1 that
 # exits 143 on SIGTERM would otherwise make a deliberate stop "failed" (1.x 0459147, PLAN.md Phase 1).
 # 137 stays out: it is also an OOM kill.
 container_unit() {
+    local conf= extra= opt OPTIND=1 PODMAN_ENV e env_lines=
+    while getopts c:s: opt; do
+        case $opt in
+        c) conf=$OPTARG ;;
+        s) extra+="$OPTARG"$'\n' ;;
+        *) echo "container_unit: bad option" >&2; return 2 ;;
+        esac
+    done
+    shift $((OPTIND - 1))
     local name=$1 memlow=$2 cpuweight=$3 success_exit= pidfile
     pidfile=$(conmon_pidfile "$name")
     [ -z "${4:-}" ] || success_exit="SuccessExitStatus=$4
 "
+    podman_env "$conf"
+    for e in "${PODMAN_ENV[@]}"; do env_lines+="Environment=$e"$'\n'; done
     cat <<UNIT
 # ea-podman owner=$U uid=$UID_ container=$name
 [Unit]
@@ -74,12 +89,7 @@ MemoryLow=$memlow
 CPUWeight=$cpuweight
 # Plan's {NPROC} (T0.6): the host's DefaultLimitNPROC, what 1.x's user manager ran with.
 LimitNPROC=$NPROC
-Environment=XDG_RUNTIME_DIR=$RUNDIR
-Environment=CONTAINERS_CONF=$ETC/containers.conf
-Environment=CONTAINERS_STORAGE_CONF=$ETC/storage.conf
-Environment=CONTAINERS_REGISTRIES_CONF=$ETC/registries.conf
-Environment=XDG_CONFIG_HOME=$XDGDIR
-Environment=PODMAN_SYSTEMD_UNIT=%n
+${env_lines}Environment=PODMAN_SYSTEMD_UNIT=%n
 PIDFile=$pidfile
 ExecStart=/usr/bin/podman --cgroup-manager=cgroupfs start $name
 ExecStop=/usr/bin/podman --cgroup-manager=cgroupfs stop -t 10 $name
@@ -91,7 +101,7 @@ Restart=on-failure
 RestartSec=5
 ${success_exit}TimeoutStartSec=90
 TimeoutStopSec=30
-
+${extra}
 [Install]
 WantedBy=multi-user.target
 UNIT
