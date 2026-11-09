@@ -61,10 +61,9 @@ sleep 3; o=$(for p in 8081 8082 8083; do curl -s -m3 -o /dev/null -w '%{http_cod
 result anchor_restart_after_pause_killed "anchor rc=$rc; ports $o"
 o=$(probe_create p012.$U.86 "$IMAGE" 2>&1 && probe_unit_start p012.$U.86 2>&1); result install_standin_create_and_start "$(ok $? "$o")"
 probe_unit_rm p012.$U.86 >/dev/null 2>&1
-ctx=$HOME_/.p012-build; install -d -o "$U" -g "$GID_" "$ctx"
-printf 'FROM %s\nRUN echo built\n' "$IMAGE" >"$ctx/Containerfile"; chown "$U:$GID_" "$ctx/Containerfile"
+ctx=$HOME_/.p012-build; user_build_ctx "$ctx" 'echo built'
 o=$(as_user_deleg /usr/bin/podman build -t localhost/p012:latest "$ctx" 2>&1); result plugin_build_standin "$(ok $? "$(tail -1 <<<"$o")")"
-as_user /usr/bin/podman rmi -f localhost/p012:latest >/dev/null 2>&1; rm -rf "$ctx"
+as_user /usr/bin/podman rmi -f localhost/p012:latest >/dev/null 2>&1; user_rm "$ctx"
 o=$(as_user_deleg /usr/bin/podman run --rm "$IMAGE" sh -c 'unshare -U true && echo nested-ok' 2>&1); result nested_userns_inside_container "$(tail -1 <<<"$o")"
 
 hdr "must be denied (outside eapodman.slice)"

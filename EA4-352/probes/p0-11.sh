@@ -112,8 +112,7 @@ o=$(as_user_env 120 "${PINNED_OLD[@]}" -- /usr/bin/podman info --format '{{.Stor
 result podman_old_storage "$(tail -1 <<<"$o")"
 
 hdr "podman run/build from a plain runner vs a delegated one"
-ctx=$HOME_/.p011-build; install -d -o "$U" -g "$GID_" "$ctx"
-printf 'FROM %s\nRUN echo p011-build-ran\n' "$IMAGE" >"$ctx/Containerfile"; chown "$U:$GID_" "$ctx/Containerfile"
+ctx=$HOME_/.p011-build; user_build_ctx "$ctx" 'echo p011-build-ran'
 o=$(as_user /usr/bin/podman build --no-cache -t localhost/p011:latest "$ctx" 2>&1); rc=$?
 result build_with_run_plain_runner "$([ $rc = 0 ] && echo works || echo "FAILS: $(grep -m1 -i 'error' <<<"$o")")"
 o=$(as_user_deleg /usr/bin/podman build --no-cache -t localhost/p011:latest "$ctx" 2>&1); rc=$?
@@ -123,4 +122,4 @@ result run_rm_plain_runner "$([ $rc = 0 ] && echo works || echo "FAILS: $(tail -
 o=$(as_user_deleg /usr/bin/podman run --rm "$IMAGE" true 2>&1); rc=$?
 result run_rm_delegated_runner "$([ $rc = 0 ] && echo works || echo "FAILS: $(tail -1 <<<"$o")")"
 as_user /usr/bin/podman rmi -f localhost/p011:latest >/dev/null 2>&1
-rm -rf "$ctx"
+user_rm "$ctx"

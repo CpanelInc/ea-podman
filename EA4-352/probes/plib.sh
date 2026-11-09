@@ -38,6 +38,14 @@ as_user_deleg() {
         -p RuntimeMaxSec=600 -p WorkingDirectory="$HOME_" "${ENVS[@]}" "$@" </dev/null
 }
 
+# A build context in the account's home, written by the account itself: root writing (or chowning)
+# a path the account controls would follow a planted symlink. user_build_ctx <dir> <RUN command>
+user_build_ctx() {
+    as_user_env 60 -- /bin/sh -c 'rm -rf "$1" && mkdir "$1" && printf "FROM %s\nRUN %s\n" "$2" "$3" >"$1/Containerfile"' \
+        sh "$1" "$IMAGE" "$2"
+}
+user_rm() { as_user_env 60 -- /bin/rm -rf "$1"; }
+
 # A probe container with its own unit, from the kit's template: probe_create <name> <podman create flags...>
 # then probe_unit_start <name>; probe_unit_rm <name> removes both.
 probe_create() {
