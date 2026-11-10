@@ -37,7 +37,7 @@ The host comparison and the instrumented capture (`probes/ea4-392-capture.sh`) a
 ## Step 3: What is left to settle
 
 - **el8-cgv1 — done** (`probes/results/ea4-352-el8-cgv1/ea4-392-4.log`). It is the same denial, and it passes when permissive. The difference is the bus: with dbus-daemon the call fails with `Connection timed out` after 25 s and PID 1 stays on the bus, so the next call works. With dbus-broker (el9) the call fails at once with `Remote peer disconnected` and PID 1 is gone from the bus.
-- **el8-cgv2 and el10:** not run. They get the fixed kit in Step 6; run the same bare call there only if something still fails.
+- **el8-cgv2 and el10:** the bare call wasn't run there. With the fixed kit, `setup.sh` completes on both (Step 6), so it isn't needed.
 - **A separate denial, seen while reading el9's audit log:** `avc: denied { unlink } for comm="systemd" name=<name>.conmon.pid scontext=init_t tcontext=container_runtime_tmpfs_t`, once per container stop. PID 1 can't remove the unit's `PIDFile=`. It dates from 2026-11-06 and PLAN.md doesn't mention it. Decide whether it matters for F19.
 - **The ticket's item 4** (`podman_old_storage`'s `mkdir /run/user/1000: permission denied` on el9 in p0-11): re-run `p0-11.sh` on el9 with the fixed kit. If it is still there with a working bus, it is separate from EA4-392.
 - **`verify.sh`'s F19 check had the same `ausearch` blind spot — fixed** (`--input-logs`). Run without a terminal on stdin, it always saw `<no matches>` and passed "no ea-podman AVC denials". With the fix, `verify.sh` on el9 fails that check with the `conmon.pid` unlink denials above, which is a true result: every earlier `kit-verify.log` PASS for it on an EL host says nothing. On el8-cgv1 the check passes (no container has stopped there since the anchor started).
@@ -58,8 +58,8 @@ The host comparison and the instrumented capture (`probes/ea4-392-capture.sh`) a
 
 ## Step 6: Roll out, update PLAN.md, then remove this file (last)
 
-1. Copy the fixed kit to the other eight VMs. Run `setup.sh eapodtest` on el8-cgv1, el8-cgv2 and el10, which still run units from before F25.
-2. Re-run what EA4-392 blocked on the four EL hosts: `p0-10.sh pre`/`post`, the last section of `p0-11.sh`, and `verify.sh` on the three hosts above. Update their logs.
+1. **Done:** the fixed kit (`lib.sh`, `setup.sh`, `verify.sh`) is on all 9 VMs. `setup.sh eapodtest`, with its output redirected to a file under `/root`, completed first time on el8-cgv1, el8-cgv2 and el10, with SELinux enforcing and PID 1 still on the bus. Their units now have F25's `--default-mounts-file`.
+2. **Done for `verify.sh`:** new `kit-verify.log` on el8-cgv1, el8-cgv2, el9 and el10. The 3 F25 failures are gone. Each now has exactly 1 failed check, "no ea-podman AVC denials", for the `conmon.pid` unlink denial (Step 3). **Still to re-run on the four EL hosts:** `p0-10.sh pre`/`post` (a reboot each) and `p0-11.sh` (its last section, and the ticket's item 4 on el9). Update their logs.
 3. Make these PLAN.md edits in one commit. Add to the list if Step 3 turns up more, and strike what it rules out:
    - **Line 1335, "Open (EA4-392)":** becomes "Resolved (EA4-392)" and points at line 448. Its claim that the reload / `set-property` / anchor-start sequence is the risk goes.
    - **Line 448:** it isn't only a `/tmp` file. Say "a file under `/tmp`, `/var/tmp`, `/root` or a home directory", that append mode passes for `/tmp` but not for `/root`, the denial (`init_t` `{ write }` on `user_tmp_t`, `user_home_t` or `admin_home_t`), that with dbus-daemon (EL8) only the call fails, and that on EL9/EL10 PID 1 then stays off the system bus for every transient unit and login until `daemon-reexec`.
