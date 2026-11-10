@@ -131,7 +131,9 @@ if command -v selinuxenabled >/dev/null && selinuxenabled; then
     if [ -z "$since" ] || ! command -v ausearch >/dev/null; then
         check "AVC denials can be searched (ausearch, and the anchor's start time)" false
     else
-        avc=$(LC_ALL=C ausearch -m avc,user_avc -i -ts $(LC_ALL=C date -d "@$since" '+%x %H:%M:%S') 2>&1); rc=$?
+        # --input-logs: without it ausearch reads stdin whenever stdin isn't a terminal (ssh -n, a
+        # script, cron), finds nothing there, and this check could never fail (EA4-392).
+        avc=$(LC_ALL=C ausearch --input-logs -m avc,user_avc -i -ts $(LC_ALL=C date -d "@$since" '+%x %H:%M:%S') 2>&1); rc=$?
         # ausearch exits 1 with "<no matches>" when there are none; any other failure is an error.
         if [ $rc = 1 ] && grep -q '<no matches>' <<<"$avc"; then
             ours=

@@ -40,7 +40,7 @@ The host comparison and the instrumented capture (`probes/ea4-392-capture.sh`) a
 - **el8-cgv2 and el10:** not run. They get the fixed kit in Step 6; run the same bare call there only if something still fails.
 - **A separate denial, seen while reading el9's audit log:** `avc: denied { unlink } for comm="systemd" name=<name>.conmon.pid scontext=init_t tcontext=container_runtime_tmpfs_t`, once per container stop. PID 1 can't remove the unit's `PIDFile=`. It dates from 2026-11-06 and PLAN.md doesn't mention it. Decide whether it matters for F19.
 - **The ticket's item 4** (`podman_old_storage`'s `mkdir /run/user/1000: permission denied` on el9 in p0-11): re-run `p0-11.sh` on el9 with the fixed kit. If it is still there with a working bus, it is separate from EA4-392.
-- **`verify.sh`'s F19 check has the same `ausearch` blind spot** (`eapodman-test-kit/verify.sh:134`). Run without a terminal on stdin, it always sees `<no matches>` and passes "no ea-podman AVC denials". Not fixed yet: with `--input-logs` it will start failing on the EL hosts for the `conmon.pid` unlink denial above, so decide on that denial first.
+- **`verify.sh`'s F19 check had the same `ausearch` blind spot — fixed** (`--input-logs`). Run without a terminal on stdin, it always saw `<no matches>` and passed "no ea-podman AVC denials". With the fix, `verify.sh` on el9 fails that check with the `conmon.pid` unlink denials above, which is a true result: every earlier `kit-verify.log` PASS for it on an EL host says nothing. On el8-cgv1 the check passes (no container has stopped there since the anchor started).
 - **Which SELinux modes are in the product's live matrix (F19),** and whether a pipe made by root's caller passes the policy from the domain the product's root code runs in. On el9 it does from an SSH root shell (`unconfined_t`).
 
 ## Step 4: Kit fix and product guard
@@ -65,7 +65,7 @@ The host comparison and the instrumented capture (`probes/ea4-392-capture.sh`) a
    - **Line 448:** it isn't only a `/tmp` file. Say "a file under `/tmp`, `/var/tmp`, `/root` or a home directory", that append mode passes for `/tmp` but not for `/root`, the denial (`init_t` `{ write }` on `user_tmp_t`, `user_home_t` or `admin_home_t`), that with dbus-daemon (EL8) only the call fails, and that on EL9/EL10 PID 1 then stays off the system bus for every transient unit and login until `daemon-reexec`.
    - **Rule 15 (line 1236) and 4.2a (line 812):** add the second reason for "never inherited" next to F10's: on an SELinux-enforcing host, an inherited file can take PID 1 off the bus.
    - **Wherever PLAN.md or the probes tell someone to look for AVCs:** `ausearch` needs `--input-logs` when it isn't run from a terminal.
-   - **The `conmon.pid` unlink denial** from Step 3, if it matters.
+   - **The `conmon.pid` unlink denial** from Step 3: `verify.sh` now fails on it on el9, so PLAN.md needs either a fix for it or a reason it is harmless.
    - **The EA4-372 live test:** the runner called with root's stdout and stderr redirected to a file under `/root`, on an enforcing EL host, works and leaves `org.freedesktop.systemd1` owned on the bus.
 4. Update `probes/README.md` (line 23) and the EA4-392 section of `poc-rerun-prompt.md`.
 5. Post the findings as an EA4-392 comment once the text has been reviewed, and `git rm EA4-352/EA4-392-PLAN.md`.
