@@ -63,13 +63,22 @@ podman_env() {
 #   -p PROP=VAL    an extra unit property (e.g. -p Delegate=yes)
 #   -n NAME        the unit name's middle part (default "test"; probes pass "probe")
 #   -v             keep systemd-run's own messages (no --quiet)
+#   -r             the command's own exit 1 comes back as 101. Without it, 1 is ambiguous: systemd-run
+#                  also returns 1 when it couldn't start the unit and when RuntimeMaxSec expired. A
+#                  caller that reads 1 as a verdict (podman container exists) must use -r: a runner
+#                  failure is never a podman verdict (T1.5).
+# systemd-run's stdout and stderr are pipes made here, never the caller's own (PLAN.md 4.2a, rule 15).
+# --pipe hands systemd-run's fds 0-2 to PID 1. With SELinux enforcing (EL), a file under /tmp,
+# /var/tmp, /root or a home directory in that place makes the call fail with "Remote peer
+# disconnected" or "Connection timed out", and on EL9/EL10 PID 1 then stays off the system bus
+# until `systemctl daemon-reexec` (EA4-392).
 seq=0
 acct_unit() {
-    local tmo=600 conf= name=test quiet=--quiet pinned=1 extra=() envs=() props=() OPTIND=1 opt
-    while getopts t:c:Ee:p:n:v opt; do
+    local tmo=600 conf= name=test quiet=--quiet pinned=1 split= extra=() envs=() props=() OPTIND=1 opt
+    while getopts t:c:Ee:p:n:vr opt; do
         case $opt in
         t) tmo=$OPTARG ;; c) conf=$OPTARG ;; E) pinned= ;; e) extra+=("$OPTARG") ;;
-        p) props+=(-p "$OPTARG") ;; n) name=$OPTARG ;; v) quiet= ;;
+        p) props+=(-p "$OPTARG") ;; n) name=$OPTARG ;; v) quiet= ;; r) split=1 ;;
         *) echo "acct_unit: bad option" >&2; return 2 ;;
         esac
     done
@@ -78,11 +87,20 @@ acct_unit() {
     elif [ -n "$conf" ]; then echo "acct_unit: -c needs podman_env (no -E)" >&2; return 2; fi
     envs+=("${extra[@]}")
     [ -n "$pinned" ] && [ "${1:-}" = /usr/bin/podman ] && set -- "${PODMAN[@]}" "${@:2}"
+    # shellcheck disable=SC2016
+    [ -n "$split" ] && set -- /bin/sh -c '"$@"; r=$?; [ "$r" = 1 ] && exit 101; exit "$r"' sh "$@"
     seq=$((seq + 1))
-    systemd-run $quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
-        --unit="eapodman-run-$UID_-$name-$$-$seq" --pipe --wait --collect \
-        -p RuntimeMaxSec="$tmo" -p WorkingDirectory="$HOME_" "${props[@]}" \
-        "${envs[@]/#/--setenv=}" "$@" </dev/null
+    # fd 3 is the caller's stdout and fd 4 the pipe to the stderr cat; systemd-run gets neither.
+    {
+        {
+            systemd-run $quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
+                --unit="eapodman-run-$UID_-$name-$$-$seq" --pipe --wait --collect \
+                -p RuntimeMaxSec="$tmo" -p WorkingDirectory="$HOME_" "${props[@]}" \
+                "${envs[@]/#/--setenv=}" "$@" </dev/null 2>&4 3>&- 4>&- | cat 3>&- 4>&-
+            exit "${PIPESTATUS[0]}"
+        } 4>&1 >&3 3>&- | cat >&2 3>&-
+        return "${PIPESTATUS[0]}"
+    } 3>&1
 }
 # The common case, with podman_env: as_user [-c containers.conf] <argv...>
 as_user() {

@@ -81,13 +81,14 @@ for c in "${CONTAINERS[@]}"; do
     IFS='|' read -r name flags memlow cpuweight <<<"$c"
     pidfile=$(conmon_pidfile "$name")
     # podman container exists: 0 = exists, 1 = no such container, anything else = couldn't check.
-    rc=0; as_user /usr/bin/podman container exists "$name" || rc=$?
+    # With -r podman's 1 arrives as 101, and a 1 means the runner failed (EA4-392): never create on that.
+    rc=0; acct_unit -r -- /usr/bin/podman container exists "$name" || rc=$?
     case $rc in
         0) echo "$name already exists; keeping it" ;;
         # shellcheck disable=SC2086
         # The --ulimit pin comes from the same NPROC as the unit's LimitNPROC (T0.6).
-        1) as_user /usr/bin/podman create --name "$name" --conmon-pidfile "$pidfile" "${ULIMIT[@]}" $flags "$IMAGE" >/dev/null ;;
-        *) echo "$name: couldn't check whether it exists (exit $rc); see above" >&2; exit 1 ;;
+        101) as_user /usr/bin/podman create --name "$name" --conmon-pidfile "$pidfile" "${ULIMIT[@]}" $flags "$IMAGE" >/dev/null ;;
+        *) echo "$name: couldn't check whether it exists (exit $rc from the runner or podman); see above" >&2; exit 1 ;;
     esac
     # Cross-check only: the inspect value is never written into the unit.
     reported=$(as_user /usr/bin/podman container inspect --format '{{.ConmonPidFile}}' "$name")
