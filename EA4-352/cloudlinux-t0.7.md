@@ -20,9 +20,9 @@ New CL10 installs ship with `user.max_user_namespaces=0`, which turns off rootle
 
 ## 2. A BPF-LSM rule as a narrower alternative
 
-In 2.0, every user namespace that ea-podman creates is created from a process inside `eapodman.slice`. So a host BPF-LSM program on the `userns_create` hook can deny unprivileged namespace creation everywhere else: from the account's shell, cron, CGI and PHP. Containers keep working.
+In 2.0, every user namespace that ea-podman creates is created from a process inside `eapodman.slice`. So a host BPF-LSM program on the `userns_create` hook can deny unprivileged namespace creation everywhere else: from the account's shell, cron, and CGI and PHP that run as the account. Containers keep working.
 
-We tested a test-only program that denies non-root `userns_create` outside `eapodman.slice`:
+We tested a test-only program that denies `userns_create` outside `eapodman.slice` to uid 1000 and above. Root and system accounts below 1000 (for example `nobody`) were allowed everywhere, so we have not tested them:
 
 - **CL10 (kernel 6.12):** the hook exists and `bpf` is in the active LSM list by default. Containers started, restarted and recovered, while `unshare -U` from `user-<uid>.slice` and from a `system.slice` job was denied.
 - **CL9 (kernel 5.14):** the kernel has no `userns_create` hook, so this can't work there.
@@ -30,6 +30,7 @@ We tested a test-only program that denies non-root `userns_create` outside `eapo
   - It is only sound on cgroup v2. On v1 an account can move its own process into a delegated cgroup.
   - Code inside a container can still create namespaces.
   - The program has to be loaded again at boot.
+  - The uid floor is an open choice. Denying every non-root uid would also cover PHP or CGI that runs as a system account, but we have not tested what it breaks.
 
 Our questions:
 
