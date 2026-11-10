@@ -1,0 +1,4 @@
+host ea4-352-u22 os=ubuntu-22.04 kernel=5.15.0-203-generic cgroup=v2 systemd=249 podman=3.4.4
+probe p0-10.sh=34d870027d6f plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+RESULT p0-10.linger no
+RESULT p0-10.planted /home/eapodtest/.config/systemd/user/clos7971-canary.service

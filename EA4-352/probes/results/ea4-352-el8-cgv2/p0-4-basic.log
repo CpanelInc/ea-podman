@@ -1,8 +1,9 @@
 host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v2 systemd=239 podman=4.9.4-rhel
+probe p0-4.sh=fd84f737567b plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
 
 ### 1. placement
 RESULT p0-4.conmon_cgroup /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/runtime
-RESULT p0-4.container_cgroup /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/libpod-payload-cc7c7f6d242438de48d64620a84ce4b47ce2882e5f6c959e312e10ae7498daa3
+RESULT p0-4.container_cgroup /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/libpod-payload-acd1d6035b272bfe59ad7a4315fcef8b0edcd82839629c2e7996be5bac470b50
 RESULT p0-4.pause_cgroup /eapodman.slice/eapodman-1000.slice/ea-podman-runtime@1000.service
 
 ### 2. stopping one unit
@@ -25,4 +26,4 @@ RESULT p0-4.worker_cpu_weight 20
 
 ### 6./7. split vs no split, and is the mode fixed at create (F17)
 RESULT p0-4.p04split_created_split_started_nosplit recorded=default ran=split memory.max=67108864
-RESULT p0-4.p04nosplit_created_nosplit_started_split recorded=default FAILS: conmon 484e3047a09971245eb6 <error>: Failed to create container: exit status 1
+RESULT p0-4.p04nosplit_created_nosplit_started_split recorded=default FAILS: conmon fdfda136c00be7565691 <error>: Failed to create container: exit status 1

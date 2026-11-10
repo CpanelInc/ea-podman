@@ -1,0 +1,19 @@
+### after systemctl daemon-reexec: bus check passed, then p0-10.sh pre:
+host ea4-352-el9 os=almalinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+probe p0-10.sh=34d870027d6f plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+Failed to start transient service unit: Remote peer disconnected
+RESULT p0-10.planted FAILS: the account could not write /home/eapodtest/.config/systemd/user
+
+### journalctl -b -o short-precise _PID=1 --since -10min
+Nov 10 01:10:35.128423 ea4-352-el9.openstack.build systemd[1]: session-34.scope: Deactivated successfully.
+Nov 10 01:16:56.885146 ea4-352-el9.openstack.build systemd[1]: Reexecuting.
+Nov 10 01:16:57.131473 ea4-352-el9.openstack.build systemd[1]: Started Session 52 of User root.
+Nov 10 01:17:02.126799 ea4-352-el9.openstack.build systemd[1]: Started /bin/true.
+Nov 10 01:17:02.129786 ea4-352-el9.openstack.build systemd[1]: run-u306.service: Deactivated successfully.
+Nov 10 01:17:02.223970 ea4-352-el9.openstack.build systemd[1]: session-52.scope: Deactivated successfully.
+Nov 10 01:17:07.576494 ea4-352-el9.openstack.build systemd[1]: Started Session 53 of User root.
+Nov 10 01:17:07.670688 ea4-352-el9.openstack.build systemd[1]: session-53.scope: Deactivated successfully.
+Nov 10 01:17:19.136413 ea4-352-el9.openstack.build systemd[1]: Started Session 54 of User root.
+
+### journalctl -b -o short-precise -u dbus-broker --since -10min
+-- No entries --

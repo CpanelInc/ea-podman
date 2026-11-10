@@ -1,0 +1,312 @@
+### fresh boot: systemd-run /bin/true passed, then p0-10.sh pre:
+host ea4-352-el10 os=almalinux-10.2 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+probe p0-10.sh=34d870027d6f plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+Failed to start transient service unit: Remote peer disconnected
+RESULT p0-10.planted FAILS: the account could not write /home/eapodtest/.config/systemd/user
+
+### journalctl -b -o short-precise _PID=1
+Nov 10 01:17:28.354442 localhost systemd[1]: Mounting sysroot.mount - /sysroot...
+Nov 10 01:17:29.064611 localhost systemd[1]: Mounted sysroot.mount - /sysroot.
+Nov 10 01:17:29.066712 localhost systemd[1]: Reached target initrd-root-fs.target - Initrd Root File System.
+Nov 10 01:17:29.069847 localhost systemd[1]: Starting initrd-parse-etc.service - Mountpoints Configured in the Real Root...
+Nov 10 01:17:29.107278 localhost systemd[1]: initrd-parse-etc.service: Deactivated successfully.
+Nov 10 01:17:29.107608 localhost systemd[1]: Finished initrd-parse-etc.service - Mountpoints Configured in the Real Root.
+Nov 10 01:17:29.110658 localhost systemd[1]: Reached target initrd-fs.target - Initrd File Systems.
+Nov 10 01:17:29.112519 localhost systemd[1]: Reached target initrd.target - Initrd Default Target.
+Nov 10 01:17:29.114305 localhost systemd[1]: dracut-mount.service - dracut mount hook was skipped because no trigger condition checks were met.
+Nov 10 01:17:29.115579 localhost systemd[1]: Starting dracut-pre-pivot.service - dracut pre-pivot and cleanup hook...
+Nov 10 01:17:29.154341 localhost systemd[1]: Finished dracut-pre-pivot.service - dracut pre-pivot and cleanup hook.
+Nov 10 01:17:29.158334 localhost systemd[1]: Starting initrd-cleanup.service - Cleaning Up and Shutting Down Daemons...
+Nov 10 01:17:29.181724 localhost systemd[1]: Stopped target remote-cryptsetup.target - Remote Encrypted Volumes.
+Nov 10 01:17:29.183712 localhost systemd[1]: Stopped target timers.target - Timer Units.
+Nov 10 01:17:29.185236 localhost systemd[1]: dracut-pre-pivot.service: Deactivated successfully.
+Nov 10 01:17:29.185508 localhost systemd[1]: Stopped dracut-pre-pivot.service - dracut pre-pivot and cleanup hook.
+Nov 10 01:17:29.187687 localhost systemd[1]: Stopped target initrd.target - Initrd Default Target.
+Nov 10 01:17:29.189248 localhost systemd[1]: Stopped target basic.target - Basic System.
+Nov 10 01:17:29.190777 localhost systemd[1]: Stopped target initrd-root-device.target - Initrd Root Device.
+Nov 10 01:17:29.192576 localhost systemd[1]: Stopped target initrd-usr-fs.target - Initrd /usr File System.
+Nov 10 01:17:29.194290 localhost systemd[1]: Stopped target paths.target - Path Units.
+Nov 10 01:17:29.195740 localhost systemd[1]: Stopped target remote-fs.target - Remote File Systems.
+Nov 10 01:17:29.197285 localhost systemd[1]: Stopped target remote-fs-pre.target - Preparation for Remote File Systems.
+Nov 10 01:17:29.199204 localhost systemd[1]: Stopped target slices.target - Slice Units.
+Nov 10 01:17:29.200720 localhost systemd[1]: Stopped target sockets.target - Socket Units.
+Nov 10 01:17:29.202225 localhost systemd[1]: Stopped target sysinit.target - System Initialization.
+Nov 10 01:17:29.203814 localhost systemd[1]: Stopped target swap.target - Swaps.
+Nov 10 01:17:29.205016 localhost systemd[1]: dracut-pre-mount.service: Deactivated successfully.
+Nov 10 01:17:29.205185 localhost systemd[1]: Stopped dracut-pre-mount.service - dracut pre-mount hook.
+Nov 10 01:17:29.206851 localhost systemd[1]: Stopped target cryptsetup.target - Local Encrypted Volumes.
+Nov 10 01:17:29.208255 localhost systemd[1]: systemd-ask-password-console.path: Deactivated successfully.
+Nov 10 01:17:29.211608 localhost systemd[1]: Stopped systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+Nov 10 01:17:29.213294 localhost systemd[1]: dracut-initqueue.service: Deactivated successfully.
+Nov 10 01:17:29.213461 localhost systemd[1]: Stopped dracut-initqueue.service - dracut initqueue hook.
+Nov 10 01:17:29.215130 localhost systemd[1]: systemd-sysctl.service: Deactivated successfully.
+Nov 10 01:17:29.215276 localhost systemd[1]: Stopped systemd-sysctl.service - Apply Kernel Variables.
+Nov 10 01:17:29.216684 localhost systemd[1]: systemd-modules-load.service: Deactivated successfully.
+Nov 10 01:17:29.216813 localhost systemd[1]: Stopped systemd-modules-load.service - Load Kernel Modules.
+Nov 10 01:17:29.218520 localhost systemd[1]: systemd-tmpfiles-setup.service: Deactivated successfully.
+Nov 10 01:17:29.218670 localhost systemd[1]: Stopped systemd-tmpfiles-setup.service - Create System Files and Directories.
+Nov 10 01:17:29.220437 localhost systemd[1]: Stopped target local-fs.target - Local File Systems.
+Nov 10 01:17:29.221920 localhost systemd[1]: Stopped target local-fs-pre.target - Preparation for Local File Systems.
+Nov 10 01:17:29.223609 localhost systemd[1]: systemd-udev-trigger.service: Deactivated successfully.
+Nov 10 01:17:29.223767 localhost systemd[1]: Stopped systemd-udev-trigger.service - Coldplug All udev Devices.
+Nov 10 01:17:29.225419 localhost systemd[1]: dracut-pre-trigger.service: Deactivated successfully.
+Nov 10 01:17:29.225567 localhost systemd[1]: Stopped dracut-pre-trigger.service - dracut pre-trigger hook.
+Nov 10 01:17:29.227269 localhost systemd[1]: Stopping systemd-udevd.service - Rule-based Manager for Device Events and Files...
+Nov 10 01:17:29.228666 localhost systemd[1]: systemd-vconsole-setup.service: Deactivated successfully.
+Nov 10 01:17:29.229592 localhost systemd[1]: Stopped systemd-vconsole-setup.service - Virtual Console Setup.
+Nov 10 01:17:29.234638 localhost systemd[1]: systemd-udevd.service: Deactivated successfully.
+Nov 10 01:17:29.234900 localhost systemd[1]: Stopped systemd-udevd.service - Rule-based Manager for Device Events and Files.
+Nov 10 01:17:29.236849 localhost systemd[1]: initrd-cleanup.service: Deactivated successfully.
+Nov 10 01:17:29.237073 localhost systemd[1]: Finished initrd-cleanup.service - Cleaning Up and Shutting Down Daemons.
+Nov 10 01:17:29.239774 localhost systemd[1]: systemd-udevd-control.socket: Deactivated successfully.
+Nov 10 01:17:29.239839 localhost systemd[1]: Closed systemd-udevd-control.socket - udev Control Socket.
+Nov 10 01:17:29.241288 localhost systemd[1]: systemd-udevd-kernel.socket: Deactivated successfully.
+Nov 10 01:17:29.241337 localhost systemd[1]: Closed systemd-udevd-kernel.socket - udev Kernel Socket.
+Nov 10 01:17:29.242651 localhost systemd[1]: dracut-pre-udev.service: Deactivated successfully.
+Nov 10 01:17:29.242720 localhost systemd[1]: Stopped dracut-pre-udev.service - dracut pre-udev hook.
+Nov 10 01:17:29.244152 localhost systemd[1]: dracut-cmdline.service: Deactivated successfully.
+Nov 10 01:17:29.244217 localhost systemd[1]: Stopped dracut-cmdline.service - dracut cmdline hook.
+Nov 10 01:17:29.246831 localhost systemd[1]: Starting initrd-udevadm-cleanup-db.service - Cleanup udev Database...
+Nov 10 01:17:29.248504 localhost systemd[1]: systemd-tmpfiles-setup-dev.service: Deactivated successfully.
+Nov 10 01:17:29.248599 localhost systemd[1]: Stopped systemd-tmpfiles-setup-dev.service - Create Static Device Nodes in /dev.
+Nov 10 01:17:29.250593 localhost systemd[1]: systemd-sysusers.service: Deactivated successfully.
+Nov 10 01:17:29.250661 localhost systemd[1]: Stopped systemd-sysusers.service - Create System Users.
+Nov 10 01:17:29.252033 localhost systemd[1]: systemd-tmpfiles-setup-dev-early.service: Deactivated successfully.
+Nov 10 01:17:29.252103 localhost systemd[1]: Stopped systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully.
+Nov 10 01:17:29.253687 localhost systemd[1]: kmod-static-nodes.service: Deactivated successfully.
+Nov 10 01:17:29.253799 localhost systemd[1]: Stopped kmod-static-nodes.service - Create List of Static Device Nodes.
+Nov 10 01:17:29.273563 localhost systemd[1]: initrd-udevadm-cleanup-db.service: Deactivated successfully.
+Nov 10 01:17:29.273912 localhost systemd[1]: Finished initrd-udevadm-cleanup-db.service - Cleanup udev Database.
+Nov 10 01:17:29.275950 localhost systemd[1]: Reached target initrd-switch-root.target - Switch Root.
+Nov 10 01:17:29.279097 localhost systemd[1]: Starting initrd-switch-root.service - Switch Root...
+Nov 10 01:17:29.306061 localhost systemd[1]: Switching root.
+Nov 10 01:17:30.765354 ea4-352-el10.openstack.build systemd[1]: Queued start job for default target multi-user.target.
+Nov 10 01:17:30.778030 ea4-352-el10.openstack.build systemd[1]: systemd-journald.service: Deactivated successfully.
+Nov 10 01:17:31.201059 ea4-352-el10.openstack.build systemd[1]: modprobe@fuse.service: Deactivated successfully.
+Nov 10 01:17:31.201296 ea4-352-el10.openstack.build systemd[1]: Finished modprobe@fuse.service - Load Kernel Module fuse.
+Nov 10 01:17:31.204399 ea4-352-el10.openstack.build systemd[1]: modprobe@loop.service: Deactivated successfully.
+Nov 10 01:17:31.204618 ea4-352-el10.openstack.build systemd[1]: Finished modprobe@loop.service - Load Kernel Module loop.
+Nov 10 01:17:31.207158 ea4-352-el10.openstack.build systemd[1]: Finished systemd-modules-load.service - Load Kernel Modules.
+Nov 10 01:17:31.209394 ea4-352-el10.openstack.build systemd[1]: Finished systemd-network-generator.service - Generate network units from Kernel command line.
+Nov 10 01:17:31.212039 ea4-352-el10.openstack.build systemd[1]: Finished systemd-remount-fs.service - Remount Root and Kernel File Systems.
+Nov 10 01:17:31.214371 ea4-352-el10.openstack.build systemd[1]: Finished systemd-udev-load-credentials.service - Load udev Rules from Credentials.
+Nov 10 01:17:31.227472 ea4-352-el10.openstack.build systemd[1]: Finished systemd-udev-trigger.service - Coldplug All udev Devices.
+Nov 10 01:17:31.233088 ea4-352-el10.openstack.build systemd[1]: systemd-hwdb-update.service - Rebuild Hardware Database was skipped because of an unmet condition check (ConditionNeedsUpdate=/etc).
+Nov 10 01:17:31.234813 ea4-352-el10.openstack.build systemd[1]: Starting systemd-journal-flush.service - Flush Journal to Persistent Storage...
+Nov 10 01:17:31.236866 ea4-352-el10.openstack.build systemd[1]: systemd-pstore.service - Platform Persistent Storage Archival was skipped because of an unmet condition check (ConditionDirectoryNotEmpty=/sys/fs/pstore).
+Nov 10 01:17:31.239374 ea4-352-el10.openstack.build systemd[1]: Starting systemd-random-seed.service - Load/Save OS Random Seed...
+Nov 10 01:17:31.241239 ea4-352-el10.openstack.build systemd[1]: systemd-repart.service - Repartition Root Disk was skipped because no trigger condition checks were met.
+Nov 10 01:17:31.244211 ea4-352-el10.openstack.build systemd[1]: Starting systemd-sysctl.service - Apply Kernel Variables...
+Nov 10 01:17:31.248038 ea4-352-el10.openstack.build systemd[1]: Starting systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully...
+Nov 10 01:17:31.250035 ea4-352-el10.openstack.build systemd[1]: systemd-tpm2-setup.service - TPM SRK Setup was skipped because of an unmet condition check (ConditionSecurity=measured-uki).
+Nov 10 01:17:31.263028 ea4-352-el10.openstack.build systemd[1]: Finished systemd-journal-flush.service - Flush Journal to Persistent Storage.
+Nov 10 01:17:31.265417 ea4-352-el10.openstack.build systemd[1]: Finished systemd-random-seed.service - Load/Save OS Random Seed.
+Nov 10 01:17:31.279234 ea4-352-el10.openstack.build systemd[1]: Finished systemd-sysctl.service - Apply Kernel Variables.
+Nov 10 01:17:31.328215 ea4-352-el10.openstack.build systemd[1]: Starting systemd-userdbd.service - User Database Manager...
+Nov 10 01:17:31.388449 ea4-352-el10.openstack.build systemd[1]: Started systemd-userdbd.service - User Database Manager.
+Nov 10 01:17:31.431355 ea4-352-el10.openstack.build systemd[1]: Finished systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully.
+Nov 10 01:17:31.434043 ea4-352-el10.openstack.build systemd[1]: systemd-sysusers.service - Create System Users was skipped because no trigger condition checks were met.
+Nov 10 01:17:31.435804 ea4-352-el10.openstack.build systemd[1]: Starting systemd-tmpfiles-setup-dev.service - Create Static Device Nodes in /dev...
+Nov 10 01:17:31.486680 ea4-352-el10.openstack.build systemd[1]: Finished systemd-tmpfiles-setup-dev.service - Create Static Device Nodes in /dev.
+Nov 10 01:17:31.489280 ea4-352-el10.openstack.build systemd[1]: Reached target local-fs-pre.target - Preparation for Local File Systems.
+Nov 10 01:17:31.493577 ea4-352-el10.openstack.build systemd[1]: Starting systemd-udevd.service - Rule-based Manager for Device Events and Files...
+Nov 10 01:17:31.617872 ea4-352-el10.openstack.build systemd[1]: Started systemd-udevd.service - Rule-based Manager for Device Events and Files.
+Nov 10 01:17:31.624224 ea4-352-el10.openstack.build systemd[1]: Starting modprobe@fuse.service - Load Kernel Module fuse...
+Nov 10 01:17:31.629040 ea4-352-el10.openstack.build systemd[1]: Starting modprobe@configfs.service - Load Kernel Module configfs...
+Nov 10 01:17:31.656010 ea4-352-el10.openstack.build systemd[1]: modprobe@fuse.service: Deactivated successfully.
+Nov 10 01:17:31.656334 ea4-352-el10.openstack.build systemd[1]: Finished modprobe@fuse.service - Load Kernel Module fuse.
+Nov 10 01:17:31.658910 ea4-352-el10.openstack.build systemd[1]: modprobe@configfs.service: Deactivated successfully.
+Nov 10 01:17:31.659235 ea4-352-el10.openstack.build systemd[1]: Finished modprobe@configfs.service - Load Kernel Module configfs.
+Nov 10 01:17:31.708375 ea4-352-el10.openstack.build systemd[1]: Condition check resulted in dev-ttyS0.device - /dev/ttyS0 being skipped.
+Nov 10 01:17:31.809652 ea4-352-el10.openstack.build systemd[1]: Condition check resulted in dev-disk-by\x2duuid-A3BA\x2dCAF7.device - /dev/disk/by-uuid/A3BA-CAF7 being skipped.
+Nov 10 01:17:31.814777 ea4-352-el10.openstack.build systemd[1]: Mounting sys-fs-fuse-connections.mount - FUSE Control File System...
+Nov 10 01:17:31.821400 ea4-352-el10.openstack.build systemd[1]: Starting systemd-fsck@dev-disk-by\x2duuid-A3BA\x2dCAF7.service - File System Check on /dev/disk/by-uuid/A3BA-CAF7...
+Nov 10 01:17:31.830386 ea4-352-el10.openstack.build systemd[1]: Condition check resulted in dev-disk-by\x2duuid-cea79fb2\x2db54a\x2d4ab3\x2dbd5e\x2d25595813e238.device - /dev/disk/by-uuid/cea79fb2-b54a-4ab3-bd5e-25595813e238 being skipped.
+Nov 10 01:17:31.837300 ea4-352-el10.openstack.build systemd[1]: Mounting boot.mount - /boot...
+Nov 10 01:17:31.841875 ea4-352-el10.openstack.build systemd[1]: Mounted sys-fs-fuse-connections.mount - FUSE Control File System.
+Nov 10 01:17:31.870615 ea4-352-el10.openstack.build systemd[1]: Starting systemd-vconsole-setup.service - Virtual Console Setup...
+Nov 10 01:17:31.910191 ea4-352-el10.openstack.build systemd[1]: Mounted boot.mount - /boot.
+Nov 10 01:17:31.932178 ea4-352-el10.openstack.build systemd[1]: Finished systemd-fsck@dev-disk-by\x2duuid-A3BA\x2dCAF7.service - File System Check on /dev/disk/by-uuid/A3BA-CAF7.
+Nov 10 01:17:31.975821 ea4-352-el10.openstack.build systemd[1]: Mounting boot-efi.mount - /boot/efi...
+Nov 10 01:17:31.980419 ea4-352-el10.openstack.build systemd[1]: systemd-vconsole-setup.service: Deactivated successfully.
+Nov 10 01:17:31.992866 ea4-352-el10.openstack.build systemd[1]: Stopped systemd-vconsole-setup.service - Virtual Console Setup.
+Nov 10 01:17:32.003764 ea4-352-el10.openstack.build systemd[1]: Starting systemd-vconsole-setup.service - Virtual Console Setup...
+Nov 10 01:17:32.109435 ea4-352-el10.openstack.build systemd[1]: Mounted boot-efi.mount - /boot/efi.
+Nov 10 01:17:32.110089 ea4-352-el10.openstack.build systemd[1]: Reached target local-fs.target - Local File Systems.
+Nov 10 01:17:32.112124 ea4-352-el10.openstack.build systemd[1]: Listening on systemd-bootctl.socket - Boot Entries Service Socket.
+Nov 10 01:17:32.113522 ea4-352-el10.openstack.build systemd[1]: Listening on systemd-sysext.socket - System Extension Image Management.
+Nov 10 01:17:32.114100 ea4-352-el10.openstack.build systemd[1]: selinux-autorelabel-mark.service - Mark the need to relabel after reboot was skipped because of an unmet condition check (ConditionSecurity=!selinux).
+Nov 10 01:17:32.114267 ea4-352-el10.openstack.build systemd[1]: systemd-binfmt.service - Set Up Additional Binary Formats was skipped because no trigger condition checks were met.
+Nov 10 01:17:32.114298 ea4-352-el10.openstack.build systemd[1]: systemd-boot-random-seed.service - Update Boot Loader Random Seed was skipped because no trigger condition checks were met.
+Nov 10 01:17:32.114433 ea4-352-el10.openstack.build systemd[1]: systemd-confext.service - Merge System Configuration Images into /etc/ was skipped because no trigger condition checks were met.
+Nov 10 01:17:32.114530 ea4-352-el10.openstack.build systemd[1]: systemd-sysext.service - Merge System Extension Images into /usr/ and /opt/ was skipped because no trigger condition checks were met.
+Nov 10 01:17:32.117716 ea4-352-el10.openstack.build systemd[1]: Starting systemd-tmpfiles-setup.service - Create System Files and Directories...
+Nov 10 01:17:32.202079 ea4-352-el10.openstack.build systemd[1]: Finished systemd-vconsole-setup.service - Virtual Console Setup.
+Nov 10 01:17:32.271190 ea4-352-el10.openstack.build systemd[1]: Finished systemd-tmpfiles-setup.service - Create System Files and Directories.
+Nov 10 01:17:32.275060 ea4-352-el10.openstack.build systemd[1]: Starting auditd.service - Security Audit Logging Service...
+Nov 10 01:17:32.276926 ea4-352-el10.openstack.build systemd[1]: ldconfig.service - Rebuild Dynamic Linker Cache was skipped because no trigger condition checks were met.
+Nov 10 01:17:32.276971 ea4-352-el10.openstack.build systemd[1]: systemd-firstboot.service - First Boot Wizard was skipped because of an unmet condition check (ConditionFirstBoot=yes).
+Nov 10 01:17:32.276987 ea4-352-el10.openstack.build systemd[1]: first-boot-complete.target - First Boot Complete was skipped because of an unmet condition check (ConditionFirstBoot=yes).
+Nov 10 01:17:32.277067 ea4-352-el10.openstack.build systemd[1]: systemd-journal-catalog-update.service - Rebuild Journal Catalog was skipped because of an unmet condition check (ConditionNeedsUpdate=/var).
+Nov 10 01:17:32.277132 ea4-352-el10.openstack.build systemd[1]: systemd-machine-id-commit.service - Save Transient machine-id to Disk was skipped because of an unmet condition check (ConditionPathIsMountPoint=/etc/machine-id).
+Nov 10 01:17:32.277189 ea4-352-el10.openstack.build systemd[1]: systemd-update-done.service - Update is Completed was skipped because no trigger condition checks were met.
+Nov 10 01:17:32.324938 ea4-352-el10.openstack.build systemd[1]: Started auditd.service - Security Audit Logging Service.
+Nov 10 01:17:32.329700 ea4-352-el10.openstack.build systemd[1]: Starting systemd-update-utmp.service - Record System Boot/Shutdown in UTMP...
+Nov 10 01:17:32.351297 ea4-352-el10.openstack.build systemd[1]: Finished systemd-update-utmp.service - Record System Boot/Shutdown in UTMP.
+Nov 10 01:17:32.353992 ea4-352-el10.openstack.build systemd[1]: Reached target sysinit.target - System Initialization.
+Nov 10 01:17:32.355633 ea4-352-el10.openstack.build systemd[1]: Started dnf-makecache.timer - dnf makecache --timer.
+Nov 10 01:17:32.358210 ea4-352-el10.openstack.build systemd[1]: Started fstrim.timer - Discard unused filesystem blocks once a week.
+Nov 10 01:17:32.360048 ea4-352-el10.openstack.build systemd[1]: Started fwupd-refresh.timer - Refresh fwupd metadata regularly.
+Nov 10 01:17:32.361780 ea4-352-el10.openstack.build systemd[1]: Started logrotate.timer - Daily rotation of log files.
+Nov 10 01:17:32.363416 ea4-352-el10.openstack.build systemd[1]: Started systemd-tmpfiles-clean.timer - Daily Cleanup of Temporary Directories.
+Nov 10 01:17:32.365276 ea4-352-el10.openstack.build systemd[1]: Reached target timers.target - Timer Units.
+Nov 10 01:17:32.368528 ea4-352-el10.openstack.build systemd[1]: Listening on dbus.socket - D-Bus System Message Bus Socket.
+Nov 10 01:17:32.373275 ea4-352-el10.openstack.build systemd[1]: Listening on sshd-unix-local.socket - OpenSSH Server Socket (systemd-ssh-generator, AF_UNIX Local).
+Nov 10 01:17:32.375768 ea4-352-el10.openstack.build systemd[1]: Listening on sshd-vsock.socket - OpenSSH Server Socket (systemd-ssh-generator, AF_VSOCK).
+Nov 10 01:17:32.377826 ea4-352-el10.openstack.build systemd[1]: Reached target ssh-access.target - SSH Access Available.
+Nov 10 01:17:32.381473 ea4-352-el10.openstack.build systemd[1]: Listening on sssd-kcm.socket - SSSD Kerberos Cache Manager responder socket.
+Nov 10 01:17:32.384149 ea4-352-el10.openstack.build systemd[1]: Listening on systemd-hostnamed.socket - Hostname Service Socket.
+Nov 10 01:17:32.385996 ea4-352-el10.openstack.build systemd[1]: Reached target sockets.target - Socket Units.
+Nov 10 01:17:32.388905 ea4-352-el10.openstack.build systemd[1]: Starting cloud-init-local.service - Cloud-init: Local Stage (pre-network)...
+Nov 10 01:17:32.401194 ea4-352-el10.openstack.build systemd[1]: Starting dbus-broker.service - D-Bus System Message Bus...
+Nov 10 01:17:32.403747 ea4-352-el10.openstack.build systemd[1]: systemd-pcrphase-sysinit.service - TPM PCR Barrier (Initialization) was skipped because of an unmet condition check (ConditionSecurity=measured-uki).
+Nov 10 01:17:32.451242 ea4-352-el10.openstack.build systemd[1]: Started dbus-broker.service - D-Bus System Message Bus.
+Nov 10 01:17:32.468716 ea4-352-el10.openstack.build systemd[1]: Reached target basic.target - Basic System.
+Nov 10 01:17:32.478606 ea4-352-el10.openstack.build systemd[1]: Starting chronyd.service - NTP client/server...
+Nov 10 01:17:32.481200 ea4-352-el10.openstack.build systemd[1]: Starting dracut-shutdown.service - Restore /run/initramfs on shutdown...
+Nov 10 01:17:32.488986 ea4-352-el10.openstack.build systemd[1]: Starting ea-podman-runtime@1000.service - ea-podman runtime for uid 1000...
+Nov 10 01:17:32.499371 ea4-352-el10.openstack.build systemd[1]: Started irqbalance.service - irqbalance daemon.
+Nov 10 01:17:32.501611 ea4-352-el10.openstack.build systemd[1]: ssh-host-keys-migration.service - Update OpenSSH host key permissions was skipped because of an unmet condition check (ConditionPathExists=!/var/lib/.ssh-host-keys-migration).
+Nov 10 01:17:32.501821 ea4-352-el10.openstack.build systemd[1]: sshd-keygen@ecdsa.service - OpenSSH ecdsa Server Key Generation was skipped because of an unmet condition check (ConditionPathExists=!/run/systemd/generator.early/multi-user.target.wants/cloud-init.target).
+Nov 10 01:17:32.501931 ea4-352-el10.openstack.build systemd[1]: sshd-keygen@ed25519.service - OpenSSH ed25519 Server Key Generation was skipped because of an unmet condition check (ConditionPathExists=!/run/systemd/generator.early/multi-user.target.wants/cloud-init.target).
+Nov 10 01:17:32.502021 ea4-352-el10.openstack.build systemd[1]: sshd-keygen@rsa.service - OpenSSH rsa Server Key Generation was skipped because of an unmet condition check (ConditionPathExists=!/run/systemd/generator.early/multi-user.target.wants/cloud-init.target).
+Nov 10 01:17:32.502145 ea4-352-el10.openstack.build systemd[1]: Reached target sshd-keygen.target.
+Nov 10 01:17:32.503983 ea4-352-el10.openstack.build systemd[1]: sssd.service - System Security Services Daemon was skipped because no trigger condition checks were met.
+Nov 10 01:17:32.504157 ea4-352-el10.openstack.build systemd[1]: Reached target nss-user-lookup.target - User and Group Name Lookups.
+Nov 10 01:17:32.518191 ea4-352-el10.openstack.build systemd[1]: Starting systemd-logind.service - User Login Management...
+Nov 10 01:17:32.521614 ea4-352-el10.openstack.build systemd[1]: Finished dracut-shutdown.service - Restore /run/initramfs on shutdown.
+Nov 10 01:17:32.606121 ea4-352-el10.openstack.build systemd[1]: Started systemd-logind.service - User Login Management.
+Nov 10 01:17:32.612712 ea4-352-el10.openstack.build systemd[1]: Started chronyd.service - NTP client/server.
+Nov 10 01:17:32.809693 ea4-352-el10.openstack.build systemd[1]: Mounting var-lib-nfs-rpc_pipefs.mount - RPC Pipe File System...
+Nov 10 01:17:32.928525 ea4-352-el10.openstack.build systemd[1]: Mounted var-lib-nfs-rpc_pipefs.mount - RPC Pipe File System.
+Nov 10 01:17:32.931972 ea4-352-el10.openstack.build systemd[1]: Reached target rpc_pipefs.target.
+Nov 10 01:17:33.326620 ea4-352-el10.openstack.build systemd[1]: Finished ea-podman-runtime@1000.service - ea-podman runtime for uid 1000.
+Nov 10 01:17:33.331789 ea4-352-el10.openstack.build systemd[1]: Starting ea-podman-api.eapodtest.02.service - ea-podman container api.eapodtest.02...
+Nov 10 01:17:33.335701 ea4-352-el10.openstack.build systemd[1]: Starting ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01...
+Nov 10 01:17:33.340204 ea4-352-el10.openstack.build systemd[1]: Starting ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03...
+Nov 10 01:17:33.610877 ea4-352-el10.openstack.build systemd[1]: Started ea-podman-api.eapodtest.02.service - ea-podman container api.eapodtest.02.
+Nov 10 01:17:33.621031 ea4-352-el10.openstack.build systemd[1]: Started ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
+Nov 10 01:17:33.644085 ea4-352-el10.openstack.build systemd[1]: Started ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
+Nov 10 01:17:33.809020 ea4-352-el10.openstack.build systemd[1]: Finished cloud-init-local.service - Cloud-init: Local Stage (pre-network).
+Nov 10 01:17:33.813425 ea4-352-el10.openstack.build systemd[1]: Reached target network-pre.target - Preparation for Network.
+Nov 10 01:17:33.818265 ea4-352-el10.openstack.build systemd[1]: Starting NetworkManager.service - Network Manager...
+Nov 10 01:17:33.963903 ea4-352-el10.openstack.build systemd[1]: Starting systemd-hostnamed.service - Hostname Service...
+Nov 10 01:17:34.034338 ea4-352-el10.openstack.build systemd[1]: Started systemd-hostnamed.service - Hostname Service.
+Nov 10 01:17:34.057848 ea4-352-el10.openstack.build systemd[1]: Listening on systemd-rfkill.socket - Load/Save RF Kill Switch Status /dev/rfkill Watch.
+Nov 10 01:17:34.068752 ea4-352-el10.openstack.build systemd[1]: Starting NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service...
+Nov 10 01:17:34.079592 ea4-352-el10.openstack.build systemd[1]: Started NetworkManager.service - Network Manager.
+Nov 10 01:17:34.081931 ea4-352-el10.openstack.build systemd[1]: Reached target network.target - Network.
+Nov 10 01:17:34.084785 ea4-352-el10.openstack.build systemd[1]: Starting NetworkManager-wait-online.service - Network Manager Wait Online...
+Nov 10 01:17:34.088811 ea4-352-el10.openstack.build systemd[1]: Starting gssproxy.service - GSSAPI Proxy Daemon...
+Nov 10 01:17:34.095519 ea4-352-el10.openstack.build systemd[1]: Starting tuned.service - Dynamic System Tuning Daemon...
+Nov 10 01:17:34.115333 ea4-352-el10.openstack.build systemd[1]: Started NetworkManager-dispatcher.service - Network Manager Script Dispatcher Service.
+Nov 10 01:17:34.174495 ea4-352-el10.openstack.build systemd[1]: Started gssproxy.service - GSSAPI Proxy Daemon.
+Nov 10 01:17:34.177038 ea4-352-el10.openstack.build systemd[1]: rpc-gssd.service - RPC security service for NFS client and server was skipped because of an unmet condition check (ConditionPathExists=/etc/krb5.keytab).
+Nov 10 01:17:34.177403 ea4-352-el10.openstack.build systemd[1]: Reached target nfs-client.target - NFS client services.
+Nov 10 01:17:34.179616 ea4-352-el10.openstack.build systemd[1]: Reached target remote-fs-pre.target - Preparation for Remote File Systems.
+Nov 10 01:17:34.182024 ea4-352-el10.openstack.build systemd[1]: Reached target remote-cryptsetup.target - Remote Encrypted Volumes.
+Nov 10 01:17:34.184295 ea4-352-el10.openstack.build systemd[1]: Reached target remote-fs.target - Remote File Systems.
+Nov 10 01:17:34.186254 ea4-352-el10.openstack.build systemd[1]: systemd-pcrphase.service - TPM PCR Barrier (User) was skipped because of an unmet condition check (ConditionSecurity=measured-uki).
+Nov 10 01:17:34.292123 ea4-352-el10.openstack.build systemd[1]: Finished NetworkManager-wait-online.service - Network Manager Wait Online.
+Nov 10 01:17:34.298082 ea4-352-el10.openstack.build systemd[1]: Starting cloud-init.service - Cloud-init: Network Stage...
+Nov 10 01:17:34.693616 ea4-352-el10.openstack.build systemd[1]: Starting polkit.service - Authorization Manager...
+Nov 10 01:17:34.738513 ea4-352-el10.openstack.build systemd[1]: Started tuned.service - Dynamic System Tuning Daemon.
+Nov 10 01:17:34.817272 ea4-352-el10.openstack.build systemd[1]: Started polkit.service - Authorization Manager.
+Nov 10 01:17:35.112584 ea4-352-el10.openstack.build systemd[1]: Finished cloud-init.service - Cloud-init: Network Stage.
+Nov 10 01:17:35.116138 ea4-352-el10.openstack.build systemd[1]: Reached target cloud-config.target - Cloud-config availability.
+Nov 10 01:17:35.118413 ea4-352-el10.openstack.build systemd[1]: Reached target network-online.target - Network is Online.
+Nov 10 01:17:35.122319 ea4-352-el10.openstack.build systemd[1]: Starting cloud-config.service - Cloud-init: Config Stage...
+Nov 10 01:17:35.125375 ea4-352-el10.openstack.build systemd[1]: Starting rpc-statd-notify.service - Notify NFS peers of a restart...
+Nov 10 01:17:35.132916 ea4-352-el10.openstack.build systemd[1]: Starting rsyslog.service - System Logging Service...
+Nov 10 01:17:35.137860 ea4-352-el10.openstack.build systemd[1]: Starting sshd.service - OpenSSH server daemon...
+Nov 10 01:17:35.144001 ea4-352-el10.openstack.build systemd[1]: Starting systemd-user-sessions.service - Permit User Sessions...
+Nov 10 01:17:35.160153 ea4-352-el10.openstack.build systemd[1]: Started rpc-statd-notify.service - Notify NFS peers of a restart.
+Nov 10 01:17:35.174074 ea4-352-el10.openstack.build systemd[1]: Finished systemd-user-sessions.service - Permit User Sessions.
+Nov 10 01:17:35.181171 ea4-352-el10.openstack.build systemd[1]: Started crond.service - Command Scheduler.
+Nov 10 01:17:35.184289 ea4-352-el10.openstack.build systemd[1]: Started getty@tty1.service - Getty on tty1.
+Nov 10 01:17:35.191008 ea4-352-el10.openstack.build systemd[1]: Started serial-getty@ttyS0.service - Serial Getty on ttyS0.
+Nov 10 01:17:35.192092 ea4-352-el10.openstack.build systemd[1]: Reached target getty.target - Login Prompts.
+Nov 10 01:17:35.195763 ea4-352-el10.openstack.build systemd[1]: Started rsyslog.service - System Logging Service.
+Nov 10 01:17:35.202618 ea4-352-el10.openstack.build systemd[1]: Started sshd.service - OpenSSH server daemon.
+Nov 10 01:17:35.204330 ea4-352-el10.openstack.build systemd[1]: Reached target multi-user.target - Multi-User System.
+Nov 10 01:17:35.208404 ea4-352-el10.openstack.build systemd[1]: Starting systemd-update-utmp-runlevel.service - Record Runlevel Change in UTMP...
+Nov 10 01:17:35.232696 ea4-352-el10.openstack.build systemd[1]: systemd-update-utmp-runlevel.service: Deactivated successfully.
+Nov 10 01:17:35.233280 ea4-352-el10.openstack.build systemd[1]: Finished systemd-update-utmp-runlevel.service - Record Runlevel Change in UTMP.
+Nov 10 01:17:35.706183 ea4-352-el10.openstack.build systemd[1]: Finished cloud-config.service - Cloud-init: Config Stage.
+Nov 10 01:17:35.712436 ea4-352-el10.openstack.build systemd[1]: Starting cloud-final.service - Cloud-init: Final Stage...
+Nov 10 01:17:36.338076 ea4-352-el10.openstack.build systemd[1]: Finished cloud-final.service - Cloud-init: Final Stage.
+Nov 10 01:17:36.341638 ea4-352-el10.openstack.build systemd[1]: Reached target cloud-init.target - Cloud-init target.
+Nov 10 01:17:36.343726 ea4-352-el10.openstack.build systemd[1]: Startup finished in 1.515s (kernel) + 2.785s (initrd) + 6.810s (userspace) = 11.111s.
+Nov 10 01:17:44.364042 ea4-352-el10.openstack.build systemd[1]: NetworkManager-dispatcher.service: Deactivated successfully.
+Nov 10 01:18:04.071760 ea4-352-el10.openstack.build systemd[1]: systemd-hostnamed.service: Deactivated successfully.
+Nov 10 01:18:07.179916 ea4-352-el10.openstack.build systemd[1]: Created slice user-0.slice - User Slice of UID 0.
+Nov 10 01:18:07.182348 ea4-352-el10.openstack.build systemd[1]: Starting user-runtime-dir@0.service - User Runtime Directory /run/user/0...
+Nov 10 01:18:07.207254 ea4-352-el10.openstack.build systemd[1]: Finished user-runtime-dir@0.service - User Runtime Directory /run/user/0.
+Nov 10 01:18:07.210853 ea4-352-el10.openstack.build systemd[1]: Starting user@0.service - User Manager for UID 0...
+Nov 10 01:18:07.440217 ea4-352-el10.openstack.build systemd[1]: Started user@0.service - User Manager for UID 0.
+Nov 10 01:18:07.450728 ea4-352-el10.openstack.build systemd[1]: Started session-1.scope - Session 1 of User root.
+Nov 10 01:18:07.574131 ea4-352-el10.openstack.build systemd[1]: session-1.scope: Deactivated successfully.
+Nov 10 01:18:17.677094 ea4-352-el10.openstack.build systemd[1]: Stopping user@0.service - User Manager for UID 0...
+Nov 10 01:18:17.691443 ea4-352-el10.openstack.build systemd[1]: user@0.service: Deactivated successfully.
+Nov 10 01:18:17.691854 ea4-352-el10.openstack.build systemd[1]: Stopped user@0.service - User Manager for UID 0.
+Nov 10 01:18:17.709586 ea4-352-el10.openstack.build systemd[1]: Stopping user-runtime-dir@0.service - User Runtime Directory /run/user/0...
+Nov 10 01:18:17.728475 ea4-352-el10.openstack.build systemd[1]: run-user-0.mount: Deactivated successfully.
+Nov 10 01:18:17.729633 ea4-352-el10.openstack.build systemd[1]: user-runtime-dir@0.service: Deactivated successfully.
+Nov 10 01:18:17.729870 ea4-352-el10.openstack.build systemd[1]: Stopped user-runtime-dir@0.service - User Runtime Directory /run/user/0.
+Nov 10 01:18:17.732029 ea4-352-el10.openstack.build systemd[1]: Removed slice user-0.slice - User Slice of UID 0.
+Nov 10 01:18:26.270118 ea4-352-el10.openstack.build systemd[1]: Created slice user-0.slice - User Slice of UID 0.
+Nov 10 01:18:26.271988 ea4-352-el10.openstack.build systemd[1]: Starting user-runtime-dir@0.service - User Runtime Directory /run/user/0...
+Nov 10 01:18:26.294648 ea4-352-el10.openstack.build systemd[1]: Finished user-runtime-dir@0.service - User Runtime Directory /run/user/0.
+Nov 10 01:18:26.298835 ea4-352-el10.openstack.build systemd[1]: Starting user@0.service - User Manager for UID 0...
+Nov 10 01:18:26.564636 ea4-352-el10.openstack.build systemd[1]: Started user@0.service - User Manager for UID 0.
+Nov 10 01:18:26.576959 ea4-352-el10.openstack.build systemd[1]: Started session-3.scope - Session 3 of User root.
+Nov 10 01:18:26.681219 ea4-352-el10.openstack.build systemd[1]: session-3.scope: Deactivated successfully.
+Nov 10 01:18:36.927244 ea4-352-el10.openstack.build systemd[1]: Stopping user@0.service - User Manager for UID 0...
+Nov 10 01:18:36.938787 ea4-352-el10.openstack.build systemd[1]: user@0.service: Deactivated successfully.
+Nov 10 01:18:36.939264 ea4-352-el10.openstack.build systemd[1]: Stopped user@0.service - User Manager for UID 0.
+Nov 10 01:18:36.947435 ea4-352-el10.openstack.build systemd[1]: Stopping user-runtime-dir@0.service - User Runtime Directory /run/user/0...
+Nov 10 01:18:36.969631 ea4-352-el10.openstack.build systemd[1]: run-user-0.mount: Deactivated successfully.
+Nov 10 01:18:36.970698 ea4-352-el10.openstack.build systemd[1]: user-runtime-dir@0.service: Deactivated successfully.
+Nov 10 01:18:36.970990 ea4-352-el10.openstack.build systemd[1]: Stopped user-runtime-dir@0.service - User Runtime Directory /run/user/0.
+Nov 10 01:18:36.973105 ea4-352-el10.openstack.build systemd[1]: Removed slice user-0.slice - User Slice of UID 0.
+Nov 10 01:18:46.457701 ea4-352-el10.openstack.build systemd[1]: Created slice user-0.slice - User Slice of UID 0.
+Nov 10 01:18:46.458827 ea4-352-el10.openstack.build systemd[1]: Starting user-runtime-dir@0.service - User Runtime Directory /run/user/0...
+Nov 10 01:18:46.486469 ea4-352-el10.openstack.build systemd[1]: Finished user-runtime-dir@0.service - User Runtime Directory /run/user/0.
+Nov 10 01:18:46.497177 ea4-352-el10.openstack.build systemd[1]: Starting user@0.service - User Manager for UID 0...
+Nov 10 01:18:46.759153 ea4-352-el10.openstack.build systemd[1]: Started user@0.service - User Manager for UID 0.
+Nov 10 01:18:46.765822 ea4-352-el10.openstack.build systemd[1]: Started session-5.scope - Session 5 of User root.
+Nov 10 01:18:46.844216 ea4-352-el10.openstack.build systemd[1]: session-5.scope: Deactivated successfully.
+Nov 10 01:18:55.661899 ea4-352-el10.openstack.build systemd[1]: Started session-7.scope - Session 7 of User root.
+Nov 10 01:18:55.774895 ea4-352-el10.openstack.build systemd[1]: Started run-p1481-i1482.service - [systemd-run] /bin/true.
+Nov 10 01:18:55.797967 ea4-352-el10.openstack.build systemd[1]: run-p1481-i1482.service: Deactivated successfully.
+Nov 10 01:18:55.904014 ea4-352-el10.openstack.build systemd[1]: Got disconnect on API bus.
+Nov 10 01:18:55.912169 ea4-352-el10.openstack.build systemd[1]: session-7.scope: Deactivated successfully.
+Nov 10 01:19:05.928596 ea4-352-el10.openstack.build systemd[1]: Stopping user@0.service - User Manager for UID 0...
+Nov 10 01:19:05.940342 ea4-352-el10.openstack.build systemd[1]: user@0.service: Deactivated successfully.
+Nov 10 01:19:05.940849 ea4-352-el10.openstack.build systemd[1]: Stopped user@0.service - User Manager for UID 0.
+Nov 10 01:19:05.953946 ea4-352-el10.openstack.build systemd[1]: Stopping user-runtime-dir@0.service - User Runtime Directory /run/user/0...
+Nov 10 01:19:05.969600 ea4-352-el10.openstack.build systemd[1]: run-user-0.mount: Deactivated successfully.
+Nov 10 01:19:05.970652 ea4-352-el10.openstack.build systemd[1]: user-runtime-dir@0.service: Deactivated successfully.
+Nov 10 01:19:05.970856 ea4-352-el10.openstack.build systemd[1]: Stopped user-runtime-dir@0.service - User Runtime Directory /run/user/0.
+Nov 10 01:19:05.972400 ea4-352-el10.openstack.build systemd[1]: Removed slice user-0.slice - User Slice of UID 0.
+Nov 10 01:19:43.615057 ea4-352-el10.openstack.build systemd[1]: Created slice user-0.slice - User Slice of UID 0.
+Nov 10 01:19:43.616107 ea4-352-el10.openstack.build systemd[1]: Starting user-runtime-dir@0.service - User Runtime Directory /run/user/0...
+Nov 10 01:19:43.632957 ea4-352-el10.openstack.build systemd[1]: Finished user-runtime-dir@0.service - User Runtime Directory /run/user/0.
+Nov 10 01:19:43.635091 ea4-352-el10.openstack.build systemd[1]: Starting user@0.service - User Manager for UID 0...
+Nov 10 01:19:43.806497 ea4-352-el10.openstack.build systemd[1]: Started user@0.service - User Manager for UID 0.
+Nov 10 01:19:43.811662 ea4-352-el10.openstack.build systemd[1]: Started session-8.scope - Session 8 of User root.
+
+### journalctl -b -o short-precise -u dbus-broker
+Nov 10 01:17:32.401194 ea4-352-el10.openstack.build systemd[1]: Starting dbus-broker.service - D-Bus System Message Bus...
+Nov 10 01:17:32.451242 ea4-352-el10.openstack.build systemd[1]: Started dbus-broker.service - D-Bus System Message Bus.
+Nov 10 01:17:32.465912 ea4-352-el10.openstack.build dbus-broker-launch[727]: Ready

@@ -1,0 +1,4 @@
+host ea4-352-u24 os=ubuntu-24.04 kernel=6.8.0-149-generic cgroup=v2 systemd=255 podman=4.9.3
+probe p0-10.sh=34d870027d6f plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+RESULT p0-10.linger no
+RESULT p0-10.planted /home/eapodtest/.config/systemd/user/clos7971-canary.service

@@ -1,0 +1,124 @@
+### p0-10.sh pre output
+host ea4-352-el10 os=almalinux-10.2 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+probe p0-10.sh=34d870027d6f plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+Failed to start transient service unit: Connection timed out
+RESULT p0-10.planted FAILS: the account could not write /home/eapodtest/.config/systemd/user
+
+### journalctl -b -o short-precise _PID=1 --since 00:54
+Nov 10 00:54:51.324194 ea4-352-el10.openstack.build systemd[1]: Created slice user-0.slice - User Slice of UID 0.
+Nov 10 00:54:51.326189 ea4-352-el10.openstack.build systemd[1]: Starting user-runtime-dir@0.service - User Runtime Directory /run/user/0...
+Nov 10 00:54:51.347771 ea4-352-el10.openstack.build systemd[1]: Finished user-runtime-dir@0.service - User Runtime Directory /run/user/0.
+Nov 10 00:54:51.351166 ea4-352-el10.openstack.build systemd[1]: Starting user@0.service - User Manager for UID 0...
+Nov 10 00:54:51.553182 ea4-352-el10.openstack.build systemd[1]: Started user@0.service - User Manager for UID 0.
+Nov 10 00:54:51.559947 ea4-352-el10.openstack.build systemd[1]: Started session-66.scope - Session 66 of User root.
+Nov 10 00:54:51.649351 ea4-352-el10.openstack.build systemd[1]: Started run-p18160-i18161.service - [systemd-run] /bin/true.
+Nov 10 00:54:51.663883 ea4-352-el10.openstack.build systemd[1]: run-p18160-i18161.service: Deactivated successfully.
+Nov 10 00:54:51.675056 ea4-352-el10.openstack.build systemd[1]: session-66.scope: Deactivated successfully.
+Nov 10 00:55:01.924609 ea4-352-el10.openstack.build systemd[1]: Stopping user@0.service - User Manager for UID 0...
+Nov 10 00:55:01.936891 ea4-352-el10.openstack.build systemd[1]: user@0.service: Deactivated successfully.
+Nov 10 00:55:01.937306 ea4-352-el10.openstack.build systemd[1]: Stopped user@0.service - User Manager for UID 0.
+Nov 10 00:55:01.949516 ea4-352-el10.openstack.build systemd[1]: Stopping user-runtime-dir@0.service - User Runtime Directory /run/user/0...
+Nov 10 00:55:01.978144 ea4-352-el10.openstack.build systemd[1]: run-user-0.mount: Deactivated successfully.
+Nov 10 00:55:01.979107 ea4-352-el10.openstack.build systemd[1]: user-runtime-dir@0.service: Deactivated successfully.
+Nov 10 00:55:01.979380 ea4-352-el10.openstack.build systemd[1]: Stopped user-runtime-dir@0.service - User Runtime Directory /run/user/0.
+Nov 10 00:55:01.981116 ea4-352-el10.openstack.build systemd[1]: Removed slice user-0.slice - User Slice of UID 0.
+Nov 10 00:55:04.168993 ea4-352-el10.openstack.build systemd[1]: Created slice user-0.slice - User Slice of UID 0.
+Nov 10 00:55:04.170151 ea4-352-el10.openstack.build systemd[1]: Starting user-runtime-dir@0.service - User Runtime Directory /run/user/0...
+Nov 10 00:55:04.189711 ea4-352-el10.openstack.build systemd[1]: Finished user-runtime-dir@0.service - User Runtime Directory /run/user/0.
+Nov 10 00:55:04.193731 ea4-352-el10.openstack.build systemd[1]: Starting user@0.service - User Manager for UID 0...
+Nov 10 00:55:04.384457 ea4-352-el10.openstack.build systemd[1]: Started user@0.service - User Manager for UID 0.
+Nov 10 00:55:04.394781 ea4-352-el10.openstack.build systemd[1]: Started session-68.scope - Session 68 of User root.
+Nov 10 00:55:04.485425 ea4-352-el10.openstack.build systemd[1]: session-68.scope: Deactivated successfully.
+Nov 10 00:55:04.715802 ea4-352-el10.openstack.build systemd[1]: Started session-70.scope - Session 70 of User root.
+Nov 10 00:55:04.910323 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-1.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf inspect --format {{.State.Pid}} web.eapodtest.01.
+Nov 10 00:55:04.980304 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-1.service: Deactivated successfully.
+Nov 10 00:55:05.029974 ea4-352-el10.openstack.build systemd[1]: Stopping ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01...
+Nov 10 00:55:05.211130 ea4-352-el10.openstack.build systemd[1]: ea-podman-web.eapodtest.01.service: Deactivated successfully.
+Nov 10 00:55:05.211673 ea4-352-el10.openstack.build systemd[1]: Stopped ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
+Nov 10 00:55:07.265653 ea4-352-el10.openstack.build systemd[1]: Starting ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01...
+Nov 10 00:55:07.389583 ea4-352-el10.openstack.build systemd[1]: Started ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
+Nov 10 00:55:07.432508 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-1.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf create --name p04split.eapodtest.80 --conmon-pidfile /run/ea-podman/user/1000/p04split.eapodtest.80.conmon.pid --memory=64m docker.io/nginxdemos/hello:plain-text.
+Nov 10 00:55:07.504476 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-1.service: Deactivated successfully.
+Nov 10 00:55:07.519053 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-2.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf inspect --format {{.HostConfig.Cgroups}} p04split.eapodtest.80.
+Nov 10 00:55:07.566986 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-2.service: Deactivated successfully.
+Nov 10 00:55:07.584879 ea4-352-el10.openstack.build systemd[1]: Reload requested from client PID 18488 ('systemctl') (unit session-70.scope)...
+Nov 10 00:55:07.584908 ea4-352-el10.openstack.build systemd[1]: Reloading...
+Nov 10 00:55:07.796183 ea4-352-el10.openstack.build systemd[1]: Reloading finished in 210 ms.
+Nov 10 00:55:07.811522 ea4-352-el10.openstack.build systemd[1]: Starting ea-podman-p04split.eapodtest.80.service - ea-podman container p04split.eapodtest.80...
+Nov 10 00:55:07.935887 ea4-352-el10.openstack.build systemd[1]: Started ea-podman-p04split.eapodtest.80.service - ea-podman container p04split.eapodtest.80.
+Nov 10 00:55:07.947340 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-2.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf inspect --format {{.State.Pid}} p04split.eapodtest.80.
+Nov 10 00:55:08.007113 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-2.service: Deactivated successfully.
+Nov 10 00:55:08.026997 ea4-352-el10.openstack.build systemd[1]: Stopping ea-podman-p04split.eapodtest.80.service - ea-podman container p04split.eapodtest.80...
+Nov 10 00:55:08.199721 ea4-352-el10.openstack.build systemd[1]: ea-podman-p04split.eapodtest.80.service: Deactivated successfully.
+Nov 10 00:55:08.200379 ea4-352-el10.openstack.build systemd[1]: Stopped ea-podman-p04split.eapodtest.80.service - ea-podman container p04split.eapodtest.80.
+Nov 10 00:55:08.211819 ea4-352-el10.openstack.build systemd[1]: Reload requested from client PID 18634 ('systemctl') (unit session-70.scope)...
+Nov 10 00:55:08.211931 ea4-352-el10.openstack.build systemd[1]: Reloading...
+Nov 10 00:55:08.435367 ea4-352-el10.openstack.build systemd[1]: Reloading finished in 222 ms.
+Nov 10 00:55:08.443842 ea4-352-el10.openstack.build systemd[1]: Starting dnf-makecache.service - dnf makecache...
+Nov 10 00:55:08.476217 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-2.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf rm -f p04split.eapodtest.80.
+Nov 10 00:55:08.549969 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-2.service: Deactivated successfully.
+Nov 10 00:55:08.566727 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-3.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf create --name p04nosplit.eapodtest.81 --conmon-pidfile /run/ea-podman/user/1000/p04nosplit.eapodtest.81.conmon.pid --memory=64m docker.io/nginxdemos/hello:plain-text.
+Nov 10 00:55:08.644293 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-3.service: Deactivated successfully.
+Nov 10 00:55:08.661174 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-4.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf inspect --format {{.HostConfig.Cgroups}} p04nosplit.eapodtest.81.
+Nov 10 00:55:08.717724 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-4.service: Deactivated successfully.
+Nov 10 00:55:08.740170 ea4-352-el10.openstack.build systemd[1]: Reload requested from client PID 18729 ('systemctl') (unit session-70.scope)...
+Nov 10 00:55:08.740189 ea4-352-el10.openstack.build systemd[1]: Reloading...
+Nov 10 00:55:08.985538 ea4-352-el10.openstack.build systemd[1]: Reloading finished in 244 ms.
+Nov 10 00:55:09.002376 ea4-352-el10.openstack.build systemd[1]: Starting ea-podman-p04nosplit.eapodtest.81.service - ea-podman container p04nosplit.eapodtest.81...
+Nov 10 00:55:09.123362 ea4-352-el10.openstack.build systemd[1]: Started ea-podman-p04nosplit.eapodtest.81.service - ea-podman container p04nosplit.eapodtest.81.
+Nov 10 00:55:09.135954 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-4.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf inspect --format {{.State.Pid}} p04nosplit.eapodtest.81.
+Nov 10 00:55:09.192741 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-4.service: Deactivated successfully.
+Nov 10 00:55:09.212731 ea4-352-el10.openstack.build systemd[1]: Stopping ea-podman-p04nosplit.eapodtest.81.service - ea-podman container p04nosplit.eapodtest.81...
+Nov 10 00:55:09.368320 ea4-352-el10.openstack.build systemd[1]: ea-podman-p04nosplit.eapodtest.81.service: Deactivated successfully.
+Nov 10 00:55:09.368665 ea4-352-el10.openstack.build systemd[1]: Stopped ea-podman-p04nosplit.eapodtest.81.service - ea-podman container p04nosplit.eapodtest.81.
+Nov 10 00:55:09.382290 ea4-352-el10.openstack.build systemd[1]: Reload requested from client PID 18881 ('systemctl') (unit session-70.scope)...
+Nov 10 00:55:09.382311 ea4-352-el10.openstack.build systemd[1]: Reloading...
+Nov 10 00:55:09.595522 ea4-352-el10.openstack.build systemd[1]: Reloading finished in 212 ms.
+Nov 10 00:55:09.616181 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-4.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf rm -f p04nosplit.eapodtest.81.
+Nov 10 00:55:09.684004 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-4.service: Deactivated successfully.
+Nov 10 00:55:09.705222 ea4-352-el10.openstack.build systemd[1]: Reload requested from client PID 18949 ('systemctl') (unit session-70.scope)...
+Nov 10 00:55:09.705342 ea4-352-el10.openstack.build systemd[1]: Reloading...
+Nov 10 00:55:09.911048 ea4-352-el10.openstack.build systemd[1]: Reloading finished in 205 ms.
+Nov 10 00:55:09.915061 ea4-352-el10.openstack.build systemd[1]: dnf-makecache.service: Deactivated successfully.
+Nov 10 00:55:09.915293 ea4-352-el10.openstack.build systemd[1]: Finished dnf-makecache.service - dnf makecache.
+Nov 10 00:55:09.915525 ea4-352-el10.openstack.build systemd[1]: dnf-makecache.service: Consumed 697ms CPU time, 116M memory peak.
+Nov 10 00:55:09.931772 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-5.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf rm -f p04split.eapodtest.80.
+Nov 10 00:55:09.979894 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-5.service: Deactivated successfully.
+Nov 10 00:55:09.998525 ea4-352-el10.openstack.build systemd[1]: Reload requested from client PID 19014 ('systemctl') (unit session-70.scope)...
+Nov 10 00:55:09.998540 ea4-352-el10.openstack.build systemd[1]: Reloading...
+Nov 10 00:55:10.202056 ea4-352-el10.openstack.build systemd[1]: Reloading finished in 203 ms.
+Nov 10 00:55:10.226538 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-6.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf rm -f p04nosplit.eapodtest.81.
+Nov 10 00:55:10.278945 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-6.service: Deactivated successfully.
+Nov 10 00:55:10.300621 ea4-352-el10.openstack.build systemd[1]: Reload requested from client PID 19078 ('systemctl') (unit session-70.scope)...
+Nov 10 00:55:10.300653 ea4-352-el10.openstack.build systemd[1]: Reloading...
+Nov 10 00:55:10.516708 ea4-352-el10.openstack.build systemd[1]: Reloading finished in 215 ms.
+Nov 10 00:55:10.539180 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-test-18257-7.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf rm -f p04v1split.eapodtest.82.
+Nov 10 00:55:10.586484 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-test-18257-7.service: Deactivated successfully.
+Nov 10 00:55:10.688428 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-p011-19144-1.service - [systemd-run] /usr/bin/true.
+Nov 10 00:55:10.699473 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-p011-19144-1.service: Deactivated successfully.
+Nov 10 00:55:10.721884 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-p011-19144-1.service - [systemd-run] /usr/bin/sh -c "exit 7".
+Nov 10 00:55:10.734159 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-p011-19144-1.service: Main process exited, code=exited, status=7/NOTRUNNING
+Nov 10 00:55:10.734283 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-p011-19144-1.service: Failed with result 'exit-code'.
+Nov 10 00:55:10.757935 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-p011-19144-1.service - [systemd-run] /usr/bin/sleep 30.
+Nov 10 00:55:10.951739 ea4-352-el10.openstack.build systemd[1]: Started session-71.scope - Session 71 of User root.
+Nov 10 00:55:11.051180 ea4-352-el10.openstack.build systemd[1]: session-71.scope: Deactivated successfully.
+Nov 10 00:55:13.922635 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-p011-19144-1.service: Service reached runtime time limit. Stopping.
+Nov 10 00:55:13.923611 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-p011-19144-1.service: Failed with result 'timeout'.
+Nov 10 00:55:13.960880 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-p011-19144-1.service - [systemd-run] /bin/sh /tmp/p011.prn9Vl/reap.sh.
+Nov 10 00:55:20.172654 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-p011-19144-1.service: Service reached runtime time limit. Stopping.
+Nov 10 00:55:20.174212 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-p011-19144-1.service: Failed with result 'timeout'.
+Nov 10 00:55:21.222417 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-p011-19144-1.service - [systemd-run] /bin/sh /tmp/p011.prn9Vl/esc.sh.
+Nov 10 00:55:26.422688 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-p011-19144-1.service: Service reached runtime time limit. Stopping.
+Nov 10 00:55:26.423420 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-p011-19144-1.service: Failed with result 'timeout'.
+Nov 10 00:55:27.486029 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-p011-19144-1.service - [systemd-run] /usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf ps -a --format {{.Names}}.
+Nov 10 00:55:27.531672 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-p011-19144-1.service: Deactivated successfully.
+Nov 10 00:55:27.553487 ea4-352-el10.openstack.build systemd[1]: Started eapodman-run-1000-probe-19144-1.service - [systemd-run] /usr/bin/podman info --format "{{.Store.GraphRoot}} {{.Store.RunRoot}}".
+Nov 10 00:55:27.665405 ea4-352-el10.openstack.build systemd[1]: eapodman-run-1000-probe-19144-1.service: Deactivated successfully.
+Nov 10 00:55:27.678017 ea4-352-el10.openstack.build systemd[1]: Got disconnect on API bus.
+Nov 10 01:10:35.753565 ea4-352-el10.openstack.build systemd[1]: session-70.scope: Deactivated successfully.
+Nov 10 01:10:35.754034 ea4-352-el10.openstack.build systemd[1]: session-70.scope: Consumed 1.047s CPU time, 19.1M memory peak.
+Nov 10 01:10:35.760130 ea4-352-el10.openstack.build systemd[1]: Failed to query API bus instance ID, not deserializing subscriptions: Channel number out of range
+Nov 10 01:10:35.762696 ea4-352-el10.openstack.build systemd[1]: Got disconnect on API bus.
+
+### journalctl -b -o short-precise -u dbus-broker --since 00:54
+-- No entries --

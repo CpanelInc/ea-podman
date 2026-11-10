@@ -1,8 +1,9 @@
 host ea4-352-el8-cgv1 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+probe p0-4.sh=fd84f737567b plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
 
 ### 1. placement
 RESULT p0-4.conmon_cgroup /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service
-RESULT p0-4.container_cgroup /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/2ef1ce10de0669b2e5c5a41a75ecee43659c0930423c7f37f79a8011590e375d
+RESULT p0-4.container_cgroup /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/c1f885526e861c46361ede5a8446848124093c96418579f23efd4d3c98c15f82
 RESULT p0-4.pause_cgroup /eapodman.slice/eapodman-1000.slice/ea-podman-runtime@1000.service
 RESULT p0-4.v1_memory_conmon /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service
 RESULT p0-4.v1_memory_container /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service
@@ -21,5 +22,5 @@ RESULT p0-4.web_memsw_file present
 RESULT p0-4.web_memory_limit 9223372036854771712
 
 ### 6./7. split vs no split, and is the mode fixed at create (F17)
-RESULT p0-4.p04split_created_split_started_nosplit recorded=default FAILS: Error: unable to start container "1fc3de48963f68170e58d25940f379fbe1beb9c3e7f02603d7b4312f7558a439": mkdir /sys/fs/cgroup/blkio/eapodman.slice/runtime: permission denied
-RESULT p0-4.p04nosplit_created_nosplit_started_split recorded=default starts; in /eapodman.slice/eapodman-1000.slice/ea-podman-p04nosplit.eapodtest.81.service/e450be705f327ce30ae5460efa040a912bb859f6f45058ac1ee284520134d995; memory.limit=9223372036854771712
+RESULT p0-4.p04split_created_split_started_nosplit recorded=default FAILS: Error: unable to start container "a1114713a94083139ed22c4cded136ef2fce8048e2f2974c9e089e72875c072a": mkdir /sys/fs/cgroup/cpu,cpuacct/eapodman.slice/eapodman-1000.slice/ea-podman-p04split.eapodtest.80.service/runtime: permission denied
+RESULT p0-4.p04nosplit_created_nosplit_started_split recorded=default starts; in /eapodman.slice/eapodman-1000.slice/ea-podman-p04nosplit.eapodtest.81.service/b806dad1a41c7a36ddc952a6f26ac6c4f7291e0dd325c19d772db36f08ad290d; memory.limit=9223372036854771712

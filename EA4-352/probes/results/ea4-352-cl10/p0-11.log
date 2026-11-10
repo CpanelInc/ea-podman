@@ -1,41 +1,42 @@
 host ea4-352-cl10 os=cloudlinux-10 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+probe p0-11.sh=f94eff7f0fa4 plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
 
 ### exit reporting
-  [true] rc=0 after 0s: Finished with result: success Main processes terminated with: code=exited, status=0/SUCCESS Service runtime: 11ms CPU time consumed: 5ms Memory peak: 1.1M (swap: 0B) 
+  [true] rc=0 after 0s: Finished with result: success Main processes terminated with: code=exited, status=0/SUCCESS Service runtime: 12ms CPU time consumed: 5ms Memory peak: 1M (swap: 0B) 
 RESULT p0-11.report_ok rc=0; Finished with result: success;Main processes terminated with: code=exited, status=0/SUCCESS;
-  [sh -c 'exit 7'] rc=7 after 0s: Finished with result: exit-code Main processes terminated with: code=exited, status=7/NOTRUNNING Service runtime: 14ms CPU time consumed: 5ms Memory peak: 1.1M (swap: 0B) 
+  [sh -c 'exit 7'] rc=7 after 0s: Finished with result: exit-code Main processes terminated with: code=exited, status=7/NOTRUNNING Service runtime: 18ms CPU time consumed: 6ms Memory peak: 1M (swap: 0B) 
 RESULT p0-11.report_exit7 rc=7; Finished with result: exit-code;Main processes terminated with: code=exited, status=7/NOTRUNNING;
-  [sleep 30] rc=1 after 4s: Finished with result: timeout Main processes terminated with: code=killed, status=15/TERM Service runtime: 3.083s CPU time consumed: 5ms Memory peak: 1.2M (swap: 0B) 
+  [sleep 30] rc=1 after 3s: Finished with result: timeout Main processes terminated with: code=killed, status=15/TERM Service runtime: 3.186s CPU time consumed: 5ms Memory peak: 1M (swap: 0B) 
 RESULT p0-11.report_timeout rc=1; Finished with result: timeout;Main processes terminated with: code=killed, status=15/TERM;
 
 ### reaping on timeout
-  Running as unit: eapodman-run-1001-p011-10543-1.service
-10657 T sleep sid=  10656
-10661 S sleep sid=  10661
-10664 S sleep sid=  10656
-10665 t sleep sid=  10656
+  Running as unit: eapodman-run-1001-p011-169588-1.service
+169730 T sleep sid= 169729
+169734 S sleep sid= 169734
+169737 S sleep sid= 169729
+169738 t sleep sid= 169729
 Finished with result: timeout
 Main processes terminated with: code=killed, status=15/TERM
-Service runtime: 6.212s
-CPU time consumed: 117ms
-Memory peak: 7.3M (swap: 0B)
-  runner returned rc=1 after 6s
+Service runtime: 6.215s
+CPU time consumed: 106ms
+Memory peak: 7.2M (swap: 0B)
+  runner returned rc=1 after 7s
 RESULT p0-11.sigstop_child_present_before yes
 RESULT p0-11.ptrace_stopped_child_present_before yes
 RESULT p0-11.all_reaped_on_timeout yes
-RESULT p0-11.timeout_returned_after_s 6
+RESULT p0-11.timeout_returned_after_s 7
 
 ### escape into the account's own delegated cgroup
   targets: /sys/fs/cgroup/eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/runtime/cgroup.procs
-  -rw-r--r-- 1 eapodtest eapodtest 0 Nov  6 14:33 /sys/fs/cgroup/eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/runtime/cgroup.procs
-  Running as unit: eapodman-run-1001-p011-10543-1.service
+  -rw-r--r-- 1 eapodtest eapodtest 0 Nov  9 19:55 /sys/fs/cgroup/eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/runtime/cgroup.procs
+  Running as unit: eapodman-run-1001-p011-169588-1.service
 denied /sys/fs/cgroup/eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/runtime/cgroup.procs
-cg: 0::/eapodman.slice/eapodman-1001.slice/eapodman-run-1001-p011-10543-1.service
+cg: 0::/eapodman.slice/eapodman-1001.slice/eapodman-run-1001-p011-169588-1.service
 Finished with result: timeout
 Main processes terminated with: code=killed, status=15/TERM
-Service runtime: 5.190s
-CPU time consumed: 15ms
-Memory peak: 1M (swap: 0B)
+Service runtime: 5.196s
+CPU time consumed: 10ms
+Memory peak: 1.3M (swap: 0B)
 RESULT p0-11.escape_writes moved=0 denied=1 ()
 RESULT p0-11.escape_wait_returned_after_s 5 (rc=1)
 RESULT p0-11.escaped_process_survives no
@@ -48,5 +49,5 @@ RESULT p0-11.podman_old_storage /home/eapodtest/.local/share/containers/storage 
 ### podman run/build from a plain runner vs a delegated one
 RESULT p0-11.build_with_run_plain_runner works
 RESULT p0-11.build_with_run_delegated_runner works
-RESULT p0-11.run_rm_plain_runner FAILS: Error: mkdir /sys/fs/cgroup/eapodman.slice/eapodman-1001.slice/eapodman-run-1001-test-10543-1.service/runtime: permission denied
+RESULT p0-11.run_rm_plain_runner FAILS: Error: mkdir /sys/fs/cgroup/eapodman.slice/eapodman-1001.slice/eapodman-run-1001-test-169588-2.service/runtime: permission denied
 RESULT p0-11.run_rm_delegated_runner works
