@@ -26,7 +26,8 @@ Log: `probes/results/ea4-352-el9/ea4-392-4.log`.
   | only stdout, or only stderr, on such a file | fails |
 
 - **PID 1 leaves the bus.** After a failing call, `busctl --system list` shows `org.freedesktop.systemd1` with no owner, until `daemon-reexec`. That is why logind's session scopes time out.
-- **Nothing is logged.** There is no AVC, USER_AVC or SELINUX_ERR record, even with the dontaudit rules off (`semodule -DB`). The ticket's "no AVCs" is right. The denied permission isn't named by any log; the table says it is write (and for `/root`, also append) on those file types.
+- **The denial:** `avc: denied { write } for comm="systemd" scontext=init_t tcontext=user_tmp_t tclass=file` in `/var/log/audit/audit.log`, and the same for `user_home_t` and `admin_home_t` (for which `{ append }` is denied too). PID 1 may not write to the file it was handed.
+- **Why the ticket says "no AVCs".** `ausearch` reads its stdin instead of the logs when stdin isn't a tty, so over `ssh -n` or from a script it prints `<no matches>`. Use `ausearch --input-logs`, or grep the log. On el8, `setroubleshootd` reported each denial in the journal.
 - **Why it looked timing-dependent.** gawk sets `O_APPEND` on its stderr. `plib.sh` runs `awk` when it is sourced, so a probe run as `./p0-10.sh pre >/tmp/file 2>&1` has an append-mode stdout by its first runner call, and passes. `setup.sh` doesn't source `plib.sh`, and a file under `/root` fails either way. A tty, a pipe or `$(…)` always passes, which is why the hand-typed sequence and the first ~20 p0-11 calls worked.
 
 ## Step 1 and Step 2: dropped
@@ -35,8 +36,11 @@ The host comparison and the instrumented capture (`probes/ea4-392-capture.sh`) a
 
 ## Step 3: What is left to settle
 
-- **el8-cgv1, el8-cgv2 and el10:** run the bare call from Step 0's table (`/dev/null`, a pipe, `>` a `/tmp` file, `>` a `/root` file; enforcing and permissive) on each, and save it as `probes/results/<vm>/ea4-392-4.log`. el8 uses a different bus daemon and fails with `Connection timed out`, so check there whether PID 1 stays on the bus.
+- **el8-cgv1 — done** (`probes/results/ea4-352-el8-cgv1/ea4-392-4.log`). It is the same denial, and it passes when permissive. The difference is the bus: with dbus-daemon the call fails with `Connection timed out` after 25 s and PID 1 stays on the bus, so the next call works. With dbus-broker (el9) the call fails at once with `Remote peer disconnected` and PID 1 is gone from the bus.
+- **el8-cgv2 and el10:** not run. They get the fixed kit in Step 6; run the same bare call there only if something still fails.
+- **A separate denial, seen while reading el9's audit log:** `avc: denied { unlink } for comm="systemd" name=<name>.conmon.pid scontext=init_t tcontext=container_runtime_tmpfs_t`, once per container stop. PID 1 can't remove the unit's `PIDFile=`. It dates from 2026-11-06 and PLAN.md doesn't mention it. Decide whether it matters for F19.
 - **The ticket's item 4** (`podman_old_storage`'s `mkdir /run/user/1000: permission denied` on el9 in p0-11): re-run `p0-11.sh` on el9 with the fixed kit. If it is still there with a working bus, it is separate from EA4-392.
+- **`verify.sh`'s F19 check has the same `ausearch` blind spot** (`eapodman-test-kit/verify.sh:134`). Run without a terminal on stdin, it always sees `<no matches>` and passes "no ea-podman AVC denials". Not fixed yet: with `--input-logs` it will start failing on the EL hosts for the `conmon.pid` unlink denial above, so decide on that denial first.
 - **Which SELinux modes are in the product's live matrix (F19),** and whether a pipe made by root's caller passes the policy from the domain the product's root code runs in. On el9 it does from an SSH root shell (`unconfined_t`).
 
 ## Step 4: Kit fix and product guard
@@ -58,8 +62,10 @@ The host comparison and the instrumented capture (`probes/ea4-392-capture.sh`) a
 2. Re-run what EA4-392 blocked on the four EL hosts: `p0-10.sh pre`/`post`, the last section of `p0-11.sh`, and `verify.sh` on the three hosts above. Update their logs.
 3. Make these PLAN.md edits in one commit. Add to the list if Step 3 turns up more, and strike what it rules out:
    - **Line 1335, "Open (EA4-392)":** becomes "Resolved (EA4-392)" and points at line 448. Its claim that the reload / `set-property` / anchor-start sequence is the risk goes.
-   - **Line 448:** it isn't only a `/tmp` file. Say "a file under `/tmp`, `/var/tmp`, `/root` or a home directory", that append mode passes for `/tmp` but not for `/root`, that nothing is audited, and that on EL9/EL10 PID 1 then stays off the system bus for every transient unit and login until `daemon-reexec`.
+   - **Line 448:** it isn't only a `/tmp` file. Say "a file under `/tmp`, `/var/tmp`, `/root` or a home directory", that append mode passes for `/tmp` but not for `/root`, the denial (`init_t` `{ write }` on `user_tmp_t`, `user_home_t` or `admin_home_t`), that with dbus-daemon (EL8) only the call fails, and that on EL9/EL10 PID 1 then stays off the system bus for every transient unit and login until `daemon-reexec`.
    - **Rule 15 (line 1236) and 4.2a (line 812):** add the second reason for "never inherited" next to F10's: on an SELinux-enforcing host, an inherited file can take PID 1 off the bus.
+   - **Wherever PLAN.md or the probes tell someone to look for AVCs:** `ausearch` needs `--input-logs` when it isn't run from a terminal.
+   - **The `conmon.pid` unlink denial** from Step 3, if it matters.
    - **The EA4-372 live test:** the runner called with root's stdout and stderr redirected to a file under `/root`, on an enforcing EL host, works and leaves `org.freedesktop.systemd1` owned on the bus.
 4. Update `probes/README.md` (line 23) and the EA4-392 section of `poc-rerun-prompt.md`.
 5. Post the findings as an EA4-392 comment once the text has been reviewed, and `git rm EA4-352/EA4-392-PLAN.md`.
@@ -67,6 +73,6 @@ The host comparison and the instrumented capture (`probes/ea4-392-capture.sh`) a
 ## Files
 
 - `EA4-352/eapodman-test-kit/lib.sh` (`acct_unit`) and `setup.sh`: changed in Steps 4 and 5
-- `EA4-352/probes/results/<vm>/ea4-392-4.log`: el9 done, the other three EL hosts in Step 3
+- `EA4-352/probes/results/<vm>/ea4-392-4.log`: el9 and el8-cgv1
 - `EA4-352/PLAN.md`, `probes/README.md`, `poc-rerun-prompt.md`, and this file's removal: all in Step 6
 - Commits on `EA4-392`, prefixed `EA4-392:`.

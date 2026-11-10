@@ -25,8 +25,16 @@ Enforcing   > /tmp file                                  user_tmp_t       rc=1 p
 ### PID 1 after a failing call (busctl --system list)
 org.freedesktop.systemd1          - -               -       (activatable) -                      -       -
 
-### ausearch -m AVC,USER_AVC,SELINUX_ERR, since boot and with dontaudit rules off (semodule -DB) for one failing call
-<no matches>
+### denials in /var/log/audit/audit.log since the reboot (grep; counts over all of Step 0's runs)
+### ausearch printed "<no matches>" throughout: over `ssh -n` its stdin isn't a tty, so it reads stdin instead of the logs.
+      1 avc: denied { append } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:admin_home_t:s0 tclass=file permissive=0
+      6 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:admin_home_t:s0 tclass=file permissive=0
+      3 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:admin_home_t:s0 tclass=file permissive=1
+      2 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:user_home_t:s0 tclass=file permissive=0
+     26 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:user_tmp_t:s0 tclass=file permissive=0
+      1 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:user_tmp_t:s0 tclass=file permissive=1
+### separate from EA4-392, from the containers' restarts in setup.sh:
+      9 avc: denied { unlink } for comm="systemd" name=<name>.conmon.pid dev="tmpfs" scontext=system_u:system_r:init_t:s0 tcontext=system_u:object_r:container_runtime_tmpfs_t:s0 tclass=file permissive=0
 
 ### why `./p0-10.sh pre >/tmp/file 2>&1` passes (twice) while the bare call with the same redirect fails
 ### gawk sets O_APPEND (02000) on its stderr, and plib.sh runs awk before the first runner call.
