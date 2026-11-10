@@ -6,7 +6,7 @@ EA4-392 is a sub-task of EA4-352. On the EL test VMs (el8-cgv1, el8-cgv2, el9, e
 
 **The cause is found (Step 0, el9).** With SELinux enforcing, `systemd-run --pipe` hands its own stdout and stderr to PID 1. When one of them is a file under `/tmp`, `/var/tmp`, `/root` or a home directory, PID 1 drops off the system bus. PLAN.md:448 already said most of this on 2026-11-06, and the product's rule 15 (PLAN.md:1236) and 4.2a (PLAN.md:812) already forbid it: stdin from `/dev/null`, stdout/stderr on pipes the runner creates, never inherited. The kit's `acct_unit` broke that rule. The reload / `set-property` / anchor-start sequence that the ticket suspected has nothing to do with it.
 
-**PLAN.md was not edited while this plan ran.** What affects it was collected in Step 6 and applied in one commit. What is left is Step 6's items 4 and 5.
+**PLAN.md was not edited while this plan ran.** What affects it was collected in Step 6 and applied in one commit. What is left is Step 6's item 5.
 
 ## Step 0: Confirm that PLAN.md:448 is the cause — done (el9, 2026-11-10)
 
@@ -69,7 +69,7 @@ The host comparison and the instrumented capture (`probes/ea4-392-capture.sh`) a
    - **The `conmon.pid` unlink denial** from Step 3: Phase 1's unit shape (line 509) gets `ExecStopPost=-/usr/bin/rm -f {PIDFILE}` as its first `ExecStopPost=` line, the rootful unit included, with the reason. F19 (lines 251-254) gets the denial and this fix, and its "no AVC denials on EL9 or EL10" is corrected: that was `ausearch` reading stdin. Add a live test: on an enforcing EL host, stop, restart and a SIGKILLed conmon log no AVC.
    - **4.2a (line 812):** check that it carries line 447's "the runner must stop reading when `systemd-run` exits". The kit's first fix broke exactly that, so it needs a test: on a v1 host, a child that escapes with the pipes open doesn't delay the runner's return.
    - **The EA4-372 live test:** the runner called with root's stdout and stderr redirected to a file under `/root`, on an enforcing EL host, works and leaves `org.freedesktop.systemd1` owned on the bus.
-4. Update `probes/README.md` (line 23) and the EA4-392 section of `poc-rerun-prompt.md`.
+4. **Done (2026-11-10):** `probes/README.md`'s results paragraph and `poc-rerun-prompt.md`. The prompt's EA4-392 section now says it is fixed and what to save if it comes back.
 5. Post the findings as an EA4-392 comment once the text has been reviewed, and `git rm EA4-352/EA4-392-PLAN.md`.
 
 ## Files
