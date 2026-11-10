@@ -28,9 +28,11 @@ cleanup() {
     # each read back; one that can't be put back makes the probe exit 1.
     restore_changes_or_fail
 }
-# pause.pid is account-writable: read it as the account, and use it only if it is the account's process.
+# pause.pid is account-writable: read it as the account, and use it only if it is the account's
+# process in the account's slice. A pause process outside the slice is then INCONCLUSIVE, not a cgroup.
 pause_pid() {
-    local p; p=$(acct_pid "$RUNDIR/libpod/tmp/pause.pid") && safe_target "$p" --uid "$UID_" && echo "$p"
+    local p; p=$(acct_pid "$RUNDIR/libpod/tmp/pause.pid") \
+        && safe_target "$p" --uid "$UID_" --cgroup "/eapodman-$UID_.slice/" && echo "$p"
 }
 trap cleanup EXIT
 
@@ -40,13 +42,16 @@ for n in web.$U.01; do
     u=ea-podman-$n.service
     m=$(systemctl show -p MainPID --value "$u")
     c=$(as_user /usr/bin/podman inspect --format '{{.State.Pid}}' "$n" 2>/dev/null | tail -1)
-    p=$(pause_pid)
-    result conmon_cgroup "$(cgroup_of "$m")"
+    # MainPID comes from systemd, so it needs --comm (a stopped unit's is 0).
+    safe_target "$m" --comm conmon || m=
+    if [ -n "$m" ]; then result conmon_cgroup "$(cgroup_of "$m")"
+    else inconclusive conmon_cgroup "$u's MainPID is not a conmon process"; fi
     result container_cgroup "$(cgroup_of "$c")"
-    result pause_cgroup "$(cgroup_of "$p")"
+    if p=$(pause_pid); then result pause_cgroup "$(cgroup_of "$p")"
+    else inconclusive pause_cgroup "pause.pid names no process of uid $UID_ in eapodman-$UID_.slice (gone, outside the slice, or not the pause process)"; fi
     if [ $CGV = 1 ]; then
         for ctl in memory pids cpu,cpuacct; do
-            result "v1_${ctl/,/_}_conmon" "$(v1path "$m" "$ctl")"
+            [ -n "$m" ] && result "v1_${ctl/,/_}_conmon" "$(v1path "$m" "$ctl")"
             result "v1_${ctl/,/_}_container" "$(v1path "$c" "$ctl")"
         done
     fi
@@ -57,7 +62,7 @@ systemctl stop "ea-podman-web.$U.01.service"; sleep 2
 ok=yes
 for n in api.$U.02 worker.$U.03; do systemctl is-active -q "ea-podman-$n.service" || ok="no ($n inactive)"; done
 curl -fsS -o /dev/null http://127.0.0.1:8082/ && curl -fsS -o /dev/null http://127.0.0.1:8083/ || ok="no (a port stopped serving)"
-pause_pid >/dev/null || ok="no (pause process gone)"
+pause_pid >/dev/null || ok="no (pause process gone or outside the slice)"
 result stop_one_unit_others_unaffected "$ok"
 systemctl start "ea-podman-web.$U.01.service"
 

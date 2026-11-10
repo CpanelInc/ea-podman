@@ -59,7 +59,7 @@ sleep 1
 # seen; otherwise an empty "left" would only mean nothing ran.
 if ! grep -q 'Finished with result: timeout' <<<"$out"; then
     inconclusive all_reaped_on_timeout "the runner didn't time out (rc=$rc), so nothing was reaped on a timeout"
-elif ! grep -qE "sleep 3${TAG}[1-4]" <<<"$out"; then
+elif ! grep -qE '^[0-9]+ [[:alpha:]] sleep sid=' <<<"$out"; then    # the loop's "<pid> <state> <comm> sid=" lines
     inconclusive all_reaped_on_timeout "the script listed none of its children before the timeout"
 else
     left=$(comm -13 <(echo "$before_pids") <(acct_pids) | tr '\n' ' ')

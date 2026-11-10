@@ -43,7 +43,12 @@ post)
     for n in web.$U.01 api.$U.02 worker.$U.03; do
         u=ea-podman-$n.service
         m=$(systemctl show -p MainPID --value "$u")
-        result "unit_${n%%.*}" "$(systemctl is-active "$u") MainPID=$m($(ps -o comm= -p "$m" 2>/dev/null)) in $(grep -E '^0::|name=systemd' /proc/$m/cgroup 2>/dev/null | cut -d: -f3)"
+        # From systemd, so it needs --comm; a stopped unit's MainPID is 0.
+        if safe_target "$m" --comm conmon; then
+            result "unit_${n%%.*}" "$(systemctl is-active "$u") MainPID=$m(conmon) in $(cgroup_of "$m")"
+        else
+            inconclusive "unit_${n%%.*}" "$(systemctl is-active "$u"), MainPID '$m' is not a conmon process"
+        fi
     done
     for p in 8081 8082 8083; do result "port_$p" "$(curl -s -m3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$p/)"; done
     if [ $CGV = 2 ]; then
@@ -55,3 +60,4 @@ post)
     ;;
 *) echo "usage: $0 pre|post" >&2; exit 2 ;;
 esac
+probe_exit
