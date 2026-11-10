@@ -90,17 +90,24 @@ acct_unit() {
     # shellcheck disable=SC2016
     [ -n "$split" ] && set -- /bin/sh -c '"$@"; r=$?; [ "$r" = 1 ] && exit 101; exit "$r"' sh "$@"
     seq=$((seq + 1))
-    # fd 3 is the caller's stdout and fd 4 the pipe to the stderr cat; systemd-run gets neither.
-    {
-        {
-            systemd-run $quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
-                --unit="eapodman-run-$UID_-$name-$$-$seq" --pipe --wait --collect \
-                -p RuntimeMaxSec="$tmo" -p WorkingDirectory="$HOME_" "${props[@]}" \
-                "${envs[@]/#/--setenv=}" "$@" </dev/null 2>&4 3>&- 4>&- | cat 3>&- 4>&-
-            exit "${PIPESTATUS[0]}"
-        } 4>&1 >&3 3>&- | cat >&2 3>&-
-        return "${PIPESTATUS[0]}"
-    } 3>&1
+    # Two readers copy the pipes to the caller's stdout and stderr. They are not waited on for EOF:
+    # on cgroup v1 a child that escaped the unit keeps the pipes open (PLAN.md P0-11), so once
+    # systemd-run exits they get 2 s to drain and are then killed.
+    local o e po pe rc i
+    exec {o}> >(exec cat); po=$!
+    exec {e}> >(exec cat >&2); pe=$!
+    systemd-run $quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
+        --unit="eapodman-run-$UID_-$name-$$-$seq" --pipe --wait --collect \
+        -p RuntimeMaxSec="$tmo" -p WorkingDirectory="$HOME_" "${props[@]}" \
+        "${envs[@]/#/--setenv=}" "$@" </dev/null >&"$o" 2>&"$e" {o}>&- {e}>&-
+    rc=$?
+    exec {o}>&- {e}>&-
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        kill -0 "$po" 2>/dev/null || kill -0 "$pe" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill "$po" "$pe" 2>/dev/null
+    return "$rc"
 }
 # The common case, with podman_env: as_user [-c containers.conf] <argv...>
 as_user() {
