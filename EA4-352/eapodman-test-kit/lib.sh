@@ -195,6 +195,10 @@ ${env_lines}Environment=PODMAN_SYSTEMD_UNIT=%n
 PIDFile=$pidfile
 ExecStart=${PODMAN[*]} --cgroup-manager=cgroupfs start $name
 ExecStop=${PODMAN[*]} --cgroup-manager=cgroupfs stop -t 10 $name
+# The unit removes its own PID file, as the account, before PID 1 tries to: with SELinux enforcing
+# (EL), init_t may read a container_runtime_tmpfs_t file but not unlink it, and every stop logged
+# an AVC denial (F19, EA4-392). It comes first: a failed ExecStopPost line skips the ones after it.
+ExecStopPost=-/usr/bin/rm -f $pidfile
 # As in 1.x's generated units. It does not recover a container whose conmon was SIGKILLed:
 # podman 4.4 leaves it "running" (without this) or "stopping" (with it), every restart's
 # \`podman start\` fails, and only \`podman rm -f\` + recreate gets it back (./lifecycle.sh 1 and 3).
