@@ -10,6 +10,7 @@ Scripts for the Phase 0 probes in `../PLAN.md`. They were run on the VMs in `../
 | `p0-5.sh` | P0-5: journald, `podman logs`, events |
 | `p0-6.sh run\|post\|clean` | P0-6 (CloudLinux): `PAMName=ea-podman` with `pam_lve` |
 | `p0-8.sh` | P0-8: `CONTAINERS_CONF` and `XDG_CONFIG_HOME` with a hostile `~/.config/containers` |
+| `p0-8-v1-start.sh` | P0-8 follow-up on cgroup v1 (run on el8-cgv1 and cl8-cgv1, 2026-11-10): a unit start alone, straight after a plain-runner start, and 5 s after one; and whose cgroup a runner-started container is in. `results/ea4-352-cl8-cgv1/p0-8-rerun.log` and `.journal` are p0-8 itself re-run there the same day, with the unit's journal |
 | `p0-9.sh` | P0-9 and the cage parts of P0-7 |
 | `p0-10.sh pre\|post` | P0-10: a CLOS-7971 stand-in canary, and the reboot checks (reboot between `pre` and `post`) |
 | `p0-11.sh` | P0-11: the bounded `systemd-run` runner |

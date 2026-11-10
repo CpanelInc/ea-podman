@@ -1,0 +1,19 @@
+host ea4-352-cl8-cgv1 os=cloudlinux-8.10 kernel=4.18.0-553.177.1.lve.1.el8.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+probe p0-8-v1-start.sh=6d367d1ef0e2 plib.sh=fd17d062fc15 lib.sh=621cb1503175
+
+### unit start after each sequence
+RESULT p0-8-v1-start.unit_only.1 unit_start_rc=0 unit=active state=running
+RESULT p0-8-v1-start.unit_only.2 unit_start_rc=0 unit=active state=running
+RESULT p0-8-v1-start.unit_only.3 unit_start_rc=0 unit=active state=running
+RESULT p0-8-v1-start.back2back.1 runner_start_rc=0 state_after_runner=exited unit_start_rc=0 unit=active state=running
+RESULT p0-8-v1-start.back2back.2 runner_start_rc=0 state_after_runner=exited unit_start_rc=0 unit=active state=running
+RESULT p0-8-v1-start.back2back.3 runner_start_rc=1 state_after_runner=running unit_start_rc=1 unit=activating state=exited
+RESULT p0-8-v1-start.settled.1 runner_start_rc=1 state_after_runner=running unit_start_rc=1 unit=activating state=exited
+RESULT p0-8-v1-start.settled.2 runner_start_rc=0 state_after_runner=exited unit_start_rc=0 unit=active state=running
+RESULT p0-8-v1-start.settled.3 runner_start_rc=0 state_after_runner=exited unit_start_rc=0 unit=active state=running
+
+### where a runner-started container's conmon is, and what is left when the runner unit ends
+  conmon: /eapodman.slice/eapodman-1001.slice/eapodman-run-1001-hold-92213-27.service
+  runner: /eapodman.slice/eapodman-1001.slice/eapodman-run-1001-hold-92213-27.service
+RESULT p0-8-v1-start.conmon_in_runner_unit yes
+RESULT p0-8-v1-start.state_after_runner_unit_ended exited
