@@ -1,0 +1,16 @@
+Resource limits are not supported and ignored on cgroups V1 rootless systems
+Resource limits are not supported and ignored on cgroups V1 rootless systems
+Resource limits are not supported and ignored on cgroups V1 rootless systems
+--- :8081
+Server address: 10.0.2.100:80
+Server name: 969b473c76b7
+Date: 12/Nov/2026:16:40:04 +0000
+--- :8082
+Server address: 10.0.2.100:80
+Server name: a27c07d9c242
+Date: 12/Nov/2026:16:40:04 +0000
+--- :8083
+Server address: 10.0.2.100:80
+Server name: f56e65d10c86
+Date: 12/Nov/2026:16:40:04 +0000
+done; now run ./verify.sh eapodtest, ./loadtest.sh eapodtest, then ./lifecycle.sh eapodtest last (see README.md)

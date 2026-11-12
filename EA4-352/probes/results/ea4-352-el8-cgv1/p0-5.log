@@ -1,4 +1,5 @@
 host ea4-352-el8-cgv1 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+probe p0-5.sh=f032a45cad92 plib.sh=fd17d062fc15 lib.sh=78ded5647a3b
 
 ### journald
 RESULT p0-5.journal_storage volatile
@@ -6,20 +7,22 @@ RESULT p0-5.journal_storage volatile
   account groups: eapodtest
 
 ### unit output in the system journal
-RESULT p0-5.unit_output_in_journal_u yes (12 lines)
+RESULT p0-5.unit_output_in_journal_u yes (8 lines)
   senders: podman/uid=1000/unit=ea-podman-web.eapodtest.01.service/userunit=None systemd/uid=0/unit=init.scope/userunit=None
 
 ### podman logs (container stdout) as the account, through the runner
 RESULT p0-5.log_driver k8s-file
 RESULT p0-5.podman_logs_as_account works
-  log path: /home/eapodtest/.local/share/ea-podman/storage/overlay-containers/2ef1ce10de0669b2e5c5a41a75ecee43659c0930423c7f37f79a8011590e375d/userdata/ctr.log
-RESULT p0-5.log_file_location /root/.local/share/ea-podman/storage/overlay-containers/2ef1ce10de0669b2e5c5a41a75ecee43659c0930423c7f37f79a8011590e375d/userdata/ctr.log
+  log path: /home/eapodtest/.local/share/ea-podman/storage/overlay-containers/dc62cea23e06deb22539b378688a5093946042dca5aa3487699682a4eab7a3ad/userdata/ctr.log
+RESULT p0-5.log_file_location ~/.local/share/ea-podman/storage/overlay-containers/dc62cea23e06deb22539b378688a5093946042dca5aa3487699682a4eab7a3ad/userdata/ctr.log
 
 ### podman logs, forcing --log-driver=journald (the 1.x default where podman uses journald)
   root sees 17 journal lines for p05.eapodtest.61
 RESULT p0-5.podman_logs_journald_driver_as_account FAILS (rc=0, journal has 17 lines):  
 
 ### podman events (events_logger=journald) as the account
-  
-RESULT p0-5.podman_events_as_account FAILS/empty (rc=0): 
-RESULT p0-5.events_in_system_journal yes
+  2026-11-12 16:34:44.03485767 +0000 UTC container died dc62cea23e06deb22539b378688a5093946042dca5aa3487699682a4eab7a3ad (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+2026-11-12 16:34:44.203903686 +0000 UTC container cleanup dc62cea23e06deb22539b378688a5093946042dca5aa3487699682a4eab7a3ad (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+2026-11-12 16:34:44.520184057 +0000 UTC container init dc62cea23e06deb22539b378688a5093946042dca5aa3487699682a4eab7a3ad (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+RESULT p0-5.podman_events_as_account works
+RESULT p0-5.events_in_system_journal no

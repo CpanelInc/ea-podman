@@ -29,6 +29,12 @@ EA4-392 stopped those re-runs on el8-cgv1, el8-cgv2, el9 and el10, and was fixed
 - `kit-verify.log` was re-run on all 9, after `setup.sh` re-rendered the units with their `ExecStopPost=` PID-file line. It has no failed check on any host. An earlier EL `kit-verify.log` that passed "no ea-podman AVC denials" proves nothing: `ausearch` was reading its stdin.
 - `ea4-392-1.log` to `ea4-392-3.log` (el9) are the PID 1 and dbus-broker journals of three occurrences. `ea4-392-4.log` (el9, el8-cgv1) is the evidence for the cause: which stdout and stderr of `systemd-run --pipe` fail, enforcing and permissive, and the denial.
 
+On 2026-11-12 every probe and kit script that needs no reboot was re-run on all 9 from `24ce94a`'s scripts (`../poc-rerun-prompt.md`). EA4-392 did not recur. Only the logs whose results changed, or that had no committed log, were kept from that run:
+
+- Changed: `p0-5.log` (all but u24), `p0-1-2.log` (u22), `p0-8.log` (cl8-cgv1), `p0-8-v1-start.log` (el8-cgv1, cl8-cgv1), `p0-9.log` (el8-cgv1, el9, el10, u24), `p0-11.log` (cl8-cgv1), `kit-lifecycle.log` (u24) and `kit-loadtest.log` (el8-cgv2).
+- First runs: `t0-6-floor-memorymin.log`, `t0-6-units.log` and `t0-6-swap.log` on the hosts that had none, `f15-1x.log` on the EL and CloudLinux hosts, `p0-6-clean.log` on CloudLinux, `kit-loadtest.log` on the v1 hosts, and `kit-teardown.log`, `kit-setup-after.log` and `kit-verify-after.log` (the teardown, setup and verify that end the run) on all 9.
+- On el10, cl10 and u24 the logs from `p0-5` onward come from a second pass with `systemctl reset-failed 'ea-podman-*'` before each script: run back to back, the probes hit web's `StartLimitBurst=3` on systemd 255 and 257.
+
 When you look for AVC denials from a script or over `ssh -n`, use `ausearch --input-logs`. Without it `ausearch` reads its stdin and prints `<no matches>`.
 
 Each probe's log starts with two lines from `plib.sh`: the host (`os`, `kernel`, `cgroup`, `systemd`, `podman`) and the scripts that produced it, as the first 12 hex digits of each file's sha256 (`probe p0-4.sh=… plib.sh=… lib.sh=…`). The probes run from copies without git, so the hashes name the files rather than a commit. To find the commit, hash each revision of the script:

@@ -1,0 +1,7 @@
+Removed "/etc/systemd/system/multi-user.target.wants/ea-podman-api.eapodtest.02.service".
+api.eapodtest.02
+Removed "/etc/systemd/system/multi-user.target.wants/ea-podman-web.eapodtest.01.service".
+web.eapodtest.01
+Removed "/etc/systemd/system/multi-user.target.wants/ea-podman-worker.eapodtest.03.service".
+worker.eapodtest.03
+removed; /home/eapodtest/.local/share/ea-podman/storage kept (use --purge to delete it)

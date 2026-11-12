@@ -15,15 +15,15 @@ A2. caps only, web and worker paused (api cap 2.0)
 B. account slice squeezed to 1 CPU: unit CPUWeight 100/200/50 decides
   container                CPUs   expected
   web.eapodtest.01         0.26       0.29
-  api.eapodtest.02         0.59       0.57
-  worker.eapodtest.03      0.15       0.14
+  api.eapodtest.02         0.60       0.57
+  worker.eapodtest.03      0.14       0.14
 
 C. same, all unit weights 100; container cpu.weight (from --cpu-shares) still 39/79/20
   container                CPUs   expected
-  web.eapodtest.01         0.30       0.33
-  api.eapodtest.02         0.38       0.33
-  worker.eapodtest.03      0.32       0.33
-./loadtest.sh: line 1: 19513 Terminated              sh -c "$ENTER" _ "$p" "$@" < /dev/null > /dev/null 2>&1
+  web.eapodtest.01         0.29       0.33
+  api.eapodtest.02         0.37       0.33
+  worker.eapodtest.03      0.34       0.33
+/root/eapodman-test-kit/loadtest.sh: line 1: 22886 Terminated              "${ACCT_ARGV[@]}" "$@" < /dev/null > /dev/null 2>&1
 
 == memory: hard cap on web.eapodtest.01 (memory.max 512M, swap.max 0)
   400M allocation: exit 0 (expected 0)
@@ -32,14 +32,14 @@ C. same, all unit weights 100; container cpu.weight (from --cpu-shares) still 39
 == memory: floors under slice pressure (web 400M + worker 200M page cache, api 400M anon)
 
 1. unit MemoryLow set (web 256M, worker 64M): reclaim should come from above the floors
-  before: slice 1141M; page cache web 400M (unit low 256M), worker 200M (unit low 64M); api anon 406M
-  slice memory.max -> 891M (250M below usage)
-  after:  slice 834M; page cache web 252M, worker 61M; api anon 406M; swap.current web/worker/api 0/0/0; slice oom_kill 2
+  before: slice 1169M; page cache web 400M (unit low 256M), worker 200M (unit low 64M); api anon 406M
+  slice memory.max -> 919M (250M below usage)
+  after:  slice 556M; page cache web 0M, worker 61M; api anon 406M; swap.current web/worker/api 0/0/0; slice oom_kill 2
 
 2. control, unit MemoryLow 0 (container memory.low unchanged): reclaim spread across both caches
-  before: slice 1121M; page cache web 400M (unit low 0M), worker 200M (unit low 0M); api anon 406M
-  slice memory.max -> 871M (250M below usage)
-  after:  slice 596M; page cache web 0M, worker 86M; api anon 406M; swap.current web/worker/api 0/0/0; slice oom_kill 2
+  before: slice 1096M; page cache web 400M (unit low 0M), worker 200M (unit low 0M); api anon 406M
+  slice memory.max -> 846M (250M below usage)
+  after:  slice 845M; page cache web 231M, worker 141M; api anon 406M; swap.current web/worker/api 0/0/0; slice oom_kill 2
 
 == cleanup
-restored slice cpu.max/memory.max and unit cpu.weight/memory.low; removed /home/eapodtest/.eapodman-loadtest; units restarted
+restored every cgroup value changed; removed /home/eapodtest/.eapodman-loadtest; units restarted

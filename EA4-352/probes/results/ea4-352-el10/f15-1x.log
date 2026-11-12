@@ -1,0 +1,4 @@
+host ea4-352-el10 os=almalinux-10.2 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+probe f15-1x.sh=8b4d4e4b52bd plib.sh=fd17d062fc15 lib.sh=78ded5647a3b
+RESULT f15-1x.before active= conmon= in  container in /user.slice/user-1000.slice/user@1000.service/user.slice/libpod-501f3a3caeabeb1d628a82d4971e205030c658de4c61bd42fcbfe3b32fa260c5.scope/container
+refusing PID ''

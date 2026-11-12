@@ -1,29 +1,30 @@
 host ea4-352-el8-cgv1 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+probe p0-9.sh=f517f8df68c3 plib.sh=fd17d062fc15 lib.sh=78ded5647a3b
 RESULT p0-9.account_caged no
   shell /bin/bash
 
 ### as the account, via login
   environment: host
-  MainPID=5771
+  MainPID=16187
 User=eapodtest
 ActiveState=active
 RESULT p0-9.systemctl_show_login works (host)
 RESULT p0-9.systemctl_is_active_login active
-  status: ● ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01    Loaded: loaded (/etc/systemd/system/ea-podman-web.eapodtest.01.service; enabled; vendor preset: disabled)    Active: active (running) since Fri 2026-11-06 19:30:51 UTC; 37s ago 
+  status: ● ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01    Loaded: loaded (/etc/systemd/system/ea-podman-web.eapodtest.01.service; enabled; vendor preset: disabled)    Active: active (running) since Thu 2026-11-12 16:34:54 UTC; 2min 35s ago 
 RESULT p0-9.sees_runtime_dir_login yes
 RESULT p0-9.sees_unit_file_login yes
 RESULT p0-9.sees_own_conmon_login yes
 RESULT p0-9.reaches_container_port_login 200
-RESULT p0-9.raw_podman_ps_login Error: creating lock file directory: mkdir /home/eapodtest/.config/cni: permission denied
+RESULT p0-9.raw_podman_ps_login 
 
 ### as the account, via runner
   environment: host
-  MainPID=5771
+  MainPID=16187
 User=eapodtest
 ActiveState=active
 RESULT p0-9.systemctl_show_runner works (host)
 RESULT p0-9.systemctl_is_active_runner active
-  status: ● ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01    Loaded: loaded (/etc/systemd/system/ea-podman-web.eapodtest.01.service; enabled; vendor preset: disabled)    Active: active (running) since Fri 2026-11-06 19:30:51 UTC; 38s ago 
+  status: ● ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01    Loaded: loaded (/etc/systemd/system/ea-podman-web.eapodtest.01.service; enabled; vendor preset: disabled)    Active: active (running) since Thu 2026-11-12 16:34:54 UTC; 2min 36s ago 
 RESULT p0-9.sees_runtime_dir_runner yes
 RESULT p0-9.sees_unit_file_runner yes
 RESULT p0-9.sees_own_conmon_runner yes

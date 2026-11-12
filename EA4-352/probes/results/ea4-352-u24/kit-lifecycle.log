@@ -1,34 +1,113 @@
 == 1. SIGKILL conmon of worker.eapodtest.03
-  not back after 60s: failed, MainPID 0, NRestarts 3
-  FAIL  worker comes back through Restart= (known: F15, see PLAN.md)
+  not back after 60s: failed, MainPID 0, NRestarts 4
+  FAIL  worker comes back through Restart= (NEW: no F15 signature in the journal)
+    journal: ea-podman-worker.eapodtest.03.service: Main process exited, code=killed, status=9/KILL
+    journal: 2026-11-12 16:49:35.587799739 +0000 UTC m=+0.031533800 container stop b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee (image=docker.io/nginxdemos/hello:plain-text, name=worker.eapodtest.03, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: 2026-11-12 16:49:35.615735345 +0000 UTC m=+0.059469407 container cleanup b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee (image=docker.io/nginxdemos/hello:plain-text, name=worker.eapodtest.03, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: worker.eapodtest.03
     journal: ea-podman-worker.eapodtest.03.service: Failed with result 'signal'.
-    journal: Error: unable to start container "8a343c8ba172f9b1f4662e5b4086ced3246a741d400f0d809d90862555e2eda1": container 8a343c8ba172f9b1f4662e5b4086ced3246a741d400f0d809d90862555e2eda1 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-worker.eapodtest.03.service: Scheduled restart job, restart counter is at 1.
+    journal: Starting ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03...
+    journal: Error: unable to start container "b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee": container b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-worker.eapodtest.03.service: Control process exited, code=exited, status=125/n/a
+    journal: 2026-11-12 16:49:40.823358971 +0000 UTC m=+0.023155123 container stop b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee (image=docker.io/nginxdemos/hello:plain-text, name=worker.eapodtest.03, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: 2026-11-12 16:49:40.823693514 +0000 UTC m=+0.023489668 container cleanup b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee (image=docker.io/nginxdemos/hello:plain-text, name=worker.eapodtest.03, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: worker.eapodtest.03
     journal: ea-podman-worker.eapodtest.03.service: Failed with result 'exit-code'.
     journal: Failed to start ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
-    journal: Error: unable to start container "8a343c8ba172f9b1f4662e5b4086ced3246a741d400f0d809d90862555e2eda1": container 8a343c8ba172f9b1f4662e5b4086ced3246a741d400f0d809d90862555e2eda1 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-worker.eapodtest.03.service: Scheduled restart job, restart counter is at 2.
+    journal: Starting ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03...
+    journal: Error: unable to start container "b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee": container b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-worker.eapodtest.03.service: Control process exited, code=exited, status=125/n/a
+    journal: 2026-11-12 16:49:46.059749146 +0000 UTC m=+0.022893233 container stop b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee (image=docker.io/nginxdemos/hello:plain-text, name=worker.eapodtest.03, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: 2026-11-12 16:49:46.060023938 +0000 UTC m=+0.023168027 container cleanup b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee (image=docker.io/nginxdemos/hello:plain-text, name=worker.eapodtest.03, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: worker.eapodtest.03
+    journal: ea-podman-worker.eapodtest.03.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
+    journal: ea-podman-worker.eapodtest.03.service: Scheduled restart job, restart counter is at 3.
+    journal: Starting ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03...
+    journal: Error: unable to start container "b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee": container b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-worker.eapodtest.03.service: Control process exited, code=exited, status=125/n/a
+    journal: 2026-11-12 16:49:51.302140996 +0000 UTC m=+0.022567454 container stop b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee (image=docker.io/nginxdemos/hello:plain-text, name=worker.eapodtest.03, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: 2026-11-12 16:49:51.302438187 +0000 UTC m=+0.022864646 container cleanup b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee (image=docker.io/nginxdemos/hello:plain-text, name=worker.eapodtest.03, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: worker.eapodtest.03
+    journal: ea-podman-worker.eapodtest.03.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
+    journal: ea-podman-worker.eapodtest.03.service: Scheduled restart job, restart counter is at 4.
+    journal: ea-podman-worker.eapodtest.03.service: Start request repeated too quickly.
+    journal: ea-podman-worker.eapodtest.03.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
+    journal: ea-podman-worker.eapodtest.03.service: Failed with result 'signal'.
+    journal: Error: unable to start container "b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee": container b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-worker.eapodtest.03.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
+    journal: Error: unable to start container "b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee": container b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-worker.eapodtest.03.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
+    journal: Error: unable to start container "b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee": container b66f2570e0bef20428e8f4c7e52f5e547de545adae2cefa4d4e295d03810beee must be in Created or Stopped state to be started: container state improper
     journal: ea-podman-worker.eapodtest.03.service: Failed with result 'exit-code'.
     journal: Failed to start ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
     journal: ea-podman-worker.eapodtest.03.service: Failed with result 'exit-code'.
     journal: Failed to start ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
 
 == 2. SIGKILL the container's init in api.eapodtest.02
-  container init PID 21364 (nginx)
-  back after 7s: MainPID 21362 -> 21976, NRestarts 0 -> 1
+  container init PID 47540 (nginx)
+  back after 7s: MainPID 47538 -> 48140, NRestarts 0 -> 1
   PASS  api comes back through Restart=
     journal: ea-podman-api.eapodtest.02.service: Failed with result 'exit-code'.
 
-== 3. account writes root PID 21633 into web.eapodtest.01's conmon.pid, then conmon dies
-  conmon.pid now holds 21633
-  not back after 60s: failed, MainPID 0, NRestarts 3
-  FAIL  web comes back through Restart= (known: F15, see PLAN.md)
-  PASS  the root process is still alive
-  PASS  web's MainPID is not the root process
-    journal: ea-podman-web.eapodtest.01.service: New main PID 21633 does not belong to service, and PID file is not owned by root. Refusing.
+== 3. account writes root PID 47662 into web.eapodtest.01's conmon.pid, then conmon dies
+  conmon.pid now holds 47662
+  not back after 60s: failed, MainPID 0, NRestarts 4
+  FAIL  web comes back through Restart= (NEW: no F15 signature in the journal)
+    journal: ea-podman-web.eapodtest.01.service: New main PID 47662 does not belong to service, and PID file is not owned by root. Refusing.
+    journal: ea-podman-web.eapodtest.01.service: Main process exited, code=killed, status=9/KILL
+    journal: 2026-11-12 16:50:43.080399892 +0000 UTC m=+0.031074630 container stop b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: 2026-11-12 16:50:43.110867558 +0000 UTC m=+0.061542283 container cleanup b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: web.eapodtest.01
     journal: ea-podman-web.eapodtest.01.service: Failed with result 'signal'.
-    journal: Error: unable to start container "3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077": container 3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-web.eapodtest.01.service: Scheduled restart job, restart counter is at 1.
+    journal: Starting ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01...
+    journal: Error: unable to start container "b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731": container b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-web.eapodtest.01.service: Control process exited, code=exited, status=125/n/a
+    journal: 2026-11-12 16:50:48.310381133 +0000 UTC m=+0.022156226 container stop b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: 2026-11-12 16:50:48.310657838 +0000 UTC m=+0.022432932 container cleanup b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: web.eapodtest.01
     journal: ea-podman-web.eapodtest.01.service: Failed with result 'exit-code'.
     journal: Failed to start ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
-    journal: Error: unable to start container "3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077": container 3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-web.eapodtest.01.service: Scheduled restart job, restart counter is at 2.
+    journal: Starting ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01...
+    journal: Error: unable to start container "b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731": container b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-web.eapodtest.01.service: Control process exited, code=exited, status=125/n/a
+    journal: 2026-11-12 16:50:53.553666007 +0000 UTC m=+0.022520293 container stop b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: 2026-11-12 16:50:53.554016662 +0000 UTC m=+0.022870945 container cleanup b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: web.eapodtest.01
+    journal: ea-podman-web.eapodtest.01.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
+    journal: ea-podman-web.eapodtest.01.service: Scheduled restart job, restart counter is at 3.
+    journal: Starting ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01...
+    journal: Error: unable to start container "b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731": container b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-web.eapodtest.01.service: Control process exited, code=exited, status=125/n/a
+    journal: 2026-11-12 16:50:58.809669933 +0000 UTC m=+0.023833248 container stop b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: 2026-11-12 16:50:58.81037315 +0000 UTC m=+0.024536463 container cleanup b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 (image=docker.io/nginxdemos/hello:plain-text, name=web.eapodtest.01, maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>)
+    journal: web.eapodtest.01
+    journal: ea-podman-web.eapodtest.01.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
+    journal: ea-podman-web.eapodtest.01.service: Scheduled restart job, restart counter is at 4.
+    journal: ea-podman-web.eapodtest.01.service: Start request repeated too quickly.
+    journal: ea-podman-web.eapodtest.01.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
+  PASS  the root process is still alive
+  PASS  web's MainPID is not the root process
+    journal: ea-podman-web.eapodtest.01.service: New main PID 47662 does not belong to service, and PID file is not owned by root. Refusing.
+    journal: ea-podman-web.eapodtest.01.service: Failed with result 'signal'.
+    journal: Error: unable to start container "b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731": container b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-web.eapodtest.01.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
+    journal: Error: unable to start container "b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731": container b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-web.eapodtest.01.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
+    journal: Error: unable to start container "b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731": container b4d92ff742834777e383af02020b90cce7024c5835e1477b326192a451d2b731 must be in Created or Stopped state to be started: container state improper
     journal: ea-podman-web.eapodtest.01.service: Failed with result 'exit-code'.
     journal: Failed to start ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
     journal: ea-podman-web.eapodtest.01.service: Failed with result 'exit-code'.
@@ -46,21 +125,21 @@
   PASS  PID 1: systemd logged the refusal
   PASS  PID 1: MainPID is not 1
   PASS  PID 1: PID 1 is still systemd
-  PASS  PID 1: root process 21633 survives the stop
-  root process: start exit 1, Result=timeout, MainPID 0, PID file 21633
+  PASS  PID 1: root process 47662 survives the stop
+  root process: start exit 1, Result=timeout, MainPID 0, PID file 47662
     journal: Starting eapodman-test-pidfile-1000.service...
-    journal: eapodman-test-pidfile-1000.service: New main PID 21633 does not belong to service, and PID file is not owned by root. Refusing.
-    journal: eapodman-test-pidfile-1000.service: New main PID 21633 does not belong to service, and PID file is not owned by root. Refusing.
+    journal: eapodman-test-pidfile-1000.service: New main PID 47662 does not belong to service, and PID file is not owned by root. Refusing.
+    journal: eapodman-test-pidfile-1000.service: New main PID 47662 does not belong to service, and PID file is not owned by root. Refusing.
     journal: eapodman-test-pidfile-1000.service: start operation timed out. Terminating.
     journal: eapodman-test-pidfile-1000.service: Failed with result 'timeout'.
     journal: Failed to start eapodman-test-pidfile-1000.service.
-  PASS  root process: the PID file holds 21633
+  PASS  root process: the PID file holds 47662
   PASS  root process: start is refused
   PASS  root process: systemd logged the refusal
-  PASS  root process: MainPID is not 21633
+  PASS  root process: MainPID is not 47662
   PASS  root process: PID 1 is still systemd
-  PASS  root process: root process 21633 survives the stop
-  control, own child: start exit 0, Result=success, MainPID 22472, PID file 22472
+  PASS  root process: root process 47662 survives the stop
+  control, own child: start exit 0, Result=success, MainPID 48844, PID file 48844
     journal: Starting eapodman-test-pidfile-1000.service...
     journal: Started eapodman-test-pidfile-1000.service.
   PASS  control, own child: start succeeds
@@ -73,5 +152,5 @@
   PASS  with SuccessExitStatus=143 the stop ends Result=success (got success)
   PASS  and the unit is not failed
 
-2 check(s) failed, all known (F15)
+2 check(s) failed, 0 of them known (F15); the rest are new
 cleanup: worker.eapodtest.03 web.eapodtest.01 can't start (F15); next run ./teardown.sh eapodtest, then ./setup.sh eapodtest to test again

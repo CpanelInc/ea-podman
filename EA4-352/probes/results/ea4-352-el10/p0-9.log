@@ -1,29 +1,30 @@
 host ea4-352-el10 os=almalinux-10.2 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+probe p0-9.sh=f517f8df68c3 plib.sh=fd17d062fc15 lib.sh=78ded5647a3b
 RESULT p0-9.account_caged no
   shell /bin/bash
 
 ### as the account, via login
   environment: host
-  MainPID=6100
+  MainPID=30116
 User=eapodtest
 ActiveState=active
 RESULT p0-9.systemctl_show_login works (host)
 RESULT p0-9.systemctl_is_active_login active
-  status: ● ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01      Loaded: loaded (/etc/systemd/system/ea-podman-web.eapodtest.01.service; enabled; preset: disabled)      Active: active (running) since Fri 2026-11-06 19:30:51 UTC; 38s ago 
+  status: ● ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01      Loaded: loaded (/etc/systemd/system/ea-podman-web.eapodtest.01.service; enabled; preset: disabled)      Active: active (running) since Thu 2026-11-12 16:44:22 UTC; 7s ago 
 RESULT p0-9.sees_runtime_dir_login yes
 RESULT p0-9.sees_unit_file_login yes
 RESULT p0-9.sees_own_conmon_login yes
 RESULT p0-9.reaches_container_port_login 200
-RESULT p0-9.raw_podman_ps_login time="2026-11-06T19:31:30Z" level=warning msg="Failed to add pause process to systemd sandbox cgroup: dbus: couldn't determine address of session bus"
+RESULT p0-9.raw_podman_ps_login time="2026-11-12T16:44:29Z" level=warning msg="Falling back to --cgroup-manager=cgroupfs"
 
 ### as the account, via runner
   environment: host
-  MainPID=6100
+  MainPID=30116
 User=eapodtest
 ActiveState=active
 RESULT p0-9.systemctl_show_runner works (host)
 RESULT p0-9.systemctl_is_active_runner active
-  status: ● ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01      Loaded: loaded (/etc/systemd/system/ea-podman-web.eapodtest.01.service; enabled; preset: disabled)      Active: active (running) since Fri 2026-11-06 19:30:51 UTC; 38s ago 
+  status: ● ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01      Loaded: loaded (/etc/systemd/system/ea-podman-web.eapodtest.01.service; enabled; preset: disabled)      Active: active (running) since Thu 2026-11-12 16:44:22 UTC; 7s ago 
 RESULT p0-9.sees_runtime_dir_runner yes
 RESULT p0-9.sees_unit_file_runner yes
 RESULT p0-9.sees_own_conmon_runner yes

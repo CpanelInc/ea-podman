@@ -1,0 +1,8 @@
+host ea4-352-cl10 os=cloudlinux-10 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+probe t0-6.sh=4bff04d63e10 plib.sh=fd17d062fc15 lib.sh=78ded5647a3b
+
+### daemon-reload and PID 1 memory vs the number of enabled units
+RESULT t0-6.reload_0_units 251 ms; PID1 RSS 31 MiB; loaded units 355
+RESULT t0-6.reload_200_units 319 ms; PID1 RSS 31 MiB; loaded units 555
+RESULT t0-6.reload_1000_units 546 ms; PID1 RSS 31 MiB; loaded units 1355
+RESULT t0-6.reload_3000_units 1271 ms; PID1 RSS 31 MiB; loaded units 3355

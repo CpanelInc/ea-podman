@@ -1,0 +1,4 @@
+host ea4-352-el8-cgv1 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+probe f15-1x.sh=8b4d4e4b52bd plib.sh=fd17d062fc15 lib.sh=78ded5647a3b
+RESULT f15-1x.before active= conmon= in  container in /user.slice/user-1000.slice/user@1000.service/container-f15old.service/971c0f0e7786cf03adc9d90e09baf1b5edae58a2362eff23075c766d2f86f8be
+refusing PID ''
