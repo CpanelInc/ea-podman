@@ -1,21 +1,21 @@
 == 1. SIGKILL conmon of worker.eapodtest.03
-  back after 7s: MainPID 3428 -> 18558, NRestarts 0 -> 1
+  back after 7s: MainPID 36153 -> 36568, NRestarts 0 -> 1
   PASS  worker comes back through Restart= (known F15 no longer reproduces; update PLAN.md)
-    journal: Error: container 34200ebba93d7ad6f0bb19fb7eb4e1d1b89a24895037338a7729c39a7f940872 conmon exited prematurely, exit code could not be retrieved: internal libpod error
+    journal: Error: container 917b6302f072d8c6b69e18f61ece4ebbc188ba3b00b3ef6fbf30b0a02168a035 conmon exited prematurely, exit code could not be retrieved: internal libpod error
     journal: ea-podman-worker.eapodtest.03.service: Failed with result 'signal'.
 
 == 2. SIGKILL the container's init in api.eapodtest.02
-  container init PID 3300 (nginx)
+  container init PID 36069 (nginx)
+refusing PID 36069: not in a cgroup matching /ea-podman-api.eapodtest.02.service/libpod-payload-
   FAIL  api's container init is a process in its payload cgroup (test 2 not run)
 
-== 3. account writes root PID 18470 into web.eapodtest.01's conmon.pid, then conmon dies
-PID 3300 is not in a cgroup matching /ea-podman-api.eapodtest.02.service/libpod-payload-
-  conmon.pid now holds 18470
-  back after 7s: MainPID 16993 -> 18751, NRestarts 0 -> 1
+== 3. account writes root PID 36483 into web.eapodtest.01's conmon.pid, then conmon dies
+  conmon.pid now holds 36483
+  back after 7s: MainPID 35957 -> 36752, NRestarts 0 -> 1
   PASS  web comes back through Restart= (known F15 no longer reproduces; update PLAN.md)
   PASS  the root process is still alive
   PASS  web's MainPID is not the root process
-    journal: Error: container 2ef1ce10de0669b2e5c5a41a75ecee43659c0930423c7f37f79a8011590e375d conmon exited prematurely, exit code could not be retrieved: internal libpod error
+    journal: Error: container bf8f2f6a701b6aeef27ea5b309227cc5fda0c327820fb4c30e60f81231c0490c conmon exited prematurely, exit code could not be retrieved: internal libpod error
     journal: ea-podman-web.eapodtest.01.service: Failed with result 'signal'.
 
 == 4. PID file refusal (P0-3, invariant 19) with a same-shape unit
@@ -29,20 +29,20 @@ PID 3300 is not in a cgroup matching /ea-podman-api.eapodtest.02.service/libpod-
   PASS  PID 1: systemd logged the refusal
   PASS  PID 1: MainPID is not 1
   PASS  PID 1: PID 1 is still systemd
-  PASS  PID 1: root process 18470 survives the stop
-  root process: start exit 1, Result=timeout, MainPID 0, PID file 18470
-    journal: eapodman-test-pidfile-1000.service: New main PID 18470 does not belong to service, and PID file is not owned by root. Refusing.
-    journal: eapodman-test-pidfile-1000.service: New main PID 18470 does not belong to service, and PID file is not owned by root. Refusing.
+  PASS  PID 1: root process 36483 survives the stop
+  root process: start exit 1, Result=timeout, MainPID 0, PID file 36483
+    journal: eapodman-test-pidfile-1000.service: New main PID 36483 does not belong to service, and PID file is not owned by root. Refusing.
+    journal: eapodman-test-pidfile-1000.service: New main PID 36483 does not belong to service, and PID file is not owned by root. Refusing.
     journal: eapodman-test-pidfile-1000.service: start operation timed out. Terminating.
     journal: eapodman-test-pidfile-1000.service: Failed with result 'timeout'.
     journal: Failed to start eapodman-test-pidfile-1000.service.
-  PASS  root process: the PID file holds 18470
+  PASS  root process: the PID file holds 36483
   PASS  root process: start is refused
   PASS  root process: systemd logged the refusal
-  PASS  root process: MainPID is not 18470
+  PASS  root process: MainPID is not 36483
   PASS  root process: PID 1 is still systemd
-  PASS  root process: root process 18470 survives the stop
-  control, own child: start exit 0, Result=success, MainPID 18956, PID file 18956
+  PASS  root process: root process 36483 survives the stop
+  control, own child: start exit 0, Result=success, MainPID 36968, PID file 36968
     journal: Started eapodman-test-pidfile-1000.service.
   PASS  control, own child: start succeeds
   PASS  control, own child: MainPID is the PID from the file
@@ -54,5 +54,8 @@ Resource limits are not supported and ignored on cgroups V1 rootless systems
   PASS  the container's PID 1 exited 143 (got 143), so the case means something
   PASS  with SuccessExitStatus=143 the stop ends Result=success (got success)
   PASS  and the unit is not failed
+
+== 6. SELinux: no denial on a conmon.pid in tests 1-5 (F19, EA4-392)
+  PASS  no AVC denial names a conmon.pid since this script started (SELinux Enforcing)
 
 1 check(s) failed, 0 of them known (F15); the rest are new

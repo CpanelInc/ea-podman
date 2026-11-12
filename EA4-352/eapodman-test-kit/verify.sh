@@ -123,26 +123,18 @@ for unit in "${UNITS[@]}"; do
 done
 # F19: on SELinux hosts pasta needs netns labelled user_tmp_t (runtime-mount's chcon -h), and
 # nothing of ea-podman's may be denied since the anchor started.
-if command -v selinuxenabled >/dev/null && selinuxenabled; then
+if selinux_on; then
     echo "  SELinux: $(getenforce)"
     check "$RUNDIR/netns is labelled user_tmp_t" \
         test "$(stat -c %C "$RUNDIR/netns" 2>/dev/null | cut -d: -f3)" = user_tmp_t
     since=$(date -d "$(systemctl show -p ActiveEnterTimestamp --value "ea-podman-runtime@$UID_.service")" +%s 2>/dev/null)
-    if [ -z "$since" ] || ! command -v ausearch >/dev/null; then
-        check "AVC denials can be searched (ausearch, and the anchor's start time)" false
+    if [ -z "$since" ]; then
+        check "AVC denials can be searched (the anchor's start time)" false
+    elif ! avc_since "$since"; then    # lib.sh; it reads the audit logs, never stdin (EA4-392)
+        check "AVC denials can be searched ($AVC)" false
     else
-        # --input-logs: without it ausearch reads stdin whenever stdin isn't a terminal (ssh -n, a
-        # script, cron), finds nothing there, and this check could never fail (EA4-392).
-        avc=$(LC_ALL=C ausearch --input-logs -m avc,user_avc -i -ts $(LC_ALL=C date -d "@$since" '+%x %H:%M:%S') 2>&1); rc=$?
-        # ausearch exits 1 with "<no matches>" when there are none; any other failure is an error.
-        if [ $rc = 1 ] && grep -q '<no matches>' <<<"$avc"; then
-            ours=
-        elif [ $rc = 0 ]; then
-            ours=$(grep -E 'pasta|slirp4netns|netavark|aardvark|conmon|podman|crun|runc|catatonit|ea-podman|eapodman' <<<"$avc")
-            [ -n "$ours" ] || echo "  (AVC denials since the anchor started, none of them ea-podman's)"
-        else
-            ours="ausearch failed (rc $rc): $avc"
-        fi
+        ours=$(grep -E 'pasta|slirp4netns|netavark|aardvark|conmon|podman|crun|runc|catatonit|ea-podman|eapodman' <<<"$AVC")
+        [ -n "$ours" ] || [ -z "$AVC" ] || echo "  (AVC denials since the anchor started, none of them ea-podman's)"
         check "no ea-podman AVC denials since the anchor started" test -z "$ours"
         [ -z "$ours" ] || sed 's/^/    /' <<<"$ours" | tail -20
     fi

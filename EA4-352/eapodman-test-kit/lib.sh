@@ -339,6 +339,24 @@ restore_changes() {
     [ ${#failed[@]} = 0 ] || { echo "NOT restored: ${failed[*]}" >&2; return 1; }
 }
 
+# ---------------------------------------------------------------- SELinux
+selinux_on() { command -v selinuxenabled >/dev/null && selinuxenabled; }
+# The AVC denials logged since <epoch seconds>, into AVC (empty when there are none). Returns 1,
+# with the reason in AVC, when they couldn't be searched: that is never "no denials".
+# --input-logs: without it ausearch reads stdin whenever stdin isn't a terminal (ssh -n, a script,
+# cron), finds nothing there, and a check built on it could never fail (EA4-392).
+avc_since() {
+    local out rc
+    AVC=
+    command -v ausearch >/dev/null || { AVC="ausearch not found"; return 1; }
+    # shellcheck disable=SC2046
+    out=$(LC_ALL=C ausearch --input-logs -m avc,user_avc -i -ts $(LC_ALL=C date -d "@$1" '+%x %H:%M:%S') 2>&1); rc=$?
+    # ausearch exits 1 with "<no matches>" when there are none; any other failure is an error.
+    if [ $rc = 1 ] && grep -q '<no matches>' <<<"$out"; then return 0; fi
+    [ $rc = 0 ] || { AVC="ausearch failed (rc $rc): $out"; return 1; }
+    AVC=$out
+}
+
 # ---------------------------------------------------------------- checks
 FAILS=0
 check() {    # description, then a command that succeeds when the check passes
