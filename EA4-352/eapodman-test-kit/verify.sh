@@ -133,10 +133,17 @@ if selinux_on; then
     elif ! avc_since "$since"; then    # lib.sh; it reads the audit logs, never stdin (EA4-392)
         check "AVC denials can be searched ($AVC)" false
     else
-        ours=$(grep -E 'pasta|slirp4netns|netavark|aardvark|conmon|podman|crun|runc|catatonit|ea-podman|eapodman' <<<"$AVC")
-        [ -n "$ours" ] || [ -z "$AVC" ] || echo "  (AVC denials since the anchor started, none of them ea-podman's)"
+        ours_re='pasta|slirp4netns|netavark|aardvark|conmon|podman|crun|runc|catatonit|ea-podman|eapodman'
+        ours=$(grep -E "$ours_re" <<<"$AVC")
         check "no ea-podman AVC denials since the anchor started" test -z "$ours"
         [ -z "$ours" ] || sed 's/^/    /' <<<"$ours" | tail -20
+        # The filter goes by name, so a denial where PID 1 acts for ea-podman on a file named
+        # anything else (EA4-392's write to an inherited stdout) isn't counted. Show those to read.
+        others=$(grep -E 'avc: +denied' <<<"$AVC" | grep -vE "$ours_re")
+        if [ -n "$others" ]; then
+            echo "  INFO  $(wc -l <<<"$others") other AVC denial(s) since the anchor started, not counted (last 20):"
+            sed 's/^/    /' <<<"$others" | tail -20
+        fi
     fi
 else
     echo "  SELinux disabled: the netns label and AVC checks (F19) don't apply here"
