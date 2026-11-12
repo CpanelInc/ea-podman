@@ -1,0 +1,20 @@
+host ea4-352-u22 os=ubuntu-22.04 kernel=5.15.0-203-generic cgroup=v2 systemd=249 podman=3.4.4
+
+### baseline: the account's own exec -it, not moved (as 2.0 is planned)
+RESULT t0-8.exec_not_moved FAILS: Error: writing file `/sys/fs/cgroup/eapodman.slice/eapodman-1000.slice/ea-podman-t08x.eapodtest.80.service/libpod-payload-107fa7d1ec8aa62fbb93495244311af95d6255fb7be8a4470eb156846281ae87/cgroup.procs`: Permission denied: OCI permission denied|rc=126
+
+### root moves the account's waiting process into <unit>/ea-podman-exec, then it runs exec -it
+RESULT t0-8.place_1 moved to /eapodman.slice/eapodman-1000.slice/ea-podman-t08x.eapodtest.80.service/ea-podman-exec
+RESULT t0-8.exec_moved works; exec'd process in /eapodman.slice/eapodman-1000.slice/ea-podman-t08x.eapodtest.80.service/libpod-payload-107fa7d1ec8aa62fbb93495244311af95d6255fb7be8a4470eb156846281ae87
+RESULT t0-8.exec_moved_client podman client (moved pid 16501) in /eapodman.slice/eapodman-1000.slice/ea-podman-t08x.eapodtest.80.service/ea-podman-exec
+RESULT t0-8.leaf_procs conmonx1 podmanx1
+RESULT t0-8.exec_moved_tty /dev/pts/0|40 120
+
+### unit stop with that session live
+RESULT t0-8.stop_with_session stop took 0s, unit=inactive/success, client alive=no, exec'd process alive=no, unit cgroup left=0
+RESULT t0-8.restart_after active
+
+### the account froze <unit>/ea-podman-exec before root's step
+RESULT t0-8.hostile_leaf account mkdir+freeze: 1
+RESULT t0-8.hostile_place root step: moved to /eapodman.slice/eapodman-1000.slice/ea-podman-t08x.eapodtest.80.service/ea-podman-exec in 6 ms; account's process state=S frozen=1; exec ran=no
+RESULT t0-8.hostile_thaw after the account thaws it: exec ran=yes

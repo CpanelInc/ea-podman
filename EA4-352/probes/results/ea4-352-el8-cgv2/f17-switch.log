@@ -1,0 +1,25 @@
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v2 systemd=239 podman=4.9.4-rhel
+RESULT f17.flipped_from v2
+Connection to 10.2.64.176 closed by remote host.
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+RESULT f17.host now v1 (created on v2)
+RESULT f17.boot_web failed
+RESULT f17.boot_api failed
+RESULT f17.boot_worker failed
+RESULT f17.pinned_split_line 0
+RESULT f17.web activating: Error: unable to start container "3e7aea8ef8bb5c455375a9fd93c3fdf8267ba4d30916aa91bf52d3e526f27241": mkdir /sys/fs/cgroup/cpu,cpuacct/eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/runtime: permiss
+RESULT f17.api failed: Error: unable to start container "a696d538ff7a8a3abc6a9f7d9a15e30c30ddd4b1b04757e44932119f6f3ffc2b": mkdir /sys/fs/cgroup/cpu,cpuacct/eapodman.slice/eapodman-1000.slice/ea-podman-api.eapodtest.02.service/runtime: permiss
+RESULT f17.worker failed: Error: unable to start container "19f28e418705bc91b357d2f060f12329580d58f216b54c7002a26a92a8ddad31": mkdir /sys/fs/cgroup/cpu,cpuacct/eapodman.slice/eapodman-1000.slice/ea-podman-worker.eapodtest.03.service/runtime: perm
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+RESULT f17.restored_to v2
+Connection to 10.2.64.176 closed by remote host.
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v2 systemd=239 podman=4.9.4-rhel
+RESULT f17.host now v2 (created on v2)
+RESULT f17.boot_web active
+RESULT f17.boot_api active
+RESULT f17.boot_worker active
+RESULT f17.pinned_split_line 1
+RESULT f17.web active; container in /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/libpod-payload-3e7aea8ef8bb5c455375a9fd93c3fdf8267ba4d30916aa91bf52d3e526f27241; memory limit 536870912
+RESULT f17.api active; container in /eapodman.slice/eapodman-1000.slice/ea-podman-api.eapodtest.02.service/libpod-payload-a696d538ff7a8a3abc6a9f7d9a15e30c30ddd4b1b04757e44932119f6f3ffc2b; memory limit 1073741824
+RESULT f17.worker active; container in /eapodman.slice/eapodman-1000.slice/ea-podman-worker.eapodtest.03.service/libpod-payload-19f28e418705bc91b357d2f060f12329580d58f216b54c7002a26a92a8ddad31; memory limit 268435456
+all checks passed

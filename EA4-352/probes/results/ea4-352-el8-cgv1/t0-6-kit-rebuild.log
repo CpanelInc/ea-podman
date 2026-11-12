@@ -1,0 +1,10 @@
+Removed /etc/systemd/system/multi-user.target.wants/ea-podman-api.eapodtest.02.service.
+Removed /etc/systemd/system/multi-user.target.wants/ea-podman-web.eapodtest.01.service.
+Removed /etc/systemd/system/multi-user.target.wants/ea-podman-worker.eapodtest.03.service.
+  FAIL  ea-podman-api.eapodtest.02.service MainPID is inside the unit's cgroup
+  FAIL  ea-podman-api.eapodtest.02.service has a libpod-payload-* container cgroup (--cgroups=split in effect)
+  FAIL  ea-podman-web.eapodtest.01.service MainPID is inside the unit's cgroup
+  FAIL  ea-podman-web.eapodtest.01.service has a libpod-payload-* container cgroup (--cgroups=split in effect)
+  FAIL  ea-podman-worker.eapodtest.03.service MainPID is inside the unit's cgroup
+  FAIL  ea-podman-worker.eapodtest.03.service has a libpod-payload-* container cgroup (--cgroups=split in effect)
+6 check(s) failed

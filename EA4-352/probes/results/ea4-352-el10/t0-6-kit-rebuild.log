@@ -1,0 +1,4 @@
+Removed '/etc/systemd/system/multi-user.target.wants/ea-podman-api.eapodtest.02.service'.
+Removed '/etc/systemd/system/multi-user.target.wants/ea-podman-web.eapodtest.01.service'.
+Removed '/etc/systemd/system/multi-user.target.wants/ea-podman-worker.eapodtest.03.service'.
+all checks passed

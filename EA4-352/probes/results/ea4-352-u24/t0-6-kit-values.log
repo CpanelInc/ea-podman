@@ -1,0 +1,7 @@
+RESULT nproc unit=11735 conmon=11735 container=11735 default=11735
+RESULT tasksmax 7745 dropin=TasksMax=7745
+RESULT tmpfs size=304364k nr_inodes=76090 
+RESULT conf default_mounts_file = "/etc/eapodman-test/mounts.conf" log_driver = "journald" events_logger = "journald" 
+RESULT p0-5.log_driver journald
+RESULT p0-5.podman_logs_as_account works
+RESULT p0-5.podman_events_as_account works

@@ -1,0 +1,19 @@
+host ea4-352-el9 os=almalinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+RESULT p0-13.oci_runtime crun 1.27
+
+### exec from the slice runner
+RESULT p0-13.exec_from_runner FAILS (rc=126): Error: crun: write to `/sys/fs/cgroup/eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/libpod-payload-c2e4b2a97be706900c71d04b7dc8b0ceee2586c5f2b2285fa0f57dd511058951/cgroup.procs`: Permission denied: OCI permission denied
+
+### exec from the account's login shell (ea-podman bash)
+RESULT p0-13.exec_from_login_shell FAILS (rc=126): Error: crun: write to `/sys/fs/cgroup/eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/libpod-payload-c2e4b2a97be706900c71d04b7dc8b0ceee2586c5f2b2285fa0f57dd511058951/cgroup.procs`: Permission denied: OCI permission denied
+
+### exec from inside the container unit's delegated subtree (F14 option 2)
+RESULT p0-13.exec_from_unit_subtree works; container's cgroup (/eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/libpod-payload-c2e4b2a97be706900c71d04b7dc8b0ceee2586c5f2b2285fa0f57dd511058951)
+
+### exec killed at the runner's RuntimeMaxSec
+RESULT p0-13.exec_killed_at_runtimemaxsec n/a (exec failed, rc=126)
+
+### 1.x parity: exec into a user@-managed container
+  run rc=0: 5183312e539f39d6743c0d6de6768dd039610684731329570f92bc0dc7060481
+  container init: 0::/user.slice/user-1000.slice/user@1000.service/user.slice/libpod-5183312e539f39d6743c0d6de6768dd039610684731329570f92bc0dc7060481.scope/container
+RESULT p0-13.parity_1x_exec_from_login_shell works; container's cgroup (1.x scope) (/user.slice/user-1000.slice/user@1000.service/user.slice/libpod-5183312e539f39d6743c0d6de6768dd039610684731329570f92bc0dc7060481.scope/container)

@@ -1,0 +1,7 @@
+host ea4-352-el10 os=almalinux-10.2 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+
+### daemon-reload and PID 1 memory vs the number of enabled units
+RESULT t0-6.reload_0_units 241 ms; PID1 RSS 35 MiB; loaded units 349
+RESULT t0-6.reload_200_units 283 ms; PID1 RSS 35 MiB; loaded units 549
+RESULT t0-6.reload_1000_units 503 ms; PID1 RSS 35 MiB; loaded units 1349
+RESULT t0-6.reload_3000_units 1263 ms; PID1 RSS 43 MiB; loaded units 3349

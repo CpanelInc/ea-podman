@@ -1,0 +1,5 @@
+host ea4-352-cl10 os=cloudlinux-10 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+
+### create a 1.x container in the account's own session (default storage, systemd manager)
+  rc=126 Error: OCI runtime error: crun: error `creating` systemd unit `libpod-523e87d33d2bcfb39c3b722546aa9853641f587b5634327d7cd3b973bf5558e9.scope`: got `failed`
+RESULT p0-1.setup FAILS: no 1.x container: Error: OCI runtime error: crun: error `creating` systemd unit `libpod-523e87d33d2bcfb39c3b722546aa9853641f587b5634327d7cd3b973bf5558e9.scope`: got `failed`

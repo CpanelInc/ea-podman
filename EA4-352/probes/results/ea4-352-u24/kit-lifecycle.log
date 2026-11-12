@@ -1,0 +1,77 @@
+== 1. SIGKILL conmon of worker.eapodtest.03
+  not back after 60s: failed, MainPID 0, NRestarts 3
+  FAIL  worker comes back through Restart= (known: F15, see PLAN.md)
+    journal: ea-podman-worker.eapodtest.03.service: Failed with result 'signal'.
+    journal: Error: unable to start container "8a343c8ba172f9b1f4662e5b4086ced3246a741d400f0d809d90862555e2eda1": container 8a343c8ba172f9b1f4662e5b4086ced3246a741d400f0d809d90862555e2eda1 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-worker.eapodtest.03.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
+    journal: Error: unable to start container "8a343c8ba172f9b1f4662e5b4086ced3246a741d400f0d809d90862555e2eda1": container 8a343c8ba172f9b1f4662e5b4086ced3246a741d400f0d809d90862555e2eda1 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-worker.eapodtest.03.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
+    journal: ea-podman-worker.eapodtest.03.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-worker.eapodtest.03.service - ea-podman container worker.eapodtest.03.
+
+== 2. SIGKILL the container's init in api.eapodtest.02
+  container init PID 21364 (nginx)
+  back after 7s: MainPID 21362 -> 21976, NRestarts 0 -> 1
+  PASS  api comes back through Restart=
+    journal: ea-podman-api.eapodtest.02.service: Failed with result 'exit-code'.
+
+== 3. account writes root PID 21633 into web.eapodtest.01's conmon.pid, then conmon dies
+  conmon.pid now holds 21633
+  not back after 60s: failed, MainPID 0, NRestarts 3
+  FAIL  web comes back through Restart= (known: F15, see PLAN.md)
+  PASS  the root process is still alive
+  PASS  web's MainPID is not the root process
+    journal: ea-podman-web.eapodtest.01.service: New main PID 21633 does not belong to service, and PID file is not owned by root. Refusing.
+    journal: ea-podman-web.eapodtest.01.service: Failed with result 'signal'.
+    journal: Error: unable to start container "3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077": container 3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-web.eapodtest.01.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
+    journal: Error: unable to start container "3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077": container 3408f50ca4191adbe29b29b8e02927473a4328f4b250ff8024828ce8f50f3077 must be in Created or Stopped state to be started: container state improper
+    journal: ea-podman-web.eapodtest.01.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
+    journal: ea-podman-web.eapodtest.01.service: Failed with result 'exit-code'.
+    journal: Failed to start ea-podman-web.eapodtest.01.service - ea-podman container web.eapodtest.01.
+
+== 4. PID file refusal (P0-3, invariant 19) with a same-shape unit
+  PID 1: start exit 1, Result=timeout, MainPID 0, PID file 1
+    journal: Starting eapodman-test-pidfile-1000.service...
+    journal: eapodman-test-pidfile-1000.service: New main PID 1 is the manager, refusing.
+    journal: eapodman-test-pidfile-1000.service: start operation timed out. Terminating.
+    journal: eapodman-test-pidfile-1000.service: Failed with result 'timeout'.
+    journal: Failed to start eapodman-test-pidfile-1000.service.
+  PASS  PID 1: the PID file holds 1
+  PASS  PID 1: start is refused
+  PASS  PID 1: systemd logged the refusal
+  PASS  PID 1: MainPID is not 1
+  PASS  PID 1: PID 1 is still systemd
+  PASS  PID 1: root process 21633 survives the stop
+  root process: start exit 1, Result=timeout, MainPID 0, PID file 21633
+    journal: Starting eapodman-test-pidfile-1000.service...
+    journal: eapodman-test-pidfile-1000.service: New main PID 21633 does not belong to service, and PID file is not owned by root. Refusing.
+    journal: eapodman-test-pidfile-1000.service: New main PID 21633 does not belong to service, and PID file is not owned by root. Refusing.
+    journal: eapodman-test-pidfile-1000.service: start operation timed out. Terminating.
+    journal: eapodman-test-pidfile-1000.service: Failed with result 'timeout'.
+    journal: Failed to start eapodman-test-pidfile-1000.service.
+  PASS  root process: the PID file holds 21633
+  PASS  root process: start is refused
+  PASS  root process: systemd logged the refusal
+  PASS  root process: MainPID is not 21633
+  PASS  root process: PID 1 is still systemd
+  PASS  root process: root process 21633 survives the stop
+  control, own child: start exit 0, Result=success, MainPID 22472, PID file 22472
+    journal: Starting eapodman-test-pidfile-1000.service...
+    journal: Started eapodman-test-pidfile-1000.service.
+  PASS  control, own child: start succeeds
+  PASS  control, own child: MainPID is the PID from the file
+  PASS  control, own child: stopping the unit kills it
+
+== 5. stop a container whose PID 1 exits 143 on SIGTERM
+  INFO  without SuccessExitStatus=143 the stop ends Result=exit-code (conmon passed 143 on; the directive is needed)
+  PASS  the container's PID 1 exited 143 (got 143), so the case means something
+  PASS  with SuccessExitStatus=143 the stop ends Result=success (got success)
+  PASS  and the unit is not failed
+
+2 check(s) failed, all known (F15)
+cleanup: worker.eapodtest.03 web.eapodtest.01 can't start (F15); next run ./teardown.sh eapodtest, then ./setup.sh eapodtest to test again

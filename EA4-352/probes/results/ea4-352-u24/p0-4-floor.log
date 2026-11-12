@@ -1,0 +1,9 @@
+host ea4-352-u24 os=ubuntu-24.04 kernel=6.8.0-149-generic cgroup=v2 systemd=255 podman=4.9.3
+probe p0-4.sh=212db4b23761 plib.sh=fd17d062fc15 lib.sh=a7f0c6e05931
+
+### 8. memory floors (MemoryLow) under pressure from outside the slices
+  floors (MemoryLow): eapodman.slice 872415232, eapodman-1000.slice 872415232, user.slice 0, user-1000.slice 419430400
+RESULT p0-4.pagecache_acct_MiB 300 -> 11
+RESULT p0-4.pagecache_user_MiB 300 -> 11
+RESULT p0-4.pagecache_none_MiB 300 -> 11
+RESULT p0-4.floor_verdict kept: account slice 3%, user-<uid>.slice 3%, no floor 3%

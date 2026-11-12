@@ -1,0 +1,29 @@
+host ea4-352-cl10 os=cloudlinux-10 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+probe p0-4.sh=fd84f737567b plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+
+### 1. placement
+RESULT p0-4.conmon_cgroup /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/runtime
+RESULT p0-4.container_cgroup /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/libpod-payload-4555be3e052b4db7ef5b24bf6ccd048b3a2e68363b2c9b6a9f65577b8fe24827
+RESULT p0-4.pause_cgroup /eapodman.slice/eapodman-1001.slice/ea-podman-runtime@1001.service
+
+### 2. stopping one unit
+RESULT p0-4.stop_one_unit_others_unaffected yes
+
+### 3. controllers
+RESULT p0-4.subtree_control_eapodman.slice cpu io memory pids
+RESULT p0-4.subtree_control_eapodman-1001.slice cpu io memory pids
+RESULT p0-4.subtree_control_ea-podman-web.eapodtest.01.service cpu io memory pids
+RESULT p0-4.container_controllers cpu io memory pids
+
+### 4./5. swap accounting and the shares conversion
+RESULT p0-4.swap_on_host 0 swap devices
+RESULT p0-4.web_memory_swap_max 0
+RESULT p0-4.web_cpu_weight 100
+RESULT p0-4.api_memory_swap_max 0
+RESULT p0-4.api_cpu_weight 174
+RESULT p0-4.worker_memory_swap_max 0
+RESULT p0-4.worker_cpu_weight 59
+
+### 6./7. split vs no split, and is the mode fixed at create (F17)
+RESULT p0-4.p04split_created_split_started_nosplit recorded=default ran=split memory.max=67108864
+RESULT p0-4.p04nosplit_created_nosplit_started_split recorded=default ran=no-split memory.max=max

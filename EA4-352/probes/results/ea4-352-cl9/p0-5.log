@@ -1,0 +1,25 @@
+host ea4-352-cl9 os=cloudlinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+
+### journald
+RESULT p0-5.journal_storage volatile
+  journald.conf: 
+  account groups: eapodtest
+
+### unit output in the system journal
+RESULT p0-5.unit_output_in_journal_u yes (12 lines)
+  senders: podman/uid=1001/unit=ea-podman-web.eapodtest.01.service/userunit=None systemd/uid=0/unit=init.scope/userunit=None
+
+### podman logs (container stdout) as the account, through the runner
+RESULT p0-5.log_driver k8s-file
+RESULT p0-5.podman_logs_as_account works
+  log path: /home/eapodtest/.local/share/ea-podman/storage/overlay-containers/c7ba621db26589758c26abadd744b97b009a9470058024851185a6e19cec709b/userdata/ctr.log
+RESULT p0-5.log_file_location /root/.local/share/ea-podman/storage/overlay-containers/c7ba621db26589758c26abadd744b97b009a9470058024851185a6e19cec709b/userdata/ctr.log
+
+### podman logs, forcing --log-driver=journald (the 1.x default where podman uses journald)
+  root sees 17 journal lines for p05.eapodtest.61
+RESULT p0-5.podman_logs_journald_driver_as_account FAILS (rc=0, journal has 17 lines):  
+
+### podman events (events_logger=journald) as the account
+  
+RESULT p0-5.podman_events_as_account FAILS/empty (rc=0): 
+RESULT p0-5.events_in_system_journal yes

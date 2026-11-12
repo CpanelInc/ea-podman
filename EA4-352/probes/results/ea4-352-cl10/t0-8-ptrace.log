@@ -1,0 +1,4 @@
+host ea4-352-cl10 os=cloudlinux-10 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+RESULT t0-8.ptrace_scope 0
+RESULT t0-8.attach_conmon attached (pid 11739)
+RESULT t0-8.attach_container_init attached (pid 11741)

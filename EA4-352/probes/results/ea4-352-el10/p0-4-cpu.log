@@ -1,0 +1,13 @@
+host ea4-352-el10 os=almalinux-10.2 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+
+### 8. memory floors under pressure from outside the slices
+/root/probes/p0-4.sh: line 135: acct: unbound variable
+host ea4-352-el10 os=almalinux-10.2 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+
+### 9. CPU: system.slice vs user.slice vs eapodman.slice (two accounts)
+RESULT p0-4.cpu_share_system.slice 33% (0.99 CPUs)
+RESULT p0-4.cpu_share_user.slice 33% (0.99 CPUs)
+RESULT p0-4.cpu_share_eapodman.slice 32% (0.97 CPUs)
+RESULT p0-4.cpu_share_eapodman-1000.slice 16% (0.48 CPUs)
+RESULT p0-4.cpu_share_eapodman-1001.slice 16% (0.48 CPUs)
+  weights: system [not set] user [not set] eapodman 100

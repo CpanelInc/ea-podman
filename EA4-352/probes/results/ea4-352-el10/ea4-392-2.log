@@ -1,0 +1,30 @@
+### after systemctl daemon-reexec: bus check passed, then p0-10.sh pre:
+host ea4-352-el10 os=almalinux-10.2 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+probe p0-10.sh=34d870027d6f plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+Failed to start transient service unit: Remote peer disconnected
+RESULT p0-10.planted FAILS: the account could not write /home/eapodtest/.config/systemd/user
+
+### journalctl -b -o short-precise _PID=1 --since -10min
+Nov 10 01:10:35.753565 ea4-352-el10.openstack.build systemd[1]: session-70.scope: Deactivated successfully.
+Nov 10 01:10:35.754034 ea4-352-el10.openstack.build systemd[1]: session-70.scope: Consumed 1.047s CPU time, 19.1M memory peak.
+Nov 10 01:10:35.760130 ea4-352-el10.openstack.build systemd[1]: Failed to query API bus instance ID, not deserializing subscriptions: Channel number out of range
+Nov 10 01:10:35.762696 ea4-352-el10.openstack.build systemd[1]: Got disconnect on API bus.
+Nov 10 01:16:56.900512 ea4-352-el10.openstack.build systemd[1]: Reexecution requested from client PID 19961 ('systemctl') (unit sshd.service)...
+Nov 10 01:16:56.908946 ea4-352-el10.openstack.build systemd[1]: Reexecuting.
+Nov 10 01:16:57.613910 ea4-352-el10.openstack.build systemd[1]: Started session-86.scope - Session 86 of User root.
+Nov 10 01:16:57.616474 ea4-352-el10.openstack.build systemd[1]: Starting fwupd-refresh.service - Refresh fwupd metadata and update motd...
+Nov 10 01:16:57.722203 ea4-352-el10.openstack.build systemd[1]: Starting modprobe@sd_mod.service - Load Kernel Module sd_mod...
+Nov 10 01:16:57.741862 ea4-352-el10.openstack.build systemd[1]: modprobe@sd_mod.service: Deactivated successfully.
+Nov 10 01:16:57.742211 ea4-352-el10.openstack.build systemd[1]: Finished modprobe@sd_mod.service - Load Kernel Module sd_mod.
+Nov 10 01:16:57.748122 ea4-352-el10.openstack.build systemd[1]: Starting fwupd.service - Firmware update daemon...
+Nov 10 01:16:57.978970 ea4-352-el10.openstack.build systemd[1]: Started fwupd.service - Firmware update daemon.
+Nov 10 01:16:57.996436 ea4-352-el10.openstack.build systemd[1]: fwupd-refresh.service: Deactivated successfully.
+Nov 10 01:16:57.997181 ea4-352-el10.openstack.build systemd[1]: Finished fwupd-refresh.service - Refresh fwupd metadata and update motd.
+Nov 10 01:17:02.610932 ea4-352-el10.openstack.build systemd[1]: Started run-p20031-i20032.service - [systemd-run] /bin/true.
+Nov 10 01:17:02.629325 ea4-352-el10.openstack.build systemd[1]: run-p20031-i20032.service: Deactivated successfully.
+Nov 10 01:17:02.756694 ea4-352-el10.openstack.build systemd[1]: Got disconnect on API bus.
+Nov 10 01:17:02.767977 ea4-352-el10.openstack.build systemd[1]: session-86.scope: Deactivated successfully.
+Nov 10 01:17:19.149863 ea4-352-el10.openstack.build systemd[1]: Started session-87.scope - Session 87 of User root.
+
+### journalctl -b -o short-precise -u dbus-broker --since -10min
+-- No entries --

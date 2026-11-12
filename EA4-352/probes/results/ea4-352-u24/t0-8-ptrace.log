@@ -1,0 +1,4 @@
+host ea4-352-u24 os=ubuntu-24.04 kernel=6.8.0-149-generic cgroup=v2 systemd=255 podman=4.9.3
+RESULT t0-8.ptrace_scope 1
+RESULT t0-8.attach_conmon attached (pid 1067)
+RESULT t0-8.attach_container_init attached (pid 1073)

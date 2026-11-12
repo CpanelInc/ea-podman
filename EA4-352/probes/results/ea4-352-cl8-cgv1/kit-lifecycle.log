@@ -1,0 +1,58 @@
+== 1. SIGKILL conmon of worker.eapodtest.03
+  back after 7s: MainPID 65730 -> 83426, NRestarts 0 -> 1
+  PASS  worker comes back through Restart= (known F15 no longer reproduces; update PLAN.md)
+    journal: Error: container a890d29a78383985113239d14959f1b970a3865ea4ba31133b6163a1861d06d8 conmon exited prematurely, exit code could not be retrieved: internal libpod error
+    journal: ea-podman-worker.eapodtest.03.service: Failed with result 'signal'.
+
+== 2. SIGKILL the container's init in api.eapodtest.02
+  container init PID 65604 (nginx)
+  FAIL  api's container init is a process in its payload cgroup (test 2 not run)
+
+== 3. account writes root PID 83338 into web.eapodtest.01's conmon.pid, then conmon dies
+PID 65604 is not in a cgroup matching /ea-podman-api.eapodtest.02.service/libpod-payload-
+  conmon.pid now holds 83338
+  back after 7s: MainPID 81220 -> 83606, NRestarts 0 -> 1
+  PASS  web comes back through Restart= (known F15 no longer reproduces; update PLAN.md)
+  PASS  the root process is still alive
+  PASS  web's MainPID is not the root process
+    journal: Error: container d6d6c0afe0ca74fcbab95279fb128865861e0c08f32f8f8667041d0865679086 conmon exited prematurely, exit code could not be retrieved: internal libpod error
+    journal: ea-podman-web.eapodtest.01.service: Failed with result 'signal'.
+
+== 4. PID file refusal (P0-3, invariant 19) with a same-shape unit
+  PID 1: start exit 1, Result=timeout, MainPID 0, PID file 1
+    journal: eapodman-test-pidfile-1001.service: New main PID 1 is the manager, refusing.
+    journal: eapodman-test-pidfile-1001.service: start operation timed out. Terminating.
+    journal: eapodman-test-pidfile-1001.service: Failed with result 'timeout'.
+    journal: Failed to start eapodman-test-pidfile-1001.service.
+  PASS  PID 1: the PID file holds 1
+  PASS  PID 1: start is refused
+  PASS  PID 1: systemd logged the refusal
+  PASS  PID 1: MainPID is not 1
+  PASS  PID 1: PID 1 is still systemd
+  PASS  PID 1: root process 83338 survives the stop
+  root process: start exit 1, Result=timeout, MainPID 0, PID file 83338
+    journal: eapodman-test-pidfile-1001.service: New main PID 83338 does not belong to service, and PID file is not owned by root. Refusing.
+    journal: eapodman-test-pidfile-1001.service: New main PID 83338 does not belong to service, and PID file is not owned by root. Refusing.
+    journal: eapodman-test-pidfile-1001.service: start operation timed out. Terminating.
+    journal: eapodman-test-pidfile-1001.service: Failed with result 'timeout'.
+    journal: Failed to start eapodman-test-pidfile-1001.service.
+  PASS  root process: the PID file holds 83338
+  PASS  root process: start is refused
+  PASS  root process: systemd logged the refusal
+  PASS  root process: MainPID is not 83338
+  PASS  root process: PID 1 is still systemd
+  PASS  root process: root process 83338 survives the stop
+  control, own child: start exit 0, Result=success, MainPID 83831, PID file 83831
+    journal: Started eapodman-test-pidfile-1001.service.
+  PASS  control, own child: start succeeds
+  PASS  control, own child: MainPID is the PID from the file
+  PASS  control, own child: stopping the unit kills it
+
+== 5. stop a container whose PID 1 exits 143 on SIGTERM
+Resource limits are not supported and ignored on cgroups V1 rootless systems
+  INFO  without SuccessExitStatus=143 the stop ends Result=exit-code (conmon passed 143 on; the directive is needed)
+  PASS  the container's PID 1 exited 143 (got 143), so the case means something
+  PASS  with SuccessExitStatus=143 the stop ends Result=success (got success)
+  PASS  and the unit is not failed
+
+1 check(s) failed, 0 of them known (F15); the rest are new

@@ -1,0 +1,19 @@
+# Per-account anchor: mounts the runtime tmpfs and holds the rootless pause process.
+[Unit]
+Description=ea-podman runtime for uid %i
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=%i
+Slice=eapodman-%i.slice
+Delegate=cpu io memory pids
+Environment=XDG_RUNTIME_DIR=/run/ea-podman/user/%i
+Environment=CONTAINERS_CONF=/etc/eapodman-test/containers.conf
+Environment=CONTAINERS_STORAGE_CONF=/etc/eapodman-test/storage.conf
+Environment=CONTAINERS_REGISTRIES_CONF=/etc/eapodman-test/registries.conf
+Environment=XDG_CONFIG_HOME=/run/ea-podman/xdg/%i
+ExecStartPre=+/etc/eapodman-test/runtime-mount %i
+ExecStart=/usr/bin/podman unshare /bin/true
+TimeoutStartSec=60
+TimeoutStopSec=30

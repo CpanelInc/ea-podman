@@ -1,0 +1,12 @@
+# Parent of every account slice (plan F9). Same CPU/IO weight as user.slice, so all
+# container accounts together compete like one user.slice against system.slice.
+[Unit]
+Description=ea-podman containers
+Before=slices.target
+
+[Slice]
+CPUWeight=100
+IOWeight=100
+TasksMax=33%
+# Sum of the account slices' floors (only one account here).
+MemoryLow=832M

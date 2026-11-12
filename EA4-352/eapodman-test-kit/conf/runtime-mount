@@ -1,0 +1,42 @@
+#!/bin/sh
+# Root-side helper run by the anchor's ExecStartPre=+ : capped per-uid runtime tmpfs (plan F8)
+# and the per-uid XDG_CONFIG_HOME (F16).
+set -eu
+uid=${1:-}
+# Canonical non-zero decimal only: 0, 00 or 0123 would resolve through getent as other uids.
+case $uid in ''|*[!0-9]*|0*) echo "bad uid" >&2; exit 1;; esac
+gid=$(getent passwd "$uid" | cut -d: -f4)
+[ -n "$gid" ] || { echo "unknown uid $uid" >&2; exit 1; }
+d=/run/ea-podman/user/$uid
+mkdir -p -m 0755 /run/ea-podman/user
+[ ! -L "$d" ] || { echo "$d is a symlink" >&2; exit 1; }
+[ -d "$d" ] || mkdir -m 0700 "$d"
+# T0.6: logind's defaults, RuntimeDirectorySize=10% and RuntimeDirectoryInodesMax = size / 4096.
+size=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) * 1024 / 10 ))
+mountpoint -q "$d" || mount -t tmpfs -o "size=$size,nr_inodes=$(( size / 4096 )),mode=0700,uid=$uid,gid=$gid,nosuid,nodev" tmpfs "$d"
+# $d is the mountpoint (its parents are root's), but everything in it is the account's, and the
+# account can swap any entry for a symlink at any moment, even between two of root's own steps. So
+# root doesn't create, chown or chmod anything in there: the account makes cni and netns itself,
+# and a symlink, a file, or a race of its own only breaks its own anchor.
+# F16: XDG_CONFIG_HOME is root-owned and holds only a root-owned cni symlink into the tmpfs, where
+# rootless CNI (EL8's podman 4.x default) can write. Rebuilt every time, so nothing else survives.
+# Only a real cni directory is kept (an existing one holds live CNI state, so it isn't wiped).
+setpriv --reuid="$uid" --regid="$gid" --clear-groups /bin/sh -c '
+    cd "$1" || exit 1
+    for e in cni netns; do
+        if [ -L "$e" ] || { [ -e "$e" ] && [ ! -d "$e" ]; }; then rm -f "$e" || exit 1; fi
+        [ -d "$e" ] || mkdir -m 0700 "$e" || exit 1
+    done' sh "$d"
+# SELinux (EL enforcing): a dir podman creates on this tmpfs gets container_runtime_tmpfs_t, which
+# pasta_t (podman 5's rootless network) may not search, so the container can't start. netns is
+# labelled user_tmp_t, as it is under logind's /run/user/<uid> (pasta_t may search and watch that).
+# The mount itself keeps tmpfs_t: PID 1 (init_t) can't read a conmon.pid labelled user_tmp_t, but
+# can read the container_runtime_tmpfs_t ones podman writes here. PLAN.md F19.
+# This is root's only change inside $d. -h labels netns itself, never what a symlink swapped in
+# there would point at; a label on the account's own file or symlink gives it nothing.
+if command -v selinuxenabled >/dev/null && selinuxenabled; then chcon -h -t user_tmp_t "$d/netns"; fi
+mkdir -p -m 0755 /run/ea-podman/xdg
+x=/run/ea-podman/xdg/$uid
+rm -rf "$x"
+mkdir -m 0755 "$x"
+ln -s "$d/cni" "$x/cni"

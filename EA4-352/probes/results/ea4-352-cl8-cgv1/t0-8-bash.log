@@ -1,0 +1,14 @@
+host ea4-352-cl8-cgv1 os=cloudlinux-8.10 kernel=4.18.0-553.177.1.lve.1.el8.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+
+### baseline: the account's own exec -it, not moved (as 2.0 is planned)
+RESULT t0-8.exec_not_moved works; exec'd process in /eapodman.slice/eapodman-1001.slice/ea-podman-t08x.eapodtest.80.service/922aec97a772457de8da3b248ff3998f5170b5aa1dd6ac49cdc4a42ae5ff31a0
+
+### root moves the account's waiting process into <unit>/ea-podman-exec, then it runs exec -it
+RESULT t0-8.place_1 v1: not moved
+RESULT t0-8.exec_moved works; exec'd process in /eapodman.slice/eapodman-1001.slice/ea-podman-t08x.eapodtest.80.service/922aec97a772457de8da3b248ff3998f5170b5aa1dd6ac49cdc4a42ae5ff31a0
+RESULT t0-8.exec_moved_client podman client (moved pid 296222) in /user.slice/user-1001.slice/t08-acct-296015-1.scope
+RESULT t0-8.exec_moved_tty /dev/pts/0|40 120
+
+### unit stop with that session live
+RESULT t0-8.stop_with_session stop took 1s, unit=inactive/success, client alive=no, exec'd process alive=no, unit cgroup left=0
+RESULT t0-8.restart_after active

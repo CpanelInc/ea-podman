@@ -1,0 +1,32 @@
+host ea4-352-el9 os=almalinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+probe p0-8.sh=cec124fd7c5d plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+
+### podman info under podman_env, with a hostile ~/.config/containers
+  cgroupfs|overlay|/home/eapodtest/.local/share/ea-podman/storage|file|netavark
+RESULT p0-8.user_containers_conf_ignored yes
+RESULT p0-8.user_storage_conf_ignored yes
+RESULT p0-8.network_backend netavark
+RESULT p0-8.pinned_conf_warnings none
+
+### create + start a container (policy.json, registries.conf, mounts.conf, drop-ins, env)
+  create rc=0: 577470f20d1f28e5b61e61b0ddce32915c8806654491aaab54852d99bc46cbda
+RESULT p0-8.user_policy_json_ignored yes
+RESULT p0-8.start_from_plain_runner FAILS: Error: unable to start container "577470f20d1f28e5b61e61b0ddce32915c8806654491aaab54852d99bc46cbda": mkdir /sys/fs/cgroup/eapodman.slice/eapodman-1000.slice/eapodman-run-1000-test-6241-2.service/runtime: permission denied
+  start rc=0: 
+RESULT p0-8.start_with_pinned_xdg_config_home works
+RESULT p0-8.user_env_and_dropins_ignored yes
+RESULT p0-8.user_mounts_conf_ignored yes
+RESULT p0-8.distro_mounts_kept yes (/run/secrets)
+RESULT p0-8.user_mounts_conf_ignored_by_build yes
+RESULT p0-8.log_driver k8s-file (user conf says none)
+RESULT p0-8.hostile_graphroot_touched no
+
+### what podman created under XDG_CONFIG_HOME (/run/ea-podman/xdg/1000)
+  before: l ./cni -> /run/ea-podman/user/1000/cni
+  after:  l ./cni -> /run/ea-podman/user/1000/cni
+RESULT p0-8.xdg_config_home_unchanged yes
+  cni dir in the tmpfs: 
+RESULT p0-8.cni_dir_used no
+
+### what podman opened under the account's ~/.config while it ran (strace, if present)
+RESULT p0-8.opens_under_home_config none

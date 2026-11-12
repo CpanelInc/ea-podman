@@ -1,0 +1,39 @@
+# eapodman-test-kit
+
+A hand-built version of the layout in `../PLAN.md` for one account. It sets up `eapodman.slice`, the account's `eapodman-<uid>.slice`, the anchor unit and three container units, then tests them. Run every script as root. On cgroup v1, `setup.sh` leaves `cgroups = "split"` out of the pinned config (F17). `verify.sh` then skips the per-container cgroup checks, says why, and checks the v1 layout instead (each container runs in its unit's cgroup); `loadtest.sh` needs the per-container cgroups and stops there. `<cpuser>` must have subuid/subgid ranges.
+
+## Run order
+
+```
+./setup.sh <cpuser>             # build the layout and start web, api and worker
+./verify.sh <cpuser>            # where everything landed and what each cgroup enforces
+./loadtest.sh <cpuser>          # CPU and memory limits under load (F12, F13)
+./lifecycle.sh <cpuser>         # crash recovery, hostile conmon.pid, exit 143 on stop (P0-3, F15); run last
+./teardown.sh <cpuser> --purge  # remove everything, including the test storage
+```
+
+`verify.sh` and `lifecycle.sh` exit non-zero if a check fails. `verify.sh` also fails if it finds fewer than the three container units, rather than passing with nothing checked.
+
+**Run `lifecycle.sh` last, just before teardown.** Its tests 1 and 3 kill conmon. That leaves web and worker failed until they are recreated (F15). `loadtest.sh` needs all three units running, so it can't run after `lifecycle.sh`. Until F15 is fixed, expect `lifecycle.sh` to exit 1 with those 2 checks failed. A recovery failure is marked `(known: F15, see PLAN.md)` only when the unit's journal carries F15's own failed-restart line, `container state improper`. (`Failed with result 'signal'` doesn't count: the test's own kill always produces it.) Otherwise it's marked `NEW` and the journal is printed. With both known, the last line says `2 check(s) failed, all known (F15)`. If a known check starts passing, the script says to update `PLAN.md`.
+
+Test 5 creates a temporary container, `term.<cpuser>.04`, whose PID 1 exits 143 on SIGTERM, and removes it on exit. It checks that a stop ends `Result=success` with the units' `SuccessExitStatus=143`. It also runs the same stop without the directive and prints the result as `INFO`: `failed` there means conmon passed the container's 143 on, which is why the directive stays.
+
+To run anything again after `lifecycle.sh`, recreate the containers with `./teardown.sh <cpuser>` and then `./setup.sh <cpuser>`.
+
+`setup.sh` copies the units it writes into `systemd/`, for reference. `teardown.sh` removes those copies. Don't commit them.
+
+Run the kit once at a time per account. Two runs against the same account share its containers, slice limits and test unit name.
+
+## Guards
+
+- No script signals, moves or reports on a PID it hasn't checked with `safe_target` in `lib.sh` (also used by the probes): an integer above 1 that passes every check the caller names (`--comm`, `--uid`, `--cgroup`, `--cgroup-is`). A PID from a file the account can write is read only through `acct_pid` (as the account, digits only) and is only a claim, so it also needs `--uid` and a cgroup check.
+- Everything run as the account goes through `lib.sh`: `acct_unit`/`as_user` (a transient unit in the account's slice) or `as_acct <init|clear>` (no unit; `as_acct_in_cgroup` to enter a container's cgroup first). All of them give the account its own supplementary groups, as the product's `User=` units get them; `as_acct` takes the choice as an argument so a caller that needs `clear` has to say so.
+- The container unit has one template, `container_unit` in `lib.sh`. A caller varies it only through its options (`-c` containers.conf, `-s` an extra `[Service]` line), never by editing its output, and `as_user -c` / `probe_create -c` use another containers.conf for that call only.
+- Every value a script changes for a test goes through `change_cg` (a cgroup file) or `change_prop` (a systemd runtime property) in `lib.sh`: the original is saved, put back by `restore_changes` (or `restore_cg`/`restore_prop`), and read back. A runtime drop-in the script created is removed; one that was there before is set back to its value. Nothing else under `/run/systemd/system.control` is touched.
+- A test whose setup didn't happen fails instead of passing vacuously. For example, the hostile PID must be in `conmon.pid` before conmon is killed, systemd must log its refusal, and the background loads must still be running when measured.
+- `loadtest.sh` stops if a container has no `libpod-payload-*` cgroup (`--cgroups=split` not in effect). It skips the floor test where page cache isn't charged to the containers (F13). Its cleanup restores every changed value through `restore_changes`, which reads each one back.
+- `teardown.sh` runs every step, lists the ones that failed, and exits 1 if any did.
+- Root never creates, chowns or deletes paths in the account's home, where a planted symlink (on the path itself or any parent) would redirect it. `loadtest.sh` makes and removes its scratch dir as the account. `teardown.sh --purge` deletes the storage as the account (`podman system reset`, then `rm` of what's left), before the runtime dir and config go; if that fails it reports it and leaves the files. A `--purge` that finds nothing left (a second run) says so and succeeds; storage that is still there without the config to reset it is a failure.
+- The T0.6 values: each unit's `LimitNPROC` and the create-time `--ulimit nproc` both come from the host's `DefaultLimitNPROC`. The account slice's `TasksMax` is an absolute 33% of `min(threads-max, pid_max)`, because systemd 249-257 writes `set-property TasksMax=33%` as 3.3%. The runtime tmpfs gets logind's `size=10%` and `nr_inodes=size/4096`. `events_logger` and `log_driver` are what the distro's own podman uses: `file` (rotating at 1 MiB) and `k8s-file` on EL and CloudLinux, `journald` on Ubuntu.
+- F25: podman never reads `containers.conf`'s `default_mounts_file`, and takes the account's own `~/.config/containers/mounts.conf` (through `$HOME`) over the distro's. So every podman call with the pinned env carries `--default-mounts-file=/etc/eapodman-test/mounts.conf` (`lib.sh`'s `PODMAN`: the units' `ExecStart`/`ExecStop`, and `acct_unit` for any argv starting with `/usr/bin/podman`), and `setup.sh` renders that file, root-owned, from the first of `/etc/containers/mounts.conf` and `/usr/share/containers/mounts.conf` (EL and CloudLinux: `/run/secrets`; Ubuntu: none). `verify.sh` checks both, and `probes/p0-8.sh` checks that the account's file is ignored by a unit's start and by a build while the distro's entries stay.
+- `XDG_CONFIG_HOME` is `/run/ea-podman/xdg/<uid>`: root-owned, holding only a `cni` symlink into the runtime tmpfs (F16). `conf/runtime-mount` rebuilds it on every anchor start.

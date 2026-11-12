@@ -1,0 +1,26 @@
+host ea4-352-cl8-cgv1 os=cloudlinux-8.10 kernel=4.18.0-553.177.1.lve.1.el8.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+probe p0-4.sh=fd84f737567b plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+
+### 1. placement
+RESULT p0-4.conmon_cgroup /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.container_cgroup /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service/320cd4e08d74e55d01deba8e10a8148cbd1151e08874e6406ff70f30e78f4bd7
+RESULT p0-4.pause_cgroup /eapodman.slice/eapodman-1001.slice/ea-podman-runtime@1001.service
+RESULT p0-4.v1_memory_conmon /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.v1_memory_container /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.v1_pids_conmon /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.v1_pids_container /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.v1_cpu_cpuacct_conmon /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-4.v1_cpu_cpuacct_container /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+
+### 2. stopping one unit
+RESULT p0-4.stop_one_unit_others_unaffected yes
+
+### 4./5. v1: swap accounting and shares
+RESULT p0-4.swap_on_host 0 swap devices
+RESULT p0-4.web_cpu_shares_cgroup 1024
+RESULT p0-4.web_memsw_file present
+RESULT p0-4.web_memory_limit 9223372036854771712
+
+### 6./7. split vs no split, and is the mode fixed at create (F17)
+RESULT p0-4.p04split_created_split_started_nosplit recorded=default FAILS: Error: unable to start container "42732ec0bbb41947ebae786da1f2087dfbe98541a0ab68ffd2832c5a6908672e": mkdir /sys/fs/cgroup/pids/eapodman.slice/eapodman-1001.slice/ea-podman-p04split.eapodtest.80.service/runtime: permission denied
+RESULT p0-4.p04nosplit_created_nosplit_started_split recorded=default starts; in /eapodman.slice/eapodman-1001.slice/ea-podman-p04nosplit.eapodtest.81.service/9ea0125c15993f0d52f2fa19401925f025509930ac8a7007a6f1f1dc9415873d; memory.limit=9223372036854771712

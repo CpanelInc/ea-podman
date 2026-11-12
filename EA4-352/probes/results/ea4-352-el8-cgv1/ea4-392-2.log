@@ -1,0 +1,115 @@
+### after systemctl daemon-reexec: bus check passed, then p0-10.sh pre:
+host ea4-352-el8-cgv1 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+probe p0-10.sh=34d870027d6f plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+Failed to start transient service unit: Connection timed out
+RESULT p0-10.planted FAILS: the account could not write /home/eapodtest/.config/systemd/user
+
+### journalctl -b -o short-precise _PID=1 --since -10min
+-- Logs begin at Fri 2026-11-06 20:16:55 UTC, end at Tue 2026-11-10 01:17:19 UTC. --
+Nov 10 01:08:14.902313 ea4-352-el8-cgv1.openstack.build systemd[1]: Created slice User Slice of UID 0.
+Nov 10 01:08:14.903401 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User runtime directory /run/user/0...
+Nov 10 01:08:14.911963 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User runtime directory /run/user/0.
+Nov 10 01:08:14.913168 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User Manager for UID 0...
+Nov 10 01:08:14.966329 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User Manager for UID 0.
+Nov 10 01:08:14.967744 ea4-352-el8-cgv1.openstack.build systemd[1]: Started Session 180 of user root.
+Nov 10 01:08:15.050321 ea4-352-el8-cgv1.openstack.build systemd[1]: session-180.scope: Succeeded.
+Nov 10 01:08:25.225703 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User Manager for UID 0...
+Nov 10 01:08:25.245307 ea4-352-el8-cgv1.openstack.build systemd[1]: user@0.service: Succeeded.
+Nov 10 01:08:25.248312 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User Manager for UID 0.
+Nov 10 01:08:25.249146 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User runtime directory /run/user/0...
+Nov 10 01:08:25.255603 ea4-352-el8-cgv1.openstack.build systemd[1]: run-user-0.mount: Succeeded.
+Nov 10 01:08:25.266579 ea4-352-el8-cgv1.openstack.build systemd[1]: user-runtime-dir@0.service: Succeeded.
+Nov 10 01:08:25.266865 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User runtime directory /run/user/0.
+Nov 10 01:08:25.268266 ea4-352-el8-cgv1.openstack.build systemd[1]: Removed slice User Slice of UID 0.
+Nov 10 01:09:26.309994 ea4-352-el8-cgv1.openstack.build systemd[1]: Created slice User Slice of UID 0.
+Nov 10 01:09:26.311268 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User runtime directory /run/user/0...
+Nov 10 01:09:26.319936 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User runtime directory /run/user/0.
+Nov 10 01:09:26.321336 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User Manager for UID 0...
+Nov 10 01:09:26.374395 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User Manager for UID 0.
+Nov 10 01:09:26.375326 ea4-352-el8-cgv1.openstack.build systemd[1]: Started Session 182 of user root.
+Nov 10 01:09:26.455788 ea4-352-el8-cgv1.openstack.build systemd[1]: session-182.scope: Succeeded.
+Nov 10 01:09:36.475540 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User Manager for UID 0...
+Nov 10 01:09:36.486749 ea4-352-el8-cgv1.openstack.build systemd[1]: user@0.service: Succeeded.
+Nov 10 01:09:36.489872 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User Manager for UID 0.
+Nov 10 01:09:36.490908 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User runtime directory /run/user/0...
+Nov 10 01:09:36.499568 ea4-352-el8-cgv1.openstack.build systemd[1]: run-user-0.mount: Succeeded.
+Nov 10 01:09:36.503580 ea4-352-el8-cgv1.openstack.build systemd[1]: user-runtime-dir@0.service: Succeeded.
+Nov 10 01:09:36.503897 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User runtime directory /run/user/0.
+Nov 10 01:09:36.505481 ea4-352-el8-cgv1.openstack.build systemd[1]: Removed slice User Slice of UID 0.
+Nov 10 01:10:37.813133 ea4-352-el8-cgv1.openstack.build systemd[1]: Created slice User Slice of UID 0.
+Nov 10 01:10:37.814540 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User runtime directory /run/user/0...
+Nov 10 01:10:37.825893 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User runtime directory /run/user/0.
+Nov 10 01:10:37.827696 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User Manager for UID 0...
+Nov 10 01:10:37.887352 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User Manager for UID 0.
+Nov 10 01:10:37.888284 ea4-352-el8-cgv1.openstack.build systemd[1]: Started Session 184 of user root.
+Nov 10 01:10:37.974376 ea4-352-el8-cgv1.openstack.build systemd[1]: session-184.scope: Succeeded.
+Nov 10 01:10:48.225944 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User Manager for UID 0...
+Nov 10 01:10:48.237824 ea4-352-el8-cgv1.openstack.build systemd[1]: user@0.service: Succeeded.
+Nov 10 01:10:48.241007 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User Manager for UID 0.
+Nov 10 01:10:48.242014 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User runtime directory /run/user/0...
+Nov 10 01:10:48.250212 ea4-352-el8-cgv1.openstack.build systemd[1]: run-user-0.mount: Succeeded.
+Nov 10 01:10:48.253816 ea4-352-el8-cgv1.openstack.build systemd[1]: user-runtime-dir@0.service: Succeeded.
+Nov 10 01:10:48.254239 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User runtime directory /run/user/0.
+Nov 10 01:10:48.256154 ea4-352-el8-cgv1.openstack.build systemd[1]: Removed slice User Slice of UID 0.
+Nov 10 01:12:48.910234 ea4-352-el8-cgv1.openstack.build systemd[1]: Created slice User Slice of UID 0.
+Nov 10 01:12:48.912115 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User runtime directory /run/user/0...
+Nov 10 01:12:48.922219 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User runtime directory /run/user/0.
+Nov 10 01:12:48.923593 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User Manager for UID 0...
+Nov 10 01:12:48.999868 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User Manager for UID 0.
+Nov 10 01:12:49.001333 ea4-352-el8-cgv1.openstack.build systemd[1]: Started Session 186 of user root.
+Nov 10 01:12:49.086263 ea4-352-el8-cgv1.openstack.build systemd[1]: session-186.scope: Succeeded.
+Nov 10 01:12:59.225921 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User Manager for UID 0...
+Nov 10 01:12:59.237118 ea4-352-el8-cgv1.openstack.build systemd[1]: user@0.service: Succeeded.
+Nov 10 01:12:59.241437 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User Manager for UID 0.
+Nov 10 01:12:59.242779 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User runtime directory /run/user/0...
+Nov 10 01:12:59.251224 ea4-352-el8-cgv1.openstack.build systemd[1]: run-user-0.mount: Succeeded.
+Nov 10 01:12:59.255945 ea4-352-el8-cgv1.openstack.build systemd[1]: user-runtime-dir@0.service: Succeeded.
+Nov 10 01:12:59.256542 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User runtime directory /run/user/0.
+Nov 10 01:12:59.259282 ea4-352-el8-cgv1.openstack.build systemd[1]: Removed slice User Slice of UID 0.
+Nov 10 01:15:59.224032 ea4-352-el8-cgv1.openstack.build systemd[1]: Created slice User Slice of UID 0.
+Nov 10 01:15:59.225564 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User runtime directory /run/user/0...
+Nov 10 01:15:59.236003 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User runtime directory /run/user/0.
+Nov 10 01:15:59.237660 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User Manager for UID 0...
+Nov 10 01:15:59.296255 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User Manager for UID 0.
+Nov 10 01:15:59.297501 ea4-352-el8-cgv1.openstack.build systemd[1]: Started Session 188 of user root.
+Nov 10 01:15:59.398052 ea4-352-el8-cgv1.openstack.build systemd[1]: session-188.scope: Succeeded.
+Nov 10 01:16:09.475748 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User Manager for UID 0...
+Nov 10 01:16:09.490307 ea4-352-el8-cgv1.openstack.build systemd[1]: user@0.service: Succeeded.
+Nov 10 01:16:09.493379 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User Manager for UID 0.
+Nov 10 01:16:09.494447 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User runtime directory /run/user/0...
+Nov 10 01:16:09.502882 ea4-352-el8-cgv1.openstack.build systemd[1]: run-user-0.mount: Succeeded.
+Nov 10 01:16:09.506881 ea4-352-el8-cgv1.openstack.build systemd[1]: user-runtime-dir@0.service: Succeeded.
+Nov 10 01:16:09.507191 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User runtime directory /run/user/0.
+Nov 10 01:16:09.508797 ea4-352-el8-cgv1.openstack.build systemd[1]: Removed slice User Slice of UID 0.
+Nov 10 01:16:31.770202 ea4-352-el8-cgv1.openstack.build systemd[1]: Created slice User Slice of UID 0.
+Nov 10 01:16:31.771959 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User runtime directory /run/user/0...
+Nov 10 01:16:31.780778 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User runtime directory /run/user/0.
+Nov 10 01:16:31.781939 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User Manager for UID 0...
+Nov 10 01:16:31.833294 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User Manager for UID 0.
+Nov 10 01:16:31.834549 ea4-352-el8-cgv1.openstack.build systemd[1]: Started Session 190 of user root.
+Nov 10 01:16:31.912925 ea4-352-el8-cgv1.openstack.build systemd[1]: Reexecuting.
+Nov 10 01:16:32.070405 ea4-352-el8-cgv1.openstack.build systemd[1]: cgroup compatibility translation between legacy and unified hierarchy settings activated. See cgroup-compat debug messages for details.
+Nov 10 01:16:37.087057 ea4-352-el8-cgv1.openstack.build systemd[1]: Started /bin/true.
+Nov 10 01:16:37.090851 ea4-352-el8-cgv1.openstack.build systemd[1]: run-u1908.service: Succeeded.
+Nov 10 01:16:40.215051 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting SETroubleshoot daemon for processing new SELinux denial logs...
+Nov 10 01:16:40.901382 ea4-352-el8-cgv1.openstack.build systemd[1]: Started SETroubleshoot daemon for processing new SELinux denial logs.
+Nov 10 01:16:53.912420 ea4-352-el8-cgv1.openstack.build systemd[1]: setroubleshootd.service: Succeeded.
+Nov 10 01:17:02.253287 ea4-352-el8-cgv1.openstack.build systemd[1]: session-190.scope: Succeeded.
+Nov 10 01:17:12.476170 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User Manager for UID 0...
+Nov 10 01:17:12.488895 ea4-352-el8-cgv1.openstack.build systemd[1]: user@0.service: Succeeded.
+Nov 10 01:17:12.493694 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User Manager for UID 0.
+Nov 10 01:17:12.494878 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopping User runtime directory /run/user/0...
+Nov 10 01:17:12.502799 ea4-352-el8-cgv1.openstack.build systemd[1]: run-user-0.mount: Succeeded.
+Nov 10 01:17:12.507577 ea4-352-el8-cgv1.openstack.build systemd[1]: user-runtime-dir@0.service: Succeeded.
+Nov 10 01:17:12.507974 ea4-352-el8-cgv1.openstack.build systemd[1]: Stopped User runtime directory /run/user/0.
+Nov 10 01:17:12.510130 ea4-352-el8-cgv1.openstack.build systemd[1]: Removed slice User Slice of UID 0.
+Nov 10 01:17:19.097379 ea4-352-el8-cgv1.openstack.build systemd[1]: Created slice User Slice of UID 0.
+Nov 10 01:17:19.098703 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User runtime directory /run/user/0...
+Nov 10 01:17:19.108412 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User runtime directory /run/user/0.
+Nov 10 01:17:19.109800 ea4-352-el8-cgv1.openstack.build systemd[1]: Starting User Manager for UID 0...
+Nov 10 01:17:19.197591 ea4-352-el8-cgv1.openstack.build systemd[1]: Started User Manager for UID 0.
+Nov 10 01:17:19.198434 ea4-352-el8-cgv1.openstack.build systemd[1]: Started Session 192 of user root.
+
+### journalctl -b -o short-precise -u dbus-broker --since -10min
+-- Logs begin at Fri 2026-11-06 20:16:55 UTC, end at Tue 2026-11-10 01:17:19 UTC. --
+-- No entries --

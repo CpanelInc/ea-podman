@@ -1,0 +1,18 @@
+host ea4-352-u22 os=ubuntu-22.04 kernel=5.15.0-203-generic cgroup=v2 systemd=249 podman=3.4.4
+probe p0-10.sh=34d870027d6f plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+RESULT p0-10.booted_after_pre yes
+RESULT p0-10.canary_ran no
+RESULT p0-10.user_manager inactive
+RESULT p0-10.user_manager_units 1
+RESULT p0-10.runtime_carveouts 0
+RESULT p0-10.anchor active
+RESULT p0-10.runtime_tmpfs tmpfs  rw,nosuid,nodev,relatime,size=303960k,nr_inodes=75989,mode=700,uid=1000,g
+RESULT p0-10.xdg_dir ./cni->/run/ea-podman/user/1000/cni 
+RESULT p0-10.unit_web active MainPID=1020(conmon) in /eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/supervisor
+RESULT p0-10.unit_api active MainPID=975(conmon) in /eapodman.slice/eapodman-1000.slice/ea-podman-api.eapodtest.02.service/supervisor
+RESULT p0-10.unit_worker active MainPID=1029(conmon) in /eapodman.slice/eapodman-1000.slice/ea-podman-worker.eapodtest.03.service/supervisor
+RESULT p0-10.port_8081 200
+RESULT p0-10.port_8082 200
+RESULT p0-10.port_8083 200
+RESULT p0-10.split_after_reboot yes
+RESULT p0-10.slice_dropins 872415232 2147483648 7727 

@@ -1,0 +1,18 @@
+host ea4-352-cl10 os=cloudlinux-10 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+host ea4-352-cl10 os=cloudlinux-10 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+  LVE for eapodtest: 
+
+### 1. plain unit with PAMName=ea-podman
+RESULT p0-6.plain_cgroups /lve.slice/lvub/full/lve1001
+RESULT p0-6.plain_in_lve yes
+RESULT p0-6.plain_stop_reaches_it yes
+
+### 2. memory: does the LVE limit or the slice limit apply? (slice MemoryMax=100M, LVE PMEM default)
+RESULT p0-6.alloc_300M_under_slice_100M rc=0 allocated 300M
+
+### 3. container unit with PAMName=ea-podman
+RESULT p0-6.pam_container_starts FAILS: 
+
+### 4. systemd-run --uid transient with PAMName (the runner)
+RESULT p0-6.runner_pam_runtimemaxsec rc=1 after 5s; leftovers: 2535 2536 
+RESULT p0-6.runner_pam_cgroup 0::/lve.slice/lvub/full/lve1001 

@@ -1,0 +1,227 @@
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+web.eapodtest.01 already exists; keeping it
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:22Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+api.eapodtest.02 already exists; keeping it
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+worker.eapodtest.03 already exists; keeping it
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:23Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+--- :8081
+Server address: 10.0.2.100:80
+Server name: 290d812cb5d3
+Date: 06/Nov/2026:19:23:25 +0000
+--- :8082
+Server address: 10.0.2.100:80
+Server name: 93aedf51cdbe
+Date: 06/Nov/2026:19:23:25 +0000
+--- :8083
+Server address: 10.0.2.100:80
+Server name: caf7281a19ee
+Date: 06/Nov/2026:19:23:25 +0000
+done; now run ./verify.sh eapodtest, ./loadtest.sh eapodtest, then ./lifecycle.sh eapodtest last (see README.md)
+Unit eapodman.slice (/eapodman.slice):
+└─eapodman-1000.slice 
+  ├─ea-podman-worker.eapodtest.03.service …
+  │ ├─libpod-payload-caf7281a19eeda51c169ba0707651f36f2a647a625d67ec0d0b3271e50039f8c 
+  │ │ ├─9531 nginx: master process nginx -g daemon off;
+  │ │ ├─9546 nginx: worker process
+  │ │ ├─9547 nginx: worker process
+  │ │ └─9548 nginx: worker process
+  │ └─supervisor 
+  │   ├─9510 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable-…
+  │   ├─9512 containers-rootlessport
+  │   ├─9519 containers-rootlessport-child
+  │   └─9528 /usr/bin/conmon --api-version 1 -c caf7281a19eeda51c169ba0707651f3…
+  ├─ea-podman-web.eapodtest.01.service …
+  │ ├─supervisor 
+  │ │ ├─9133 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable-…
+  │ │ ├─9136 containers-rootlessport
+  │ │ ├─9143 containers-rootlessport-child
+  │ │ └─9154 /usr/bin/conmon --api-version 1 -c 290d812cb5d34aea52621c25ba17a5f…
+  │ └─libpod-payload-290d812cb5d34aea52621c25ba17a5f413376a8a37a2fb3957e789c8918ae990 
+  │   ├─9157 nginx: master process nginx -g daemon off;
+  │   ├─9172 nginx: worker process
+  │   ├─9173 nginx: worker process
+  │   └─9174 nginx: worker process
+  ├─ea-podman-api.eapodtest.02.service …
+  │ ├─supervisor 
+  │ │ ├─9323 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable-…
+  │ │ ├─9325 containers-rootlessport
+  │ │ ├─9333 containers-rootlessport-child
+  │ │ └─9343 /usr/bin/conmon --api-version 1 -c 93aedf51cdbe5f701e5a7931b7ffcef…
+  │ └─libpod-payload-93aedf51cdbe5f701e5a7931b7ffcefe25735757b7d2ce252104619dc33732b9 
+  │   ├─9346 nginx: master process nginx -g daemon off;
+  │   ├─9361 nginx: worker process
+  │   ├─9362 nginx: worker process
+  │   └─9363 nginx: worker process
+  └─ea-podman-runtime@1000.service …
+    └─7205 /usr/bin/podman
+
+user.slice CPUWeight: [not set] (eapodman.slice should match)
+user@1000 active: inactive  (should be inactive)
+
+== eapodman.slice
+  memory.low               872415232 
+  cpu.weight               100 
+  io.weight                default 100 
+  pids.max                 7727 
+  cgroup.subtree_control   cpu io memory pids 
+
+== eapodman.slice/eapodman-1000.slice
+  memory.low               872415232 
+  memory.max               2147483648 
+  pids.max                 772 
+  cgroup.subtree_control   cpu io memory pids 
+
+== eapodman.slice/eapodman-1000.slice/ea-podman-api.eapodtest.02.service
+  memory.low               536870912 
+  cpu.weight               200 
+  cgroup.subtree_control   cpu io memory pids 
+  cgroup.procs             
+
+== eapodman.slice/eapodman-1000.slice/ea-podman-api.eapodtest.02.service/libpod-payload-93aedf51cdbe5f701e5a7931b7ffcefe25735757b7d2ce252104619dc33732b9
+  memory.max               1073741824 
+  memory.swap.max          0 
+  memory.low               536870912 
+  cpu.max                  200000 100000 
+  cpu.weight               79 
+  pids.max                 max 
+  cgroup.procs             9346 9361 9362 9363 
+
+== eapodman.slice/eapodman-1000.slice/ea-podman-api.eapodtest.02.service/supervisor
+  memory.max               max 
+  memory.swap.max          max 
+  memory.low               0 
+  cpu.max                  max 100000 
+  cpu.weight               100 
+  pids.max                 max 
+  cgroup.procs             9323 9325 9333 9343 
+
+== eapodman.slice/eapodman-1000.slice/ea-podman-runtime@1000.service
+  memory.low               0 
+  cpu.weight               100 
+  cgroup.subtree_control   
+  cgroup.procs             7205 
+
+== eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service
+  memory.low               268435456 
+  cpu.weight               100 
+  cgroup.subtree_control   cpu io memory pids 
+  cgroup.procs             
+
+== eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/libpod-payload-290d812cb5d34aea52621c25ba17a5f413376a8a37a2fb3957e789c8918ae990
+  memory.max               536870912 
+  memory.swap.max          0 
+  memory.low               268435456 
+  cpu.max                  100000 100000 
+  cpu.weight               39 
+  pids.max                 max 
+  cgroup.procs             9157 9172 9173 9174 
+
+== eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/supervisor
+  memory.max               max 
+  memory.swap.max          max 
+  memory.low               0 
+  cpu.max                  max 100000 
+  cpu.weight               100 
+  pids.max                 max 
+  cgroup.procs             9133 9136 9143 9154 
+
+== eapodman.slice/eapodman-1000.slice/ea-podman-worker.eapodtest.03.service
+  memory.low               67108864 
+  cpu.weight               50 
+  cgroup.subtree_control   cpu io memory pids 
+  cgroup.procs             
+
+== eapodman.slice/eapodman-1000.slice/ea-podman-worker.eapodtest.03.service/libpod-payload-caf7281a19eeda51c169ba0707651f36f2a647a625d67ec0d0b3271e50039f8c
+  memory.max               268435456 
+  memory.swap.max          0 
+  memory.low               67108864 
+  cpu.max                  50000 100000 
+  cpu.weight               20 
+  pids.max                 max 
+  cgroup.procs             9531 9546 9547 9548 
+
+== eapodman.slice/eapodman-1000.slice/ea-podman-worker.eapodtest.03.service/supervisor
+  memory.max               max 
+  memory.swap.max          max 
+  memory.low               0 
+  cpu.max                  max 100000 
+  cpu.weight               100 
+  pids.max                 max 
+  cgroup.procs             9510 9512 9519 9528 
+
+== account slice
+  PASS  eapodman-1000.slice is loaded
+  PASS  eapodman-1000.slice is active
+  PASS  eapodman-1000.slice has no unit file (implicit, as in the plan)
+  PASS  eapodman-1000.slice limits are drop-ins under /etc/systemd/system.control
+
+== pinned podman config, as seen by the account
+time="2026-11-06T19:23:25Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:25Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:25Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+time="2026-11-06T19:23:25Z" level=warning msg="Failed to decode the keys [\"containers.default_mounts_file\"] from \"/etc/eapodman-test/containers.conf\"."
+  runtime /usr/bin/crun, conmon /usr/bin/conmon, cgroup manager cgroupfs
+  graphroot /home/eapodtest/.local/share/ea-podman/storage
+  runroot /run/ea-podman/user/1000/containers
+  PASS  podman info answered as the account
+  PASS  /etc/eapodman-test/containers.conf pins an OCI runtime
+  PASS  OCI runtime is the one pinned in /etc/eapodman-test/containers.conf
+  PASS  conmon is the one pinned in /etc/eapodman-test/containers.conf
+  PASS  cgroup manager is cgroupfs
+  PASS  graphroot is the fresh ea-podman storage
+  PASS  runroot is in the runtime tmpfs
+
+== container units
+  ea-podman-api.eapodtest.02.service: MainPID 9343 (conmon), PIDFile /run/ea-podman/user/1000/api.eapodtest.02.conmon.pid
+  PASS  ea-podman-api.eapodtest.02.service PIDFile is derived from the container name
+  PASS  ea-podman-api.eapodtest.02.service ExecStart starts that container
+  PASS  ea-podman-api.eapodtest.02.service MainPID is conmon
+  PASS  ea-podman-api.eapodtest.02.service MainPID is inside the unit's cgroup
+  PASS  ea-podman-api.eapodtest.02.service has a libpod-payload-* container cgroup (--cgroups=split in effect)
+  PASS  ea-podman-api.eapodtest.02.service container cgroup has memory.max
+  PASS  ea-podman-api.eapodtest.02.service container cgroup has memory.swap.max
+  PASS  ea-podman-api.eapodtest.02.service container cgroup has cpu.max
+  PASS  ea-podman-api.eapodtest.02.service container cgroup has pids.max
+  ea-podman-web.eapodtest.01.service: MainPID 9154 (conmon), PIDFile /run/ea-podman/user/1000/web.eapodtest.01.conmon.pid
+  PASS  ea-podman-web.eapodtest.01.service PIDFile is derived from the container name
+  PASS  ea-podman-web.eapodtest.01.service ExecStart starts that container
+  PASS  ea-podman-web.eapodtest.01.service MainPID is conmon
+  PASS  ea-podman-web.eapodtest.01.service MainPID is inside the unit's cgroup
+  PASS  ea-podman-web.eapodtest.01.service has a libpod-payload-* container cgroup (--cgroups=split in effect)
+  PASS  ea-podman-web.eapodtest.01.service container cgroup has memory.max
+  PASS  ea-podman-web.eapodtest.01.service container cgroup has memory.swap.max
+  PASS  ea-podman-web.eapodtest.01.service container cgroup has cpu.max
+  PASS  ea-podman-web.eapodtest.01.service container cgroup has pids.max
+  ea-podman-worker.eapodtest.03.service: MainPID 9528 (conmon), PIDFile /run/ea-podman/user/1000/worker.eapodtest.03.conmon.pid
+  PASS  ea-podman-worker.eapodtest.03.service PIDFile is derived from the container name
+  PASS  ea-podman-worker.eapodtest.03.service ExecStart starts that container
+  PASS  ea-podman-worker.eapodtest.03.service MainPID is conmon
+  PASS  ea-podman-worker.eapodtest.03.service MainPID is inside the unit's cgroup
+  PASS  ea-podman-worker.eapodtest.03.service has a libpod-payload-* container cgroup (--cgroups=split in effect)
+  PASS  ea-podman-worker.eapodtest.03.service container cgroup has memory.max
+  PASS  ea-podman-worker.eapodtest.03.service container cgroup has memory.swap.max
+  PASS  ea-podman-worker.eapodtest.03.service container cgroup has cpu.max
+  PASS  ea-podman-worker.eapodtest.03.service container cgroup has pids.max
+
+all checks passed

@@ -1,0 +1,17 @@
+host ea4-352-cl8-cgv1 os=cloudlinux-8.10 kernel=4.18.0-553.177.1.lve.1.el8.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+probe p0-10.sh=34d870027d6f plib.sh=fd17d062fc15 lib.sh=d59ae8e520f2
+RESULT p0-10.booted_after_pre yes
+RESULT p0-10.canary_ran no
+RESULT p0-10.user_manager inactive
+RESULT p0-10.user_manager_units 1
+RESULT p0-10.runtime_carveouts 0
+RESULT p0-10.anchor active
+RESULT p0-10.runtime_tmpfs tmpfs  rw,nosuid,nodev,relatime,size=285308k,nr_inodes=71326,mode=700,uid=1001,g
+RESULT p0-10.xdg_dir ./cni->/run/ea-podman/user/1001/cni 
+RESULT p0-10.unit_web active MainPID=838(conmon) in /eapodman.slice/eapodman-1001.slice/ea-podman-web.eapodtest.01.service
+RESULT p0-10.unit_api active MainPID=839(conmon) in /eapodman.slice/eapodman-1001.slice/ea-podman-api.eapodtest.02.service
+RESULT p0-10.unit_worker active MainPID=843(conmon) in /eapodman.slice/eapodman-1001.slice/ea-podman-worker.eapodtest.03.service
+RESULT p0-10.port_8081 200
+RESULT p0-10.port_8082 200
+RESULT p0-10.port_8083 200
+RESULT p0-10.slice_dropins 872415232 2147483648 7271 

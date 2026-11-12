@@ -1,0 +1,13 @@
+host ea4-352-u24 os=ubuntu-24.04 kernel=6.8.0-149-generic cgroup=v2 systemd=255 podman=4.9.3
+probe p0-3-hidepid.sh=fa49f25ae4f8 plib.sh=fd17d062fc15 lib.sh=a7f0c6e05931
+RESULT p0-3.hidepid none
+
+### systemctl stop
+RESULT p0-3.stop rc=0 after 0s; ActiveState=inactive Result=success
+RESULT p0-3.stop_exit_file_timeout no
+RESULT p0-3.killmode_reaped none needed
+RESULT p0-3.leftovers_in_unit_cgroup none (the unit's cgroup is gone)
+RESULT p0-3.podman_state_after_stop exited
+
+### UNIT_REMOVE order: podman rm after the stop
+RESULT p0-3.rm_after_stop works

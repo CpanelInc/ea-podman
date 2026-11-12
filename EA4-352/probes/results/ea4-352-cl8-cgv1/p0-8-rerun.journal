@@ -1,0 +1,8 @@
+-- Logs begin at Tue 2026-11-10 08:16:39 EST, end at Tue 2026-11-10 15:29:35 EST. --
+Nov 10 15:29:32 ea4-352-cl8-cgv1.openstack.build systemd[1]: Starting ea-podman container p08.eapodtest.60...
+Nov 10 15:29:32 ea4-352-cl8-cgv1.openstack.build systemd[1]: ea-podman-p08.eapodtest.60.service: New main PID 87731 does not exist or is a zombie.
+Nov 10 15:29:33 ea4-352-cl8-cgv1.openstack.build podman[87927]: Error: container 4e28dffe4e96fdba5b05fe9d9c8a5d4725a8fd98f4e7e3d47740f01b8338f22f conmon exited prematurely, exit code could not be retrieved: internal libpod error
+Nov 10 15:29:33 ea4-352-cl8-cgv1.openstack.build systemd[1]: ea-podman-p08.eapodtest.60.service: Control process exited, code=exited status=125
+Nov 10 15:29:33 ea4-352-cl8-cgv1.openstack.build systemd[1]: ea-podman-p08.eapodtest.60.service: Failed with result 'protocol'.
+Nov 10 15:29:33 ea4-352-cl8-cgv1.openstack.build systemd[1]: Failed to start ea-podman container p08.eapodtest.60.
+Nov 10 15:29:35 ea4-352-cl8-cgv1.openstack.build systemd[1]: Stopped ea-podman container p08.eapodtest.60.

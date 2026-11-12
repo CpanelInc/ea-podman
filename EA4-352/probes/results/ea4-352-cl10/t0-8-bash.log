@@ -1,0 +1,20 @@
+host ea4-352-cl10 os=cloudlinux-10 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+
+### baseline: the account's own exec -it, not moved (as 2.0 is planned)
+RESULT t0-8.exec_not_moved FAILS: Error: OCI runtime error: crun: Runtime did not set up terminal|rc=255
+
+### root moves the account's waiting process into <unit>/ea-podman-exec, then it runs exec -it
+RESULT t0-8.place_1 moved to /eapodman.slice/eapodman-1001.slice/ea-podman-t08x.eapodtest.80.service/ea-podman-exec
+RESULT t0-8.exec_moved works; exec'd process in /eapodman.slice/eapodman-1001.slice/ea-podman-t08x.eapodtest.80.service/libpod-payload-732fe067b0f6d2af5ce18ec31303b705c20945a3ebc9adc64b862848eeb02e85
+RESULT t0-8.exec_moved_client podman client (moved pid 135015) in /eapodman.slice/eapodman-1001.slice/ea-podman-t08x.eapodtest.80.service/ea-podman-exec
+RESULT t0-8.leaf_procs conmonx1 podmanx1
+RESULT t0-8.exec_moved_tty /dev/pts/0|40 120
+
+### unit stop with that session live
+RESULT t0-8.stop_with_session stop took 1s, unit=inactive/success, client alive=no, exec'd process alive=no, unit cgroup left=0
+RESULT t0-8.restart_after active
+
+### the account froze <unit>/ea-podman-exec before root's step
+RESULT t0-8.hostile_leaf account mkdir+freeze: 1
+RESULT t0-8.hostile_place root step: moved to /eapodman.slice/eapodman-1001.slice/ea-podman-t08x.eapodtest.80.service/ea-podman-exec in 20 ms; account's process state=S frozen=1; exec ran=no
+RESULT t0-8.hostile_thaw after the account thaws it: exec ran=yes
