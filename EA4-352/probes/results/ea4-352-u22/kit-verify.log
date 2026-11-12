@@ -2,39 +2,39 @@ Unit eapodman.slice (/eapodman.slice):
 └─eapodman-1000.slice 
   ├─ea-podman-worker.eapodtest.03.service …
   │ ├─libpod-payload-fc06187c0b88e79f7058e5b8013f131773edeb490caff47245f2d58d50b665b4 
-  │ │ ├─25464 nginx: master process nginx -g daemon off;
-  │ │ ├─25481 nginx: worker process
-  │ │ ├─25482 nginx: worker process
-  │ │ └─25483 nginx: worker process
+  │ │ ├─3942 nginx: master process nginx -g daemon off;
+  │ │ ├─3959 nginx: worker process
+  │ │ ├─3960 nginx: worker process
+  │ │ └─3961 nginx: worker process
   │ └─supervisor 
-  │   ├─25444 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable…
-  │   ├─25446 containers-rootlessport
-  │   ├─25453 containers-rootlessport-child
-  │   └─25461 /usr/bin/conmon --api-version 1 -c fc06187c0b88e79f7058e5b8013f13…
+  │   ├─3919 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable-…
+  │   ├─3921 containers-rootlessport
+  │   ├─3930 containers-rootlessport-child
+  │   └─3939 /usr/bin/conmon --api-version 1 -c fc06187c0b88e79f7058e5b8013f131…
   ├─ea-podman-web.eapodtest.01.service …
   │ ├─libpod-payload-03d92df7eb8751b8492aee6ca6baf6238dd582c10b8021c547f36336a8437617 
-  │ │ ├─25184 nginx: master process nginx -g daemon off;
-  │ │ ├─25200 nginx: worker process
-  │ │ ├─25201 nginx: worker process
-  │ │ └─25202 nginx: worker process
+  │ │ ├─3662 nginx: master process nginx -g daemon off;
+  │ │ ├─3677 nginx: worker process
+  │ │ ├─3678 nginx: worker process
+  │ │ └─3679 nginx: worker process
   │ └─supervisor 
-  │   ├─25164 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable…
-  │   ├─25166 containers-rootlessport
-  │   ├─25173 containers-rootlessport-child
-  │   └─25181 /usr/bin/conmon --api-version 1 -c 03d92df7eb8751b8492aee6ca6baf6…
+  │   ├─3640 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable-…
+  │   ├─3642 containers-rootlessport
+  │   ├─3650 containers-rootlessport-child
+  │   └─3659 /usr/bin/conmon --api-version 1 -c 03d92df7eb8751b8492aee6ca6baf62…
   ├─ea-podman-api.eapodtest.02.service …
   │ ├─libpod-payload-19f6ab24df9a53016ad543ea2661f6dcaab2a99ef2caf5e563b9740d0a85bf0f 
-  │ │ ├─25327 nginx: master process nginx -g daemon off;
-  │ │ ├─25342 nginx: worker process
-  │ │ ├─25343 nginx: worker process
-  │ │ └─25344 nginx: worker process
+  │ │ ├─3801 nginx: master process nginx -g daemon off;
+  │ │ ├─3816 nginx: worker process
+  │ │ ├─3817 nginx: worker process
+  │ │ └─3818 nginx: worker process
   │ └─supervisor 
-  │   ├─25302 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable…
-  │   ├─25305 containers-rootlessport
-  │   ├─25313 containers-rootlessport-child
-  │   └─25324 /usr/bin/conmon --api-version 1 -c 19f6ab24df9a53016ad543ea2661f6…
+  │   ├─3779 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable-…
+  │   ├─3781 containers-rootlessport
+  │   ├─3789 containers-rootlessport-child
+  │   └─3798 /usr/bin/conmon --api-version 1 -c 19f6ab24df9a53016ad543ea2661f6d…
   └─ea-podman-runtime@1000.service …
-    └─10456 /usr/bin/podman
+    └─722 /usr/bin/podman
 
 user.slice CPUWeight: [not set] (eapodman.slice should match)
 user@1000 active: inactive  (should be inactive)
@@ -65,7 +65,7 @@ user@1000 active: inactive  (should be inactive)
   cpu.max                  200000 100000 
   cpu.weight               79 
   pids.max                 max 
-  cgroup.procs             25327 25342 25343 25344 
+  cgroup.procs             3801 3816 3817 3818 
 
 == eapodman.slice/eapodman-1000.slice/ea-podman-api.eapodtest.02.service/supervisor
   memory.max               max 
@@ -74,13 +74,13 @@ user@1000 active: inactive  (should be inactive)
   cpu.max                  max 100000 
   cpu.weight               100 
   pids.max                 max 
-  cgroup.procs             25302 25305 25313 25324 
+  cgroup.procs             3779 3781 3789 3798 
 
 == eapodman.slice/eapodman-1000.slice/ea-podman-runtime@1000.service
   memory.low               0 
   cpu.weight               100 
   cgroup.subtree_control   
-  cgroup.procs             10456 
+  cgroup.procs             722 
 
 == eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service
   memory.low               268435456 
@@ -95,7 +95,7 @@ user@1000 active: inactive  (should be inactive)
   cpu.max                  100000 100000 
   cpu.weight               39 
   pids.max                 max 
-  cgroup.procs             25184 25200 25201 25202 
+  cgroup.procs             3662 3677 3678 3679 
 
 == eapodman.slice/eapodman-1000.slice/ea-podman-web.eapodtest.01.service/supervisor
   memory.max               max 
@@ -104,7 +104,7 @@ user@1000 active: inactive  (should be inactive)
   cpu.max                  max 100000 
   cpu.weight               100 
   pids.max                 max 
-  cgroup.procs             25164 25166 25173 25181 
+  cgroup.procs             3640 3642 3650 3659 
 
 == eapodman.slice/eapodman-1000.slice/ea-podman-worker.eapodtest.03.service
   memory.low               67108864 
@@ -119,7 +119,7 @@ user@1000 active: inactive  (should be inactive)
   cpu.max                  50000 100000 
   cpu.weight               20 
   pids.max                 max 
-  cgroup.procs             25464 25481 25482 25483 
+  cgroup.procs             3942 3959 3960 3961 
 
 == eapodman.slice/eapodman-1000.slice/ea-podman-worker.eapodtest.03.service/supervisor
   memory.max               max 
@@ -128,7 +128,7 @@ user@1000 active: inactive  (should be inactive)
   cpu.max                  max 100000 
   cpu.weight               100 
   pids.max                 max 
-  cgroup.procs             25444 25446 25453 25461 
+  cgroup.procs             3919 3921 3930 3939 
 
 == account slice
   PASS  eapodman-1000.slice is loaded
@@ -152,7 +152,7 @@ user@1000 active: inactive  (should be inactive)
 
 == container units (cgroup v2)
   PASS  setup.sh's three container units exist (found 3)
-  ea-podman-api.eapodtest.02.service: MainPID 25324 (conmon), PIDFile /run/ea-podman/user/1000/api.eapodtest.02.conmon.pid
+  ea-podman-api.eapodtest.02.service: MainPID 3798 (conmon), PIDFile /run/ea-podman/user/1000/api.eapodtest.02.conmon.pid
   PASS  ea-podman-api.eapodtest.02.service PIDFile is derived from the container name
   PASS  ea-podman-api.eapodtest.02.service ExecStart starts that container, with the pinned mounts.conf (F25)
   PASS  ea-podman-api.eapodtest.02.service MainPID is conmon
@@ -162,7 +162,7 @@ user@1000 active: inactive  (should be inactive)
   PASS  ea-podman-api.eapodtest.02.service container cgroup has memory.swap.max
   PASS  ea-podman-api.eapodtest.02.service container cgroup has cpu.max
   PASS  ea-podman-api.eapodtest.02.service container cgroup has pids.max
-  ea-podman-web.eapodtest.01.service: MainPID 25181 (conmon), PIDFile /run/ea-podman/user/1000/web.eapodtest.01.conmon.pid
+  ea-podman-web.eapodtest.01.service: MainPID 3659 (conmon), PIDFile /run/ea-podman/user/1000/web.eapodtest.01.conmon.pid
   PASS  ea-podman-web.eapodtest.01.service PIDFile is derived from the container name
   PASS  ea-podman-web.eapodtest.01.service ExecStart starts that container, with the pinned mounts.conf (F25)
   PASS  ea-podman-web.eapodtest.01.service MainPID is conmon
@@ -172,7 +172,7 @@ user@1000 active: inactive  (should be inactive)
   PASS  ea-podman-web.eapodtest.01.service container cgroup has memory.swap.max
   PASS  ea-podman-web.eapodtest.01.service container cgroup has cpu.max
   PASS  ea-podman-web.eapodtest.01.service container cgroup has pids.max
-  ea-podman-worker.eapodtest.03.service: MainPID 25461 (conmon), PIDFile /run/ea-podman/user/1000/worker.eapodtest.03.conmon.pid
+  ea-podman-worker.eapodtest.03.service: MainPID 3939 (conmon), PIDFile /run/ea-podman/user/1000/worker.eapodtest.03.conmon.pid
   PASS  ea-podman-worker.eapodtest.03.service PIDFile is derived from the container name
   PASS  ea-podman-worker.eapodtest.03.service ExecStart starts that container, with the pinned mounts.conf (F25)
   PASS  ea-podman-worker.eapodtest.03.service MainPID is conmon

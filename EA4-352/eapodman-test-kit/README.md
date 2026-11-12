@@ -8,7 +8,7 @@ A hand-built version of the layout in `../PLAN.md` for one account. It sets up `
 ./setup.sh <cpuser>             # build the layout and start web, api and worker
 ./verify.sh <cpuser>            # where everything landed and what each cgroup enforces
 ./loadtest.sh <cpuser>          # CPU and memory limits under load (F12, F13)
-./lifecycle.sh <cpuser>         # crash recovery, hostile conmon.pid, exit 143 on stop (P0-3, F15); run last
+./lifecycle.sh <cpuser>         # crash recovery, hostile conmon.pid, exit 143 on stop, no AVC denial on a conmon.pid (P0-3, F15, F19); run last
 ./teardown.sh <cpuser> --purge  # remove everything, including the test storage
 ```
 

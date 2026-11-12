@@ -1,0 +1,24 @@
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v2 systemd=239 podman=4.9.4-rhel
+probe ea4-392.sh=1041d65aebb8 plib.sh=fd17d062fc15 lib.sh=c0b4c32d91b8
+  selinux=Enforcing bus=dbus-daemon policy=selinux-policy-3.14.3-139.el8_10.2.noarch uptime=181127s
+
+### 1. the kit's unit: its first ExecStopPost= removes the PID file as the account
+  ExecStopPost: argv[]=/usr/bin/rm -f /run/ea-podman/user/1000/ea4392.eapodtest.88.conmon.pid |argv[]=/usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf --cgroup-manager=cgroupfs stop -t 10 ea4392.eapodtest.88 |
+RESULT ea4-392-unlink.with_rm_line.restart unlink_denials=0
+RESULT ea4-392-unlink.with_rm_line.stop unlink_denials=0 pidfile_after=gone
+RESULT ea4-392-unlink.with_rm_line.sigkill_conmon unlink_denials=0 (unit now active, NRestarts 0 -> 1)
+
+### 2. the same unit without that line (drop-in): PID 1 unlinks the file itself
+  ExecStopPost: argv[]=/usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf --cgroup-manager=cgroupfs stop -t 10 ea4392.eapodtest.88 |
+RESULT ea4-392-unlink.without_rm_line.restart unlink_denials=1
+RESULT ea4-392-unlink.without_rm_line.stop unlink_denials=1 pidfile_after=present
+RESULT ea4-392-unlink.without_rm_line.sigkill_conmon unlink_denials=1 (unit now active, NRestarts 0 -> 1)
+
+### verdict
+RESULT ea4-392-unlink.denied_without_rm_line yes (3)
+RESULT ea4-392-unlink.denied_with_rm_line no
+  the denial: avc:  denied  { unlink } for  pid=1 comm=systemd name=ea4392.eapodtest.88.conmon.pid dev="tmpfs" ino=2835379 scontext=system_u:system_r:init_t:s0 tcontext=system_u:object_r:container_runtime_tmpfs_t:s0 tclass=file permissive=0 
+  journalctl -t setroubleshoot, since this probe started:
+          4 SELinux is preventing systemd from unlink access on the file ea4392.eapodtest.88.conmon.pid.
+          4 SELinux is preventing systemd from unlink access on the file ea4392.eapodtest.88.conmon.pid. For complete SELinux messages run: sealert -l c5d97927-80a8-4429-9494-232d451a7084
+RESULT ea4-392-unlink.setroubleshoot_reports_unlink 8

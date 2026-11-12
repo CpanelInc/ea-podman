@@ -1,0 +1,25 @@
+### EA4-392-PLAN.md Step 3, 2026-11-10: the el9 Step 0 check on el8-cgv1
+host ea4-352-el8-cgv1 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 systemd=239 selinux=Enforcing bus=dbus-daemon uptime=58891s
+call: systemd-run --quiet --uid=1000 --gid=1000 --pipe --wait --collect /bin/true </dev/null, with stdout/stderr as below
+
+### destinations
+Enforcing   /dev/null                                    null_device_t    rc=0 pid1_on_bus=yes 
+Enforcing   pipe (| cat)                                 -                rc=0 pid1_on_bus=yes 
+Enforcing   > /tmp file                                  user_tmp_t       rc=1 pid1_on_bus=yes Failed to start transient service unit: Connection timed out 
+Enforcing   >> /tmp file (append)                        user_tmp_t       rc=0 pid1_on_bus=yes 
+Enforcing   > /root file                                 admin_home_t     rc=1 pid1_on_bus=yes Failed to start transient service unit: Connection timed out 
+
+### the same with SELinux permissive, then enforcing again
+Permissive  > /tmp file                                  user_tmp_t       rc=0 pid1_on_bus=yes 
+Permissive  > /root file                                 admin_home_t     rc=0 pid1_on_bus=yes 
+Enforcing   > /tmp file                                  user_tmp_t       rc=1 pid1_on_bus=yes Failed to start transient service unit: Connection timed out 
+
+### denials in /var/log/audit/audit.log from this run (grep; ausearch reads stdin over `ssh -n`)
+      2 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:user_tmp_t:s0 tclass=file permissive=0
+      1 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:user_tmp_t:s0 tclass=file permissive=1
+      1 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:admin_home_t:s0 tclass=file permissive=0
+      1 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:admin_home_t:s0 tclass=file permissive=1
+
+### journalctl -t setroubleshoot
+Nov 10 17:39:03 ea4-352-el8-cgv1.openstack.build setroubleshoot[2176]: SELinux is preventing systemd from write access on the file /tmp/ea4-392-s0.out.
+Nov 10 17:39:28 ea4-352-el8-cgv1.openstack.build setroubleshoot[2229]: SELinux is preventing systemd from write access on the file /root/ea4-392-s0.out.

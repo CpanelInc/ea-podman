@@ -1,0 +1,10 @@
+host ea4-352-cl10 os=cloudlinux-10 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+probe p0-4.sh=fd84f737567b plib.sh=fd17d062fc15 lib.sh=78ded5647a3b
+
+### 8. memory floors (MemoryMin) under pressure from outside the slices
+  CloudLinux: page cache isn't charged to the reader's cgroup (F13); measuring anyway
+  floors (MemoryMin): eapodman.slice 419430400, eapodman-1001.slice 419430400, user.slice 0, user-1001.slice 419430400
+RESULT p0-4.pagecache_acct_MiB 0 -> 0
+RESULT p0-4.pagecache_user_MiB 0 -> 0
+RESULT p0-4.pagecache_none_MiB 0 -> 0
+RESULT p0-4.floor_verdict n/a: page cache not charged to the reader (before=0)

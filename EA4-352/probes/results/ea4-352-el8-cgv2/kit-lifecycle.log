@@ -1,22 +1,22 @@
 == 1. SIGKILL conmon of worker.eapodtest.03
-  back after 7s: MainPID 20171 -> 20405, NRestarts 0 -> 1
+  back after 7s: MainPID 29086 -> 29544, NRestarts 0 -> 1
   PASS  worker comes back through Restart= (known F15 no longer reproduces; update PLAN.md)
-    journal: Error: container bab5a6222f85c8eb165c896406348d6e1f6b0ca4b545e1ee3c8e2f750433efd0 conmon exited prematurely, exit code could not be retrieved: internal libpod error
+    journal: Error: container 45f4ee5b4cddd1a9da681584bc1b7ec7bfe5586d892d842b452943b259236bb7 conmon exited prematurely, exit code could not be retrieved: internal libpod error
     journal: ea-podman-worker.eapodtest.03.service: Failed with result 'signal'.
 
 == 2. SIGKILL the container's init in api.eapodtest.02
-  container init PID 20075 (nginx)
-  back after 7s: MainPID 20063 -> 20568, NRestarts 0 -> 1
+  container init PID 28998 (nginx)
+  back after 7s: MainPID 28986 -> 29702, NRestarts 0 -> 1
   PASS  api comes back through Restart=
     journal: ea-podman-api.eapodtest.02.service: Failed with result 'exit-code'.
 
-== 3. account writes root PID 20312 into web.eapodtest.01's conmon.pid, then conmon dies
-  conmon.pid now holds 20312
-  back after 7s: MainPID 19954 -> 20712, NRestarts 0 -> 1
+== 3. account writes root PID 29463 into web.eapodtest.01's conmon.pid, then conmon dies
+  conmon.pid now holds 29463
+  back after 7s: MainPID 28887 -> 29853, NRestarts 0 -> 1
   PASS  web comes back through Restart= (known F15 no longer reproduces; update PLAN.md)
   PASS  the root process is still alive
   PASS  web's MainPID is not the root process
-    journal: Error: container cc7c7f6d242438de48d64620a84ce4b47ce2882e5f6c959e312e10ae7498daa3 conmon exited prematurely, exit code could not be retrieved: internal libpod error
+    journal: Error: container 2650f4b4ad371548f64e685032d368d6fc1244960d78d62424e901e2ed217532 conmon exited prematurely, exit code could not be retrieved: internal libpod error
     journal: ea-podman-web.eapodtest.01.service: Failed with result 'signal'.
 
 == 4. PID file refusal (P0-3, invariant 19) with a same-shape unit
@@ -30,20 +30,20 @@
   PASS  PID 1: systemd logged the refusal
   PASS  PID 1: MainPID is not 1
   PASS  PID 1: PID 1 is still systemd
-  PASS  PID 1: root process 20312 survives the stop
-  root process: start exit 1, Result=timeout, MainPID 0, PID file 20312
-    journal: eapodman-test-pidfile-1000.service: New main PID 20312 does not belong to service, and PID file is not owned by root. Refusing.
-    journal: eapodman-test-pidfile-1000.service: New main PID 20312 does not belong to service, and PID file is not owned by root. Refusing.
+  PASS  PID 1: root process 29463 survives the stop
+  root process: start exit 1, Result=timeout, MainPID 0, PID file 29463
+    journal: eapodman-test-pidfile-1000.service: New main PID 29463 does not belong to service, and PID file is not owned by root. Refusing.
+    journal: eapodman-test-pidfile-1000.service: New main PID 29463 does not belong to service, and PID file is not owned by root. Refusing.
     journal: eapodman-test-pidfile-1000.service: start operation timed out. Terminating.
     journal: eapodman-test-pidfile-1000.service: Failed with result 'timeout'.
     journal: Failed to start eapodman-test-pidfile-1000.service.
-  PASS  root process: the PID file holds 20312
+  PASS  root process: the PID file holds 29463
   PASS  root process: start is refused
   PASS  root process: systemd logged the refusal
-  PASS  root process: MainPID is not 20312
+  PASS  root process: MainPID is not 29463
   PASS  root process: PID 1 is still systemd
-  PASS  root process: root process 20312 survives the stop
-  control, own child: start exit 0, Result=success, MainPID 20915, PID file 20915
+  PASS  root process: root process 29463 survives the stop
+  control, own child: start exit 0, Result=success, MainPID 30061, PID file 30061
     journal: Started eapodman-test-pidfile-1000.service.
   PASS  control, own child: start succeeds
   PASS  control, own child: MainPID is the PID from the file
@@ -54,5 +54,8 @@
   PASS  the container's PID 1 exited 143 (got 143), so the case means something
   PASS  with SuccessExitStatus=143 the stop ends Result=success (got success)
   PASS  and the unit is not failed
+
+== 6. SELinux: no denial on a conmon.pid in tests 1-5 (F19, EA4-392)
+  PASS  no AVC denial names a conmon.pid since this script started (SELinux Enforcing)
 
 all checks passed

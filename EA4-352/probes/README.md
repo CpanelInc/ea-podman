@@ -18,10 +18,43 @@ Scripts for the Phase 0 probes in `../PLAN.md`. They were run on the VMs in `../
 | `p0-13.sh` | P0-13: `podman exec` placement, including 1.x parity |
 | `t0-6.sh basic\|units\|swap` | T0.6:<br>• `basic`: host defaults (nproc, tasks, logind's runtime dir), 1.x parity, runtime-dir use, exit codes without the journal, and a fork storm against the slice's `TasksMax`<br>• `units`: `daemon-reload` cost against the number of units<br>• `swap`: `--memory-swap` with a temporary swap file |
 | `t0-8.sh bash\|health\|ptrace` | T0.8 (F20, F24):<br>• `bash`: the account's own process on a pty, moved by root into `<unit>/ea-podman-exec`, runs `podman exec -it`; a unit stop with the session live; a leaf the account froze first<br>• `health`: health checks with no user manager, with `DISABLE_HC_SYSTEMD=true`, and from a root timer whose helper places itself in `<unit>/ea-podman-health`<br>• `ptrace`: can the account attach to its own conmon and container init |
+| `ea4-392.sh matrix\|unlink` | EA4-392 (EL, SELinux enforcing; elsewhere it says so and exits 0):<br>• `matrix`: which stdout and stderr PID 1 may not take from `systemd-run --pipe`, whether PID 1 is still on the system bus afterwards, and the denial<br>• `unlink`: whether PID 1 is denied the unlink of a unit's `conmon.pid`, with the kit's unit and with its `ExecStopPost=` `rm` line taken out |
 | `f15-1x.sh` | F15 / T0.4: SIGKILL a 1.x container's conmon under the account's own `user@`, with 1.x's generated unit (unmasked hosts) |
 | `f17-switch.sh flip\|check\|restore` | F17: a real cgroup v1 ↔ v2 switch on EL8 (reboot after `flip` and after `restore`) |
 
-`results/<vm>/` holds the logs from the 2026-11-06 run, and the `t0-8-*.log` files from 2026-11-09. `p0-8.log`, `p0-3-hidepid.log`, `t0-6-basic.log`, `p0-12.log`, `p0-4-floor.log` and `kit-verify.log` were re-run on all 9 on 2026-11-09 after the PR #43 review fixes (`p0-8.log` again with F25's `--default-mounts-file`, and `kit-verify.log` again on the 6 VMs where `setup.sh` could re-render the units; el8-cgv1, el8-cgv2 and el10 keep the earlier one, see EA4-392), and carry the script hashes described below (`p0-12.log` again on u24, el10 and cl10 after the second review round, with the BPF program's counters; the p0-3 part of `p0-3-hidepid+p0-10-pre.log` is superseded by `p0-3-hidepid.log`; that file is kept for p0-10). On 2026-11-10, after the third review round, `p0-4-basic.log` and `p0-11.log` were re-run on all 9, and `p0-10-pre.log` and `p0-10-post-reboot.log` on cl8-cgv1, cl9, cl10, u22 and u24. On el8-cgv1, el8-cgv2, el9 and el10, EA4-392 cut `p0-11.log` short in its last section ("podman run/build from a plain runner vs a delegated one"; the 2026-11-06 results for it are in `fa321f5`) and stopped `p0-10.sh pre` three times, including once straight after a reboot, so those hosts keep their 2026-11-06 p0-10 logs. Each occurrence's PID 1 and dbus-broker journal is in `ea4-392-<n>.log`. The `kit-*.log` files are the kit's own scripts.
+`results/<vm>/` holds the logs from the 2026-11-06 run, and the `t0-8-*.log` files from 2026-11-09. `p0-8.log`, `p0-3-hidepid.log`, `t0-6-basic.log`, `p0-12.log`, `p0-4-floor.log` and `kit-verify.log` were re-run on all 9 on 2026-11-09 after the PR #43 review fixes (`p0-8.log` again with F25's `--default-mounts-file`), and carry the script hashes described below (`p0-12.log` again on u24, el10 and cl10 after the second review round, with the BPF program's counters; the p0-3 part of `p0-3-hidepid+p0-10-pre.log` is superseded by `p0-3-hidepid.log`; that file is kept for p0-10). On 2026-11-10, after the third review round, `p0-4-basic.log` and `p0-11.log` were re-run on all 9, and `p0-10-pre.log` and `p0-10-post-reboot.log` on cl8-cgv1, cl9, cl10, u22 and u24. The `kit-*.log` files are the kit's own scripts.
+
+EA4-392 stopped those re-runs on el8-cgv1, el8-cgv2, el9 and el10, and was fixed in the kit the same day (PLAN.md, P0-11's SELinux result and F19). After the fix:
+
+- `p0-11.log`, `p0-10-pre.log` and `p0-10-post-reboot.log` were re-run on those four hosts, each with its output redirected to a file under `/root` and SELinux enforcing. Their `lib.sh` hash is newer than the one in the other hosts' logs from that morning (the table below).
+- `kit-verify.log` was re-run on all 9, after `setup.sh` re-rendered the units with their `ExecStopPost=` PID-file line. It has no failed check on any host. An earlier EL `kit-verify.log` that passed "no ea-podman AVC denials" proves nothing: `ausearch` was reading its stdin.
+- `ea4-392-1.log` to `ea4-392-3.log` (el9) are the PID 1 and dbus-broker journals of three occurrences. `ea4-392-4.log` (el9, el8-cgv1) is the evidence for the cause: which stdout and stderr of `systemd-run --pipe` fail, enforcing and permissive, and the denial.
+
+On 2026-11-12 every probe and kit script that needs no reboot was re-run on all 9 from `24ce94a`'s scripts (`../poc-rerun-prompt.md`). EA4-392 did not recur. Only the logs whose results changed, or that had no committed log, were kept from that run:
+
+- Changed: `p0-5.log` (all but u24), `p0-1-2.log` (u22), `p0-8.log` (cl8-cgv1), `p0-8-v1-start.log` (el8-cgv1, cl8-cgv1), `p0-9.log` (el8-cgv1, el9, el10, u24), `p0-11.log` (cl8-cgv1), `kit-lifecycle.log` (u24) and `kit-loadtest.log` (el8-cgv2).
+- First runs: `t0-6-floor-memorymin.log`, `t0-6-units.log` and `t0-6-swap.log` on the hosts that had none, `f15-1x.log` on the EL and CloudLinux hosts, `p0-6-clean.log` on CloudLinux, `kit-loadtest.log` on the v1 hosts, and `kit-teardown.log`, `kit-setup-after.log` and `kit-verify-after.log` (the teardown, setup and verify that end the run) on all 9.
+- On el10, cl10 and u24 the logs from `p0-5` onward come from a second pass with `systemctl reset-failed 'ea-podman-*'` before each script: run back to back, the probes hit web's `StartLimitBurst=3` on systemd 255 and 257.
+
+The `p0-11.log` files therefore carry four versions of the kit's `lib.sh`, which holds the runner:
+
+| `lib.sh` hash | Commit | Hosts | Runner |
+|---|---|---|---|
+| `d59ae8e520f2` | `4cd8f6e` | cl9, cl10, u22, u24 | before the fix: it passes its own stdout and stderr to `systemd-run --pipe` |
+| `6e8aedbc3e17` | `323a6c3` | el8-cgv2, el9, el10 | its own pipes |
+| `35d25b56009e` | `bd818c9` | el8-cgv1 | and it stops reading 2 s after `systemd-run` exits |
+| `78ded5647a3b` | `24ce94a` | cl8-cgv1 | and its final `kill` can't trip `set -e` (the runner at the PR's head) |
+
+The four hosts on `d59ae8e520f2` have no SELinux (CloudLinux has it disabled, Ubuntu has none), and their 2026-11-12 re-run from `24ce94a` gave the same results, so those logs were not replaced.
+
+On 2026-11-12, after the PR #52 review, `ea4-392.sh` was added and run on the four EL hosts. It replaces the hand-run checks in `ea4-392-4.log`:
+
+- `ea4-392-matrix.log`: the `systemd-run --pipe` destinations, now with a tty row and the same 13 rows on every host.
+- `ea4-392-unlink.log`: PID 1's unlink of a unit's `conmon.pid` at a restart, a stop and a SIGKILL of conmon, with and without the unit's `ExecStopPost=` `rm` line.
+- `ea4-392-pid1-trace.log` (el9, by hand): an `strace` of PID 1 across one failing call. It shows `MSG_CTRUNC` on the denied fd, then PID 1 closing its bus socket.
+- `kit-lifecycle.log`: re-run with its new test 6, which fails if any of its tests logged an AVC denial on a `conmon.pid`.
+
+When you look for AVC denials from a script or over `ssh -n`, use `ausearch --input-logs`. Without it `ausearch` reads its stdin and prints `<no matches>`. The kit's `avc_since` (`lib.sh`) does this.
 
 Each probe's log starts with two lines from `plib.sh`: the host (`os`, `kernel`, `cgroup`, `systemd`, `podman`) and the scripts that produced it, as the first 12 hex digits of each file's sha256 (`probe p0-4.sh=… plib.sh=… lib.sh=…`). The probes run from copies without git, so the hashes name the files rather than a commit. To find the commit, hash each revision of the script:
 
@@ -34,4 +67,4 @@ A result the probe couldn't measure (a command failed, a file couldn't be read, 
 
 Logs from before 2026-11-09 have no second line and come from earlier revisions of the scripts; some don't match the scripts at HEAD (for example `results/ea4-352-el9/p0-4-cpu.log` names a variable `p0-4.sh` no longer has).
 
-These change the host: `p0-6.sh` writes `/etc/pam.d/ea-podman`, `f17-switch.sh` edits the kernel command line, `t0-6.sh units` and `t0-6.sh swap` add and then remove dummy units and a swap file, `t0-8.sh` adds and then removes test containers, units and timers, and `p0-1-2.sh`, `p0-13.sh` and `f15-1x.sh` start the account's `user@` (on CloudLinux through a `/run/systemd/system` copy). Run them only on test VMs.
+These change the host: `p0-6.sh` writes `/etc/pam.d/ea-podman`, `f17-switch.sh` edits the kernel command line, `t0-6.sh units` and `t0-6.sh swap` add and then remove dummy units and a swap file, `t0-8.sh` adds and then removes test containers, units and timers, and `p0-1-2.sh`, `p0-13.sh` and `f15-1x.sh` start the account's `user@` (on CloudLinux through a `/run/systemd/system` copy), and `ea4-392.sh matrix` takes PID 1 off the system bus (it runs `systemctl daemon-reexec` after each such call) and sets SELinux permissive for three calls. Run them only on test VMs.

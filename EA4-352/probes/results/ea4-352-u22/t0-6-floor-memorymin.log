@@ -1,0 +1,9 @@
+host ea4-352-u22 os=ubuntu-22.04 kernel=5.15.0-203-generic cgroup=v2 systemd=249 podman=3.4.4
+probe p0-4.sh=fd84f737567b plib.sh=fd17d062fc15 lib.sh=78ded5647a3b
+
+### 8. memory floors (MemoryMin) under pressure from outside the slices
+  floors (MemoryMin): eapodman.slice 419430400, eapodman-1000.slice 419430400, user.slice 0, user-1000.slice 419430400
+RESULT p0-4.pagecache_acct_MiB 300 -> 300
+RESULT p0-4.pagecache_user_MiB 300 -> 11
+RESULT p0-4.pagecache_none_MiB 300 -> 11
+RESULT p0-4.floor_verdict kept: account slice 100%, user-<uid>.slice 3%, no floor 3%

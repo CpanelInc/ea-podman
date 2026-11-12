@@ -1,0 +1,7 @@
+host ea4-352-el10 os=almalinux-10.2 kernel=6.12.0-211.74.1.el10_2.x86_64 cgroup=v2 systemd=257 podman=5.8.2
+probe t0-6.sh=4bff04d63e10 plib.sh=fd17d062fc15 lib.sh=78ded5647a3b
+
+### --memory-swap with a real swap device (temporary 1G swap file)
+RESULT t0-6.swap_on /var/tmp/t06.swap.vrdwmU 1048572 
+RESULT t0-6.memory_256m_swap_256m swap.max=0 alloc400M rc=137 swap.peak=0 oom_kill=1
+RESULT t0-6.memory_256m_swap_768m swap.max=536870912 alloc400M rc=0 swap.peak=9637888 oom_kill=0

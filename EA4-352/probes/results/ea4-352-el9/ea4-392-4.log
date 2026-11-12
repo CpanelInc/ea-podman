@@ -1,0 +1,49 @@
+### EA4-392-PLAN.md Step 0, 2026-11-10: which stdout/stderr of systemd-run --pipe takes PID 1 off the bus
+host ea4-352-el9 os=almalinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 systemd=252 selinux=Enforcing bus=dbus-broker uptime=3078s
+call: systemd-run --quiet --uid=1000 --gid=1000 --pipe --wait --collect /bin/true </dev/null, with stdout/stderr as below
+
+### destinations
+Enforcing   /dev/null                                    null_device_t    rc=0 pid1_on_bus=yes 
+Enforcing   pipe (| cat)                                 -                rc=0 pid1_on_bus=yes 
+Enforcing   > /tmp file                                  user_tmp_t       rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+Enforcing   >> /tmp file (append)                        user_tmp_t       rc=0 pid1_on_bus=yes 
+Enforcing   > /root file                                 admin_home_t     rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+Enforcing   >> /root file (append)                       admin_home_t     rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+Enforcing   > /var/tmp file                              user_tmp_t       rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+Enforcing   > /home/eapodtest file                       user_home_t      rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+Enforcing   > /run file                                  var_run_t        rc=0 pid1_on_bus=yes 
+Enforcing   > /var/log file                              var_log_t        rc=0 pid1_on_bus=yes 
+Failed to start transient service unit: Remote peer disconnected
+Enforcing   > /tmp file, stdout only                     user_tmp_t       rc=1 pid1_on_bus=NO 
+Enforcing   > /tmp file, stderr only                     user_tmp_t       rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+
+### the same with SELinux permissive, then enforcing again
+Permissive  > /tmp file                                  user_tmp_t       rc=0 pid1_on_bus=yes 
+Permissive  > /root file                                 admin_home_t     rc=0 pid1_on_bus=yes 
+Enforcing   > /tmp file                                  user_tmp_t       rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+
+### PID 1 after a failing call (busctl --system list)
+org.freedesktop.systemd1          - -               -       (activatable) -                      -       -
+
+### denials in /var/log/audit/audit.log since the reboot (grep; counts over all of Step 0's runs)
+### ausearch printed "<no matches>" throughout: over `ssh -n` its stdin isn't a tty, so it reads stdin instead of the logs.
+      1 avc: denied { append } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:admin_home_t:s0 tclass=file permissive=0
+      6 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:admin_home_t:s0 tclass=file permissive=0
+      3 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:admin_home_t:s0 tclass=file permissive=1
+      2 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:user_home_t:s0 tclass=file permissive=0
+     26 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:user_tmp_t:s0 tclass=file permissive=0
+      1 avc: denied { write } for comm="systemd" scontext=system_u:system_r:init_t:s0 tcontext=unconfined_u:object_r:user_tmp_t:s0 tclass=file permissive=1
+### separate from EA4-392, from the containers' restarts in setup.sh:
+      9 avc: denied { unlink } for comm="systemd" name=<name>.conmon.pid dev="tmpfs" scontext=system_u:system_r:init_t:s0 tcontext=system_u:object_r:container_runtime_tmpfs_t:s0 tclass=file permissive=0
+
+### why `./p0-10.sh pre >/tmp/file 2>&1` passes (twice) while the bare call with the same redirect fails
+### gawk sets O_APPEND (02000) on its stderr, and plib.sh runs awk before the first runner call.
+### flags of the shell's fd 2 (a new /tmp file opened with 2>), before and after `awk 'BEGIN{}'`:
+flags:	0100001
+flags:	0102001
+GNU Awk 5.1.0, API: 3.0 (GNU MPFR 4.1.0-p9, GNU MP 6.2.0)
+
+### kit calls on the same boot, before any reexec (cd /root/probes; . ./plib.sh)
+./p0-10.sh pre                              (stdout = ssh's pipe)    rc=0 bus check passed afterwards
+./p0-10.sh pre >/tmp/ea4-392-s0.log 2>&1    (append after awk)       rc=0 bus check passed afterwards
+user_sh true >/root/ea4-392-s0.out 2>&1     (admin_home_t)           rc=1 Failed to start transient service unit: Remote peer disconnected; bus check failed afterwards

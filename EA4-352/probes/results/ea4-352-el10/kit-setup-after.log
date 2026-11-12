@@ -1,0 +1,13 @@
+--- :8081
+Server address: 10.2.68.139:80
+Server name: 51353abf1c42
+Date: 12/Nov/2026:16:50:19 +0000
+--- :8082
+Server address: 10.2.68.139:80
+Server name: e6a940b13712
+Date: 12/Nov/2026:16:50:19 +0000
+--- :8083
+Server address: 10.2.68.139:80
+Server name: 7ecc646f61a3
+Date: 12/Nov/2026:16:50:19 +0000
+done; now run ./verify.sh eapodtest, ./loadtest.sh eapodtest, then ./lifecycle.sh eapodtest last (see README.md)

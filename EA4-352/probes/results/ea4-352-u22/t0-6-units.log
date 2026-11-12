@@ -1,0 +1,8 @@
+host ea4-352-u22 os=ubuntu-22.04 kernel=5.15.0-203-generic cgroup=v2 systemd=249 podman=3.4.4
+probe t0-6.sh=4bff04d63e10 plib.sh=fd17d062fc15 lib.sh=78ded5647a3b
+
+### daemon-reload and PID 1 memory vs the number of enabled units
+RESULT t0-6.reload_0_units 190 ms; PID1 RSS 12 MiB; loaded units 376
+RESULT t0-6.reload_200_units 209 ms; PID1 RSS 13 MiB; loaded units 576
+RESULT t0-6.reload_1000_units 338 ms; PID1 RSS 18 MiB; loaded units 1376
+RESULT t0-6.reload_3000_units 832 ms; PID1 RSS 28 MiB; loaded units 3376

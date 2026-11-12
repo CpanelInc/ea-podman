@@ -1,0 +1,56 @@
+host ea4-352-el8-cgv2 os=almalinux-8.10 kernel=4.18.0-553.184.1.el8_10.x86_64 cgroup=v2 systemd=239 podman=4.9.4-rhel
+probe ea4-392.sh=1041d65aebb8 plib.sh=fd17d062fc15 lib.sh=c0b4c32d91b8
+  selinux=Enforcing bus=dbus-daemon policy=selinux-policy-3.14.3-139.el8_10.2.noarch uptime=181173s
+  call: systemd-run --quiet --uid=1000 --gid=1000 --pipe --wait --collect /bin/true </dev/null, with stdout and stderr as below
+
+### destinations (stdout and stderr both, unless the row says otherwise)
+Enforcing  /dev/null                          null_device_t              rc=0 pid1_on_bus=yes  
+Enforcing  a pipe                             -                          rc=0 pid1_on_bus=yes  
+Enforcing  a tty (pty from script)            user_devpts_t              rc=0 pid1_on_bus=yes  
+Enforcing  > /tmp file                        user_tmp_t                 rc=1 pid1_on_bus=yes Failed to start transient service unit: Connection timed out 
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=0;
+Enforcing  >> /tmp file (append)              user_tmp_t                 rc=0 pid1_on_bus=yes  
+Enforcing  > /root file                       admin_home_t               rc=1 pid1_on_bus=yes Failed to start transient service unit: Connection timed out 
+             denials: 1 denied { write } comm=systemd admin_home_t permissive=0;
+Enforcing  >> /root file (append)             admin_home_t               rc=1 pid1_on_bus=yes Failed to start transient service unit: Connection timed out 
+             denials: 1 denied { append } comm=systemd admin_home_t permissive=0;
+Enforcing  > /var/tmp file                    user_tmp_t                 rc=1 pid1_on_bus=yes Failed to start transient service unit: Connection timed out 
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=0;
+Enforcing  > /home/eapodtest file             user_home_t                rc=1 pid1_on_bus=yes Failed to start transient service unit: Connection timed out 
+             denials: 1 denied { write } comm=systemd user_home_t permissive=0;
+Enforcing  > /run file                        var_run_t                  rc=0 pid1_on_bus=yes  
+Enforcing  > /var/log file                    var_log_t                  rc=0 pid1_on_bus=yes  
+Enforcing  > /tmp file, stdout only           user_tmp_t                 rc=1 pid1_on_bus=yes Failed to start transient service unit: Connection timed out 
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=0;
+Enforcing  > /tmp file, stderr only           user_tmp_t                 rc=1 pid1_on_bus=yes Failed to start transient service unit: Connection timed out 
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=0;
+             PID 1 still holds the stdout pipe after the call: yes
+RESULT ea4-392-matrix.bus dbus-daemon
+RESULT ea4-392-matrix.enforcing_pass null pipe tty tmp_append run varlog
+RESULT ea4-392-matrix.enforcing_fail tmp root root_append vartmp home tmp_stdout_only tmp_stderr_only
+RESULT ea4-392-matrix.pid1_off_bus_after none
+RESULT ea4-392-matrix.pid1_keeps_stdout_pipe_when_stderr_denied yes
+
+### the same with SELinux permissive, then enforcing again
+Permissive > /tmp file                        user_tmp_t                 rc=0 pid1_on_bus=yes  
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=1;
+Permissive > /root file                       admin_home_t               rc=0 pid1_on_bus=yes  
+             denials: 1 denied { write } comm=systemd admin_home_t permissive=1;
+Enforcing  > /tmp file                        user_tmp_t                 rc=1 pid1_on_bus=yes Failed to start transient service unit: Connection timed out 
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=0;
+RESULT ea4-392-matrix.permissive_then_enforcing fails again once enforcing
+
+### afterwards
+RESULT ea4-392-matrix.pid1_on_bus_at_end yes
+RESULT ea4-392-matrix.selinux_at_end Enforcing
+  journalctl -t setroubleshoot, since this probe started:
+          1 SELinux is preventing systemd from append access on the file /root/ea4-392.XXXXXX.
+          1 SELinux is preventing systemd from append access on the file /root/ea4-392.XXXXXX. For complete SELinux messages run: sealert -l 187ba211-45fa-42ad-ae90-419357451c21
+          1 SELinux is preventing systemd from write access on the file /home/eapodtest/ea4-392.XXXXXX.
+          1 SELinux is preventing systemd from write access on the file /home/eapodtest/ea4-392.XXXXXX. For complete SELinux messages run: sealert -l 008c1826-f8ba-4114-b3e6-b2a4d4177aa8
+          2 SELinux is preventing systemd from write access on the file /root/ea4-392.XXXXXX.
+          2 SELinux is preventing systemd from write access on the file /root/ea4-392.XXXXXX. For complete SELinux messages run: sealert -l cd32782f-a2fb-42ff-a7a5-a3a7d597a934
+          5 SELinux is preventing systemd from write access on the file /tmp/ea4-392.XXXXXX.
+          5 SELinux is preventing systemd from write access on the file /tmp/ea4-392.XXXXXX. For complete SELinux messages run: sealert -l 6098183d-8504-4249-9b3e-c4a74e45a86f
+          1 SELinux is preventing systemd from write access on the file /var/tmp/ea4-392.XXXXXX.
+          1 SELinux is preventing systemd from write access on the file /var/tmp/ea4-392.XXXXXX. For complete SELinux messages run: sealert -l 6098183d-8504-4249-9b3e-c4a74e45a86f

@@ -1,0 +1,7 @@
+Removed /etc/systemd/system/multi-user.target.wants/ea-podman-api.eapodtest.02.service.
+bc9bc5577349782534eb76155b1421456c759c7f9c1969847b077ea86d315b42
+Removed /etc/systemd/system/multi-user.target.wants/ea-podman-web.eapodtest.01.service.
+d831df4eb70faf2b2fa737246f78f7cdd32dc62093baca3144fa13c94d8ca80f
+Removed /etc/systemd/system/multi-user.target.wants/ea-podman-worker.eapodtest.03.service.
+d3642644a9b262793024a7c93e19543b991743615d720b8efb270a5d2bf5e167
+removed; /home/eapodtest/.local/share/ea-podman/storage kept (use --purge to delete it)

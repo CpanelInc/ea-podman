@@ -1,0 +1,19 @@
+### EA4-392, 2026-11-12, run by hand: how PID 1 leaves the system bus after the denied fd
+host ea4-352-el9 os=almalinux-9.8 systemd-252-67.el9_8.6.alma.1 dbus-broker-28-9.el9_8 selinux=Enforcing
+strace -f -tt -p 1 -e trace=recvmsg,close,shutdown,connect, across one call:
+systemd-run --quiet --uid=1000 --gid=1000 --pipe --wait --collect /bin/true </dev/null >/tmp/ea4-392.XXXXXX 2>&1
+
+rc=1 Failed to start transient service unit: Remote peer disconnected
+
+### PID 1's recvmsg on its bus socket (fd 17) for that call, and its next two syscalls (the whole trace)
+### One fd arrived (12: the call's stdin, /dev/null). The kernel dropped the next (stdout, the
+### user_tmp_t file init_t may not write) and set MSG_CTRUNC. PID 1 then closed its bus socket.
+1     21:21:21.015577 recvmsg(17, {msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="l\1\4\1\230\1\0\0\2\0\0\0\320\0\0\0\1\1o\0\31\0\0\0", iov_len=24}], msg_iovlen=1, msg_control=[{cmsg_len=20, cmsg_level=SOL_SOCKET, cmsg_type=SCM_RIGHTS, cmsg_data=[12]}], msg_controllen=24, msg_flags=MSG_CTRUNC|MSG_CMSG_CLOEXEC}, MSG_DONTWAIT [line cut here]
+1     21:21:21.016901 close(12)         = 0
+1     21:21:21.017161 close(17)         = 0
+
+### PID 1's journal for those seconds, grepped for bus|dbus|fd|truncat: nothing
+
+### busctl --system list, after the call, and after `systemctl daemon-reexec`
+org.freedesktop.systemd1           - -               -       (activatable) -
+org.freedesktop.systemd1           1 systemd         root    :1.1168       init.

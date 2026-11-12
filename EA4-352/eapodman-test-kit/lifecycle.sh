@@ -10,12 +10,14 @@
 #   5. a temporary container whose PID 1 exits 143 on SIGTERM is stopped: with the unit's
 #      SuccessExitStatus=143 the stop ends Result=success. The same stop without it is reported
 #      (INFO), to show per podman version whether conmon passes the container's 143 on.
+#   6. on SELinux hosts, none of the above logged an AVC denial on a conmon.pid (F19, EA4-392).
 # Run it last, after ./loadtest.sh: tests 1 and 3 leave web and worker down until recreated (F15).
 # Exits non-zero if a check fails. Usage: ./lifecycle.sh <cpuser>
 set -uo pipefail
 U=${1:?usage: $0 <cpuser>}
 cd "$(dirname "$0")"
 . ./lib.sh
+T0=$(date +%s)    # test 6 reads the AVC denials since here
 declare -A PORT=( ["web.$U.01"]=8081 ["api.$U.02"]=8082 ["worker.$U.03"]=8083 )
 for n in "${!PORT[@]}"; do
     systemctl is-active -q "ea-podman-$n.service" || { echo "ea-podman-$n.service is not running; run ./setup.sh $U" >&2; exit 1; }
@@ -231,6 +233,22 @@ else
     check "the container's PID 1 exited 143 (got $code), so the case means something" test "$code" = 143
     check "with SuccessExitStatus=143 the stop ends Result=success (got $res)" test "$res" = success
     check "and the unit is not failed" bash -c '! systemctl is-failed -q "$1"' _ "ea-podman-$TERM_CT.service"
+fi
+
+echo; echo "== 6. SELinux: no denial on a conmon.pid in tests 1-5 (F19, EA4-392)"
+# Every stop above, and every conmon SIGKILLed, ended with PID 1 unlinking the unit's PIDFile=.
+# init_t may not unlink a container_runtime_tmpfs_t file, so the units remove it themselves first.
+if selinux_on; then
+    sleep 2    # auditd writes its log a moment after the event
+    if avc_since "$T0"; then
+        ours=$(grep -F 'conmon.pid' <<<"$AVC")
+        check "no AVC denial names a conmon.pid since this script started (SELinux $(getenforce))" test -z "$ours"
+        [ -z "$ours" ] || sed 's/^/    /' <<<"$ours" | tail -20
+    else
+        check "AVC denials can be searched ($AVC)" false
+    fi
+else
+    echo "  SELinux disabled: the AVC check doesn't apply here"
 fi
 
 echo

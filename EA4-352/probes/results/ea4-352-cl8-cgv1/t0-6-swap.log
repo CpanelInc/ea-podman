@@ -1,0 +1,7 @@
+host ea4-352-cl8-cgv1 os=cloudlinux-8.10 kernel=4.18.0-553.177.1.lve.1.el8.x86_64 cgroup=v1 systemd=239 podman=4.9.4-rhel
+probe t0-6.sh=4bff04d63e10 plib.sh=fd17d062fc15 lib.sh=78ded5647a3b
+
+### --memory-swap with a real swap device (temporary 1G swap file)
+RESULT t0-6.swap_on /var/tmp/t06.swap.LW3xX7 1048572 
+RESULT t0-6.t06s1.eapodtest.88 no payload cgroup
+RESULT t0-6.t06s2.eapodtest.89 no payload cgroup

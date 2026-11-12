@@ -63,13 +63,22 @@ podman_env() {
 #   -p PROP=VAL    an extra unit property (e.g. -p Delegate=yes)
 #   -n NAME        the unit name's middle part (default "test"; probes pass "probe")
 #   -v             keep systemd-run's own messages (no --quiet)
+#   -r             the command's own exit 1 comes back as 101. Without it, 1 is ambiguous: systemd-run
+#                  also returns 1 when it couldn't start the unit and when RuntimeMaxSec expired. A
+#                  caller that reads 1 as a verdict (podman container exists) must use -r: a runner
+#                  failure is never a podman verdict (T1.5).
+# systemd-run's stdout and stderr are pipes made here, never the caller's own (PLAN.md 4.2a, rule 15).
+# --pipe hands systemd-run's fds 0-2 to PID 1. With SELinux enforcing (EL), a file under /tmp,
+# /var/tmp, /root or a home directory in that place makes the call fail with "Remote peer
+# disconnected" or "Connection timed out", and on EL9/EL10 PID 1 then stays off the system bus
+# until `systemctl daemon-reexec` (EA4-392).
 seq=0
 acct_unit() {
-    local tmo=600 conf= name=test quiet=--quiet pinned=1 extra=() envs=() props=() OPTIND=1 opt
-    while getopts t:c:Ee:p:n:v opt; do
+    local tmo=600 conf= name=test quiet=--quiet pinned=1 split= extra=() envs=() props=() OPTIND=1 opt
+    while getopts t:c:Ee:p:n:vr opt; do
         case $opt in
         t) tmo=$OPTARG ;; c) conf=$OPTARG ;; E) pinned= ;; e) extra+=("$OPTARG") ;;
-        p) props+=(-p "$OPTARG") ;; n) name=$OPTARG ;; v) quiet= ;;
+        p) props+=(-p "$OPTARG") ;; n) name=$OPTARG ;; v) quiet= ;; r) split=1 ;;
         *) echo "acct_unit: bad option" >&2; return 2 ;;
         esac
     done
@@ -78,11 +87,28 @@ acct_unit() {
     elif [ -n "$conf" ]; then echo "acct_unit: -c needs podman_env (no -E)" >&2; return 2; fi
     envs+=("${extra[@]}")
     [ -n "$pinned" ] && [ "${1:-}" = /usr/bin/podman ] && set -- "${PODMAN[@]}" "${@:2}"
+    # shellcheck disable=SC2016
+    [ -n "$split" ] && set -- /bin/sh -c '"$@"; r=$?; [ "$r" = 1 ] && exit 101; exit "$r"' sh "$@"
     seq=$((seq + 1))
+    # Two readers copy the pipes to the caller's stdout and stderr. They are not waited on for EOF:
+    # on cgroup v1 a child that escaped the unit keeps the pipes open (PLAN.md P0-11), so once
+    # systemd-run exits they get 2 s to drain and are then killed.
+    local o e po pe rc i
+    exec {o}> >(exec cat); po=$!
+    exec {e}> >(exec cat >&2); pe=$!
     systemd-run $quiet --uid="$UID_" --gid="$GID_" --slice="eapodman-$UID_.slice" \
         --unit="eapodman-run-$UID_-$name-$$-$seq" --pipe --wait --collect \
         -p RuntimeMaxSec="$tmo" -p WorkingDirectory="$HOME_" "${props[@]}" \
-        "${envs[@]/#/--setenv=}" "$@" </dev/null
+        "${envs[@]/#/--setenv=}" "$@" </dev/null >&"$o" 2>&"$e" {o}>&- {e}>&-
+    rc=$?
+    exec {o}>&- {e}>&-
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        kill -0 "$po" 2>/dev/null || kill -0 "$pe" 2>/dev/null || break
+        sleep 0.1
+    done
+    # The readers are normally gone by now, and a failed kill must not trip a caller's set -e.
+    kill "$po" "$pe" 2>/dev/null || :
+    return "$rc"
 }
 # The common case, with podman_env: as_user [-c containers.conf] <argv...>
 as_user() {
@@ -170,6 +196,10 @@ ${env_lines}Environment=PODMAN_SYSTEMD_UNIT=%n
 PIDFile=$pidfile
 ExecStart=${PODMAN[*]} --cgroup-manager=cgroupfs start $name
 ExecStop=${PODMAN[*]} --cgroup-manager=cgroupfs stop -t 10 $name
+# The unit removes its own PID file, as the account, before PID 1 tries to: with SELinux enforcing
+# (EL), init_t may read a container_runtime_tmpfs_t file but not unlink it, and every stop logged
+# an AVC denial (F19, EA4-392). It comes first: a failed ExecStopPost line skips the ones after it.
+ExecStopPost=-/usr/bin/rm -f $pidfile
 # As in 1.x's generated units. It does not recover a container whose conmon was SIGKILLed:
 # podman 4.4 leaves it "running" (without this) or "stopping" (with it), every restart's
 # \`podman start\` fails, and only \`podman rm -f\` + recreate gets it back (./lifecycle.sh 1 and 3).
@@ -307,6 +337,24 @@ restore_changes() {
     done
     CHANGED=()
     [ ${#failed[@]} = 0 ] || { echo "NOT restored: ${failed[*]}" >&2; return 1; }
+}
+
+# ---------------------------------------------------------------- SELinux
+selinux_on() { command -v selinuxenabled >/dev/null && selinuxenabled; }
+# The AVC denials logged since <epoch seconds>, into AVC (empty when there are none). Returns 1,
+# with the reason in AVC, when they couldn't be searched: that is never "no denials".
+# --input-logs: without it ausearch reads stdin whenever stdin isn't a terminal (ssh -n, a script,
+# cron), finds nothing there, and a check built on it could never fail (EA4-392).
+avc_since() {
+    local out rc
+    AVC=
+    command -v ausearch >/dev/null || { AVC="ausearch not found"; return 1; }
+    # shellcheck disable=SC2046
+    out=$(LC_ALL=C ausearch --input-logs -m avc,user_avc -i -ts $(LC_ALL=C date -d "@$1" '+%x %H:%M:%S') 2>&1); rc=$?
+    # ausearch exits 1 with "<no matches>" when there are none; any other failure is an error.
+    if [ $rc = 1 ] && grep -q '<no matches>' <<<"$out"; then return 0; fi
+    [ $rc = 0 ] || { AVC="ausearch failed (rc $rc): $out"; return 1; }
+    AVC=$out
 }
 
 # ---------------------------------------------------------------- checks

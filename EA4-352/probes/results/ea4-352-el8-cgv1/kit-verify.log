@@ -1,37 +1,37 @@
 Unit eapodman.slice (/eapodman.slice):
 └─eapodman-1000.slice
   ├─ea-podman-worker.eapodtest.03.service
-  │ ├─22534 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable...
-  │ ├─22536 rootlessport
-  │ ├─22542 rootlessport-child
-  │ ├─22550 /usr/bin/conmon --api-version 1 -c 23660fb287a8854079388393a5c546...
+  │ ├─1847 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable-...
+  │ ├─1849 rootlessport
+  │ ├─1855 rootlessport-child
+  │ ├─1863 /usr/bin/conmon --api-version 1 -c 23660fb287a8854079388393a5c5461...
   │ └─23660fb287a8854079388393a5c54611b7dfa8b4fbcecca032f149e9758424a2
-  │   ├─22562 nginx: master process nginx -g daemon off;
-  │   ├─22590 nginx: worker process
-  │   ├─22591 nginx: worker process
-  │   └─22592 nginx: worker process
+  │   ├─1875 nginx: master process nginx -g daemon off;
+  │   ├─1902 nginx: worker process
+  │   ├─1903 nginx: worker process
+  │   └─1904 nginx: worker process
   ├─ea-podman-web.eapodtest.01.service
-  │ ├─22253 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable...
-  │ ├─22255 rootlessport
-  │ ├─22262 rootlessport-child
-  │ ├─22270 /usr/bin/conmon --api-version 1 -c c1f885526e861c46361ede5a844684...
+  │ ├─871 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable-s...
+  │ ├─887 rootlessport
+  │ ├─907 rootlessport-child
+  │ ├─935 /usr/bin/conmon --api-version 1 -c c1f885526e861c46361ede5a84468481...
   │ └─c1f885526e861c46361ede5a8446848124093c96418579f23efd4d3c98c15f82
-  │   ├─22282 nginx: master process nginx -g daemon off;
-  │   ├─22309 nginx: worker process
-  │   ├─22310 nginx: worker process
-  │   └─22311 nginx: worker process
+  │   ├─ 975 nginx: master process nginx -g daemon off;
+  │   ├─1056 nginx: worker process
+  │   ├─1057 nginx: worker process
+  │   └─1058 nginx: worker process
   ├─ea-podman-api.eapodtest.02.service
-  │ ├─22394 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable...
-  │ ├─22396 rootlessport
-  │ ├─22402 rootlessport-child
-  │ ├─22411 /usr/bin/conmon --api-version 1 -c 3fffe16df070f30ff04a12ed2cb6ac...
+  │ ├─1964 /usr/bin/slirp4netns --disable-host-loopback --mtu=65520 --enable-...
+  │ ├─1966 rootlessport
+  │ ├─1972 rootlessport-child
+  │ ├─1981 /usr/bin/conmon --api-version 1 -c 3fffe16df070f30ff04a12ed2cb6acc...
   │ └─3fffe16df070f30ff04a12ed2cb6acc5a02e6c4e47afbda211ea6fdb8a7751ce
-  │   ├─22423 nginx: master process nginx -g daemon off;
-  │   ├─22450 nginx: worker process
-  │   ├─22451 nginx: worker process
-  │   └─22452 nginx: worker process
+  │   ├─1993 nginx: master process nginx -g daemon off;
+  │   ├─2019 nginx: worker process
+  │   ├─2020 nginx: worker process
+  │   └─2021 nginx: worker process
   └─ea-podman-runtime@1000.service
-    └─19597 catatonit -P
+    └─823 catatonit -P
 
 user.slice CPUWeight: [not set] (eapodman.slice should match)
 user@1000 active: inactive  (should be inactive)
@@ -66,30 +66,32 @@ cgroup v1: per-controller hierarchies
   PASS  cgroup manager is cgroupfs
   PASS  graphroot is the fresh ea-podman storage
   PASS  runroot is in the runtime tmpfs
+  PASS  /etc/eapodman-test/mounts.conf is root-owned, 0644
+  PASS  /etc/eapodman-test/mounts.conf has the distro's entries (/usr/share/containers/mounts.conf)
 
 == container units (cgroup v1)
   PASS  setup.sh's three container units exist (found 3)
   SKIP  per-container cgroups and limits: cgroup v1, where split isn't pinned and rootless podman can't create them (F12, F17); checking that each container runs in its unit's cgroup instead
-  ea-podman-api.eapodtest.02.service: MainPID 22411 (conmon), PIDFile /run/ea-podman/user/1000/api.eapodtest.02.conmon.pid
+  ea-podman-api.eapodtest.02.service: MainPID 1981 (conmon), PIDFile /run/ea-podman/user/1000/api.eapodtest.02.conmon.pid
   PASS  ea-podman-api.eapodtest.02.service PIDFile is derived from the container name
-  PASS  ea-podman-api.eapodtest.02.service ExecStart starts that container
+  PASS  ea-podman-api.eapodtest.02.service ExecStart starts that container, with the pinned mounts.conf (F25)
   PASS  ea-podman-api.eapodtest.02.service MainPID is conmon
   PASS  ea-podman-api.eapodtest.02.service MainPID is inside the unit's cgroup
-  PASS  ea-podman-api.eapodtest.02.service container init (22423) is inside the unit's cgroup
+  PASS  ea-podman-api.eapodtest.02.service container init (1993) is inside the unit's cgroup
   PASS  ea-podman-api.eapodtest.02.service has no per-container memory cgroup (v1 rootless: the unit's limits are the container's)
-  ea-podman-web.eapodtest.01.service: MainPID 22270 (conmon), PIDFile /run/ea-podman/user/1000/web.eapodtest.01.conmon.pid
+  ea-podman-web.eapodtest.01.service: MainPID 935 (conmon), PIDFile /run/ea-podman/user/1000/web.eapodtest.01.conmon.pid
   PASS  ea-podman-web.eapodtest.01.service PIDFile is derived from the container name
-  PASS  ea-podman-web.eapodtest.01.service ExecStart starts that container
+  PASS  ea-podman-web.eapodtest.01.service ExecStart starts that container, with the pinned mounts.conf (F25)
   PASS  ea-podman-web.eapodtest.01.service MainPID is conmon
   PASS  ea-podman-web.eapodtest.01.service MainPID is inside the unit's cgroup
-  PASS  ea-podman-web.eapodtest.01.service container init (22282) is inside the unit's cgroup
+  PASS  ea-podman-web.eapodtest.01.service container init (975) is inside the unit's cgroup
   PASS  ea-podman-web.eapodtest.01.service has no per-container memory cgroup (v1 rootless: the unit's limits are the container's)
-  ea-podman-worker.eapodtest.03.service: MainPID 22550 (conmon), PIDFile /run/ea-podman/user/1000/worker.eapodtest.03.conmon.pid
+  ea-podman-worker.eapodtest.03.service: MainPID 1863 (conmon), PIDFile /run/ea-podman/user/1000/worker.eapodtest.03.conmon.pid
   PASS  ea-podman-worker.eapodtest.03.service PIDFile is derived from the container name
-  PASS  ea-podman-worker.eapodtest.03.service ExecStart starts that container
+  PASS  ea-podman-worker.eapodtest.03.service ExecStart starts that container, with the pinned mounts.conf (F25)
   PASS  ea-podman-worker.eapodtest.03.service MainPID is conmon
   PASS  ea-podman-worker.eapodtest.03.service MainPID is inside the unit's cgroup
-  PASS  ea-podman-worker.eapodtest.03.service container init (22562) is inside the unit's cgroup
+  PASS  ea-podman-worker.eapodtest.03.service container init (1875) is inside the unit's cgroup
   PASS  ea-podman-worker.eapodtest.03.service has no per-container memory cgroup (v1 rootless: the unit's limits are the container's)
 
 == runtime dir (F16, F19)
