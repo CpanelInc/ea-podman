@@ -1,0 +1,46 @@
+host ea4-352-el9 os=almalinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+probe ea4-392.sh=1041d65aebb8 plib.sh=fd17d062fc15 lib.sh=c0b4c32d91b8
+  selinux=Enforcing bus=dbus-broker policy=selinux-policy-38.1.75-2.el9_8.1.noarch uptime=181059s
+  call: systemd-run --quiet --uid=1000 --gid=1000 --pipe --wait --collect /bin/true </dev/null, with stdout and stderr as below
+
+### destinations (stdout and stderr both, unless the row says otherwise)
+Enforcing  /dev/null                          null_device_t              rc=0 pid1_on_bus=yes  
+Enforcing  a pipe                             -                          rc=0 pid1_on_bus=yes  
+Enforcing  a tty (pty from script)            user_devpts_t              rc=0 pid1_on_bus=yes  
+Enforcing  > /tmp file                        user_tmp_t                 rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=0;
+Enforcing  >> /tmp file (append)              user_tmp_t                 rc=0 pid1_on_bus=yes  
+Enforcing  > /root file                       admin_home_t               rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+             denials: 1 denied { write } comm=systemd admin_home_t permissive=0;
+Enforcing  >> /root file (append)             admin_home_t               rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+             denials: 1 denied { append } comm=systemd admin_home_t permissive=0;
+Enforcing  > /var/tmp file                    user_tmp_t                 rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=0;
+Enforcing  > /home/eapodtest file             user_home_t                rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+             denials: 1 denied { write } comm=systemd user_home_t permissive=0;
+Enforcing  > /run file                        var_run_t                  rc=0 pid1_on_bus=yes  
+Enforcing  > /var/log file                    var_log_t                  rc=0 pid1_on_bus=yes  
+Enforcing  > /tmp file, stdout only           user_tmp_t                 rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=0;
+Enforcing  > /tmp file, stderr only           user_tmp_t                 rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=0;
+             PID 1 still holds the stdout pipe after the call: no
+RESULT ea4-392-matrix.bus dbus-broker
+RESULT ea4-392-matrix.enforcing_pass null pipe tty tmp_append run varlog
+RESULT ea4-392-matrix.enforcing_fail tmp root root_append vartmp home tmp_stdout_only tmp_stderr_only
+RESULT ea4-392-matrix.pid1_off_bus_after tmp root root_append vartmp home tmp_stdout_only tmp_stderr_only
+RESULT ea4-392-matrix.pid1_keeps_stdout_pipe_when_stderr_denied no
+
+### the same with SELinux permissive, then enforcing again
+Permissive > /tmp file                        user_tmp_t                 rc=0 pid1_on_bus=yes  
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=1;
+Permissive > /root file                       admin_home_t               rc=0 pid1_on_bus=yes  
+             denials: 1 denied { write } comm=systemd admin_home_t permissive=1;
+Enforcing  > /tmp file                        user_tmp_t                 rc=1 pid1_on_bus=NO Failed to start transient service unit: Remote peer disconnected 
+             denials: 1 denied { write } comm=systemd user_tmp_t permissive=0;
+RESULT ea4-392-matrix.permissive_then_enforcing fails again once enforcing
+
+### afterwards
+RESULT ea4-392-matrix.pid1_on_bus_at_end yes
+RESULT ea4-392-matrix.selinux_at_end Enforcing
+  setroubleshoot is not installed

@@ -1,0 +1,22 @@
+host ea4-352-el9 os=almalinux-9.8 kernel=5.14.0-687.66.1.el9_8.x86_64 cgroup=v2 systemd=252 podman=5.8.2
+probe ea4-392.sh=1041d65aebb8 plib.sh=fd17d062fc15 lib.sh=c0b4c32d91b8
+  selinux=Enforcing bus=dbus-broker policy=selinux-policy-38.1.75-2.el9_8.1.noarch uptime=181026s
+
+### 1. the kit's unit: its first ExecStopPost= removes the PID file as the account
+  ExecStopPost: argv[]=/usr/bin/rm -f /run/ea-podman/user/1000/ea4392.eapodtest.88.conmon.pid |argv[]=/usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf --cgroup-manager=cgroupfs stop -t 10 ea4392.eapodtest.88 |
+RESULT ea4-392-unlink.with_rm_line.restart unlink_denials=0
+RESULT ea4-392-unlink.with_rm_line.stop unlink_denials=0 pidfile_after=gone
+RESULT ea4-392-unlink.with_rm_line.sigkill_conmon unlink_denials=0 (unit now active, NRestarts 0 -> 1)
+
+### 2. the same unit without that line (drop-in): PID 1 unlinks the file itself
+  ExecStopPost: argv[]=/usr/bin/podman --default-mounts-file=/etc/eapodman-test/mounts.conf --cgroup-manager=cgroupfs stop -t 10 ea4392.eapodtest.88 |
+RESULT ea4-392-unlink.without_rm_line.restart unlink_denials=1
+RESULT ea4-392-unlink.without_rm_line.stop unlink_denials=1 pidfile_after=present
+RESULT ea4-392-unlink.without_rm_line.sigkill_conmon unlink_denials=1 (unit now active, NRestarts 0 -> 1)
+
+### verdict
+RESULT ea4-392-unlink.denied_without_rm_line yes (3)
+RESULT ea4-392-unlink.denied_with_rm_line no
+  the denial: avc:  denied  { unlink } for  pid=1 comm=systemd name=ea4392.eapodtest.88.conmon.pid dev="tmpfs" ino=257 scontext=system_u:system_r:init_t:s0 tcontext=system_u:object_r:container_runtime_tmpfs_t:s0 tclass=file permissive=0 
+  setroubleshoot is not installed
+RESULT ea4-392-unlink.setroubleshoot_reports_unlink n/a (not installed)

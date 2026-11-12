@@ -18,7 +18,9 @@ Reboots: **no**
 ## EA4-392 (EL8, EL9, EL10): fixed, so a recurrence is a regression
 Until 2026-11-10, `setup.sh`, `teardown.sh` and the probes could fail on the EL hosts with `Failed to start transient service unit: Remote peer disconnected` or `Connection timed out`, and on EL9/EL10 PID 1 then stayed off the bus. The cause was SELinux: the kit's runner passed its own stdout and stderr to `systemd-run --pipe`, and PID 1 may not write to a file under `/tmp`, `/var/tmp`, `/root` or a home directory (PLAN.md, P0-11's SELinux result). The runner now uses its own pipes, so you can redirect a script's output to any file.
 
-If you see either error again:
+`ea4-392.sh matrix` makes those calls on purpose, prints both errors in its own rows, and puts PID 1 back on the bus after each. That is the probe working, not a recurrence. Its logs are `ea4-392-matrix.log` and `ea4-392-unlink.log`, compared like any other probe's.
+
+If you see either error from any other script:
 - Save the script's output, how its stdout and stderr were redirected, and `ausearch --input-logs -m avc,user_avc -ts recent` to `EA4-352/probes/results/<vm>/ea4-392-<n>.log` (one per occurrence). Without `--input-logs`, `ausearch` reads its stdin and prints `<no matches>`.
 - Check the bus with `busctl --system list | grep org.freedesktop.systemd1`. If it has no owner, recover with `systemctl daemon-reexec`, or reboot the VM if that fails.
 - Run the script once more, mark its cell **EA4-392** in the table, and report it prominently.
@@ -50,14 +52,14 @@ Not regressions:
   - `p0-11.all_reaped_on_timeout` is now `INCONCLUSIVE` unless the runner timed out and its script listed its children. If it's INCONCLUSIVE on a host, that is a real finding (the runner didn't run), not noise.
   - `p0-12` prints real `counters: allowed=N denied=M` lines (they were blank) and has two new results, `allowed_by_program` and `denials_by_program`. u24, el10 and cl10 already have them from the 2026-11-09 re-run with `ea534f7`'s `p0-12.sh`, so expect **same** there. Wherever the log has a `load_and_attach` line (the probe prints `supported` only when the answer is no or unknown), and `load_and_attach` is yes, `denials_by_program` must be `yes`: the denied counter rose by at least the number of checks that came back `denied` (4, or 2 on CloudLinux, whose caged shell has no `unshare` or `podman`, so those two are `n/a`). If it's `NO` or INCONCLUSIVE, the denials came from something other than the BPF program, so say so prominently. That puts PLAN.md's P0-12 verdict in doubt.
 
-No committed log comes from HEAD's exact scripts. The ones re-run on 2026-11-09 carry a hash line naming the scripts that produced them; map it to a commit with the recipe in the probes README (F25 changed `lib.sh` after most of them). The older logs have no hash line and predate the review. Where a result differs, say whether the cause is the script change or the host. Use the hash lines, the probe's git history and PLAN.md to decide.
+Most committed logs don't come from HEAD's exact scripts. The 2026-11-12 run from `24ce94a` kept only the logs whose results changed or that had no committed log (the probes README lists them); the rest are older. A log re-run since 2026-11-09 carries a hash line naming the scripts that produced it; map it to a commit with the recipe in the probes README (`lib.sh` changed four times after most of them, for F25 and EA4-392). The older logs have no hash line and predate the PR #43 review. Where a result differs, say whether the cause is the script change or the host. Use the hash lines, the probe's git history and PLAN.md to decide.
 
 ## What to send back
 1. A VM × probe table with one mark per cell: **same**, **changed**, **new INCONCLUSIVE**, **exit ≠ 0**, **skipped (why)**, **EA4-392**, or **first run from current script**.
 2. For every changed cell, the old and new `RESULT` lines and your explanation.
 3. Every PLAN.md "Phase 0 results" statement that the new results contradict. Don't edit PLAN.md.
-4. If EA4-392's failure came back: on which VMs and at which step, what the script's stdout and stderr were, the denial, and where the `ea4-392-*.log` files are. Don't edit EA4-392.
+4. If EA4-392's failure came back: on which VMs and at which step, what the script's stdout and stderr were, the denial, and where the numbered `ea4-392-<n>.log` files are. Don't edit EA4-392.
 
 ## Committing
 - **no:** don't commit. Leave the new logs in the working tree so I can `git diff` them.
-- **yes if changed:** commit only the logs whose results changed or that were the first run from current scripts, plus any `ea4-392-*.log`, and `git checkout` the rest. Also update the dates and lists in the probes README's "results" paragraph. The commit message should list what changed per probe and which PLAN.md statements now disagree.
+- **yes if changed:** commit only the logs whose results changed or that were the first run from current scripts, plus any new numbered `ea4-392-<n>.log`, and `git checkout` the rest. Also update the dates and lists in the probes README's "results" paragraph. The commit message should list what changed per probe and which PLAN.md statements now disagree.
