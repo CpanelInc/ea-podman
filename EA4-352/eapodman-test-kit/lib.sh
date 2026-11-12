@@ -106,7 +106,8 @@ acct_unit() {
         kill -0 "$po" 2>/dev/null || kill -0 "$pe" 2>/dev/null || break
         sleep 0.1
     done
-    kill "$po" "$pe" 2>/dev/null
+    # The readers are normally gone by now, and a failed kill must not trip a caller's set -e.
+    kill "$po" "$pe" 2>/dev/null || :
     return "$rc"
 }
 # The common case, with podman_env: as_user [-c containers.conf] <argv...>
